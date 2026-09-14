@@ -1,0 +1,7514 @@
+const TelegramBot = require('node-telegram-bot-api');
+const crypto = require('crypto');
+const {
+  BOT_TOKEN, STORE_NAME, BOT_USERNAME, REFERRAL_REWARD, BOLT_EMOJI_ID_TEXT, BOLT_EMOJI_ID_MENU, isAdmin,
+  ADMIN_IDS, PAYKITA_API_KEY, USDT_BEP20_ADDRESS, TON_ADDRESS, BINANCE_API_KEY, BINANCE_PAY_ID, AIVERSEHUB_API_KEY, SUPPLIER_SYNC_INTERVAL_MINUTES,
+  DEFAULT_SUPPLIER_TIER_MARKUP, CANBOSO_API_KEY, CANBOSO_SYNC_INTERVAL_SECONDS,
+  GIFT_MARKUP_PCT, STARS_TO_USD_RATE
+} = require('./config');
+const { iconFor, EMOJI_IDS } = require('./emoji-id-menu-inline');
+const { EMOJI_ID_TEKS_BACKUP } = require('./emoji-id-teks');
+const db = require('./db');
+const payment = require('./payment');
+const supplier = require('./supplier');
+const canboso = require('./supplierCanboso');
+const backup = require('./backup');
+const totp = require('./totp');
+const lang = require('./lang');
+const userbot = require('./userbot'); // fitur "🎁 Buy Gift" / "💌 Confess Gift" - lihat userbot.js
+
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+
+// ===== PATCH v4: helper log error ringkas =====
+// Sebelumnya beberapa catch block pakai console.error(err) langsung, yang
+// nge-dump SELURUH object error dari library `request-promise` (ratusan
+// baris: raw HTTP request, socket, header, dst) ke log tiap kali ada 1 saja
+// error - termasuk error SEPELE & sering terjadi seperti "user memblokir
+// bot" (Telegram balikin 403 Forbidden pas bot coba sendMessage ke user
+// yang sudah block). Ini bikin log jadi penuh sampah dan susah nyari
+// error yang BENERAN penting pas ada masalah.
+// logError() di bawah ini nampilin cuma pesan errornya (bukan whole
+// object), dan untuk error 403 "blocked by user"/"user is deactivated"
+// (dua penyebab paling umum & tidak perlu ditindaklanjuti admin) malah
+// tidak dicetak sama sekali - itu bagian normal dari operasional bot
+// dengan banyak user, bukan bug.
+const errorNotifyCooldown = new Map(); // "context|pesan" -> timestamp notifikasi terakhir
+const ERROR_NOTIFY_COOLDOWN_MS = 10 * 60 * 1000; // 10 menit
+
+function logError(context, err) {
+  const msg = (err && err.message) || String(err);
+  // ⚠️ Ditambahkan "message is not modified" - error umum & tidak berbahaya
+  // dari Telegram Bot API waktu editMessageText/editMessageReplyMarkup dengan
+  // isi yang PERSIS SAMA dengan pesan yang sudah tampil (mis. user klik
+  // tombol yang sama 2x cepat). Tidak merusak apa-apa, jadi tidak perlu
+  // spam notifikasi 🚨 ke admin - cukup di-skip di sini seperti noise lain.
+  const isHarmlessTelegramNoise = /blocked by the user|user is deactivated|chat not found|message is not modified/i.test(msg);
+  if (isHarmlessTelegramNoise) return; // noise biasa, tidak perlu di-log
+  console.error(`[${context}]`, msg);
+
+  // ---- Monitoring 24 jam: forward error penting ke admin via Telegram ----
+  // Sebelumnya error cuma nongol di `pm2 logs` dan admin baru sadar kalau
+  // kebetulan buka terminal (lihat insiden Buy Gift/Binance Pay sebelumnya).
+  // Sekarang logError() ini (dipanggil dari HAMPIR SEMUA catch block di
+  // bot.js + process.on('unhandledRejection'/'uncaughtException') di atas)
+  // otomatis broadcast ke ADMIN_IDS. Dikasih cooldown PER context+pesan
+  // (bukan global) supaya kalau ada error yang keulang tiap beberapa detik
+  // (mis. polling gagal terus-menerus) admin tidak dispam ratusan notif
+  // identik - cukup 1 notif per 10 menit untuk error yang sama persis.
+  try {
+    const key = `${context}|${msg}`;
+    const now = Date.now();
+    const last = errorNotifyCooldown.get(key) || 0;
+    if (now - last >= ERROR_NOTIFY_COOLDOWN_MS) {
+      errorNotifyCooldown.set(key, now);
+      const stack = err && err.stack ? String(err.stack).slice(0, 1000) : '';
+      notifyAdmins(
+        `🚨 <b>Bot Error</b>\n\n` +
+        `Context: <code>${escapeHtml(context)}</code>\n` +
+        `Pesan: <code>${escapeHtml(msg)}</code>` +
+        (stack ? `\n\n<pre>${escapeHtml(stack)}</pre>` : '') +
+        `\n\n<i>Notifikasi ini di-cooldown 10 menit per jenis error yang sama.</i>`
+      );
+    }
+  } catch (notifyErr) {
+    console.error('[logError->notifyAdmins]', notifyErr.message);
+  }
+}
+
+// Anti double-spend guard buat alur 'confirm:' (place order). Tanpa ini,
+// user yang double-tap tombol "Place Order" (atau Telegram retry callback-nya
+// sendiri saat koneksi lambat) bisa memicu 2+ handler 'confirm:' JALAN
+// BERSAMAAN untuk chatId yang sama. Keduanya bisa lolos pengecekan saldo
+// (line "user.balance < total") SEBELUM salah satu sempat memotong saldo -
+// khusus order yang lewat Supplier API ini celahnya makin lebar karena ada
+// `await supplier.placeOrder()` (panggilan network) di antara cek saldo dan
+// potong saldo. Hasilnya: saldo user bisa jadi negatif dan toko rugi ganda
+// (bayar ke Supplier 2x untuk saldo yang cuma cukup 1x). Set ini menahan
+// confirm KEDUA (dan seterusnya) untuk chatId yang sama selagi confirm
+// PERTAMA masih diproses.
+const pendingOrderConfirms = new Set();
+
+// ================= GLOBAL ERROR SAFETY NET =================
+// Tanpa ini, SATU promise reject yang tidak ke-catch di manapun (mis. fetch
+// API luar gagal aneh, error dari library pihak ketiga) bisa bikin SELURUH
+// proses Node crash total (perilaku default Node modern) - bot mati mendadak
+// dan butuh di-Start manual lewat panel. Sekarang cukup di-log, bot tetap hidup.
+process.on('unhandledRejection', (reason) => {
+  logError('unhandledRejection', reason);
+});
+process.on('uncaughtException', (err) => {
+  logError('uncaughtException', err);
+});
+// Kalau koneksi polling ke Telegram putus (mis. internet server sempat drop),
+// library ini emit event 'polling_error' - tanpa listener di sini, error-nya
+// cuma hilang diam-diam tanpa log sama sekali, susah didiagnosis.
+bot.on('polling_error', (err) => {
+  console.error('⚠️ Telegram polling error:', err.message);
+});
+
+// usd(n, chatId) - format harga sesuai bahasa customer:
+//   - bahasa Indonesia -> Rp (dikonversi pakai kurs live USD->IDR, sama kurs
+//     yang dipakai buat QRIS)
+//   - bahasa English & default (chatId tidak dikasih, dipakai di panel
+//     admin/notifikasi internal) -> tetap format $ seperti semula
+const usd = (n, chatId) => {
+  const amount = Number(n);
+  const userLang = chatId ? lang.getUserLang(chatId) : null;
+  if (userLang === 'id') {
+    const rate = payment.getCachedUsdToIdrRate(USD_TO_IDR_RATE_FALLBACK);
+    return rupiah(amount * rate);
+  }
+  return '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+const rupiah = (n) => 'Rp' + Math.round(Number(n)).toLocaleString('id-ID');
+
+// Kurs USD -> IDR dipakai HANYA untuk pembayaran QRIS (QRIS di Indonesia
+// cuma bisa nominal Rupiah). Toko tetap pakai USD sebagai mata uang utama
+// (saldo wallet, harga produk, dll). Kursnya diambil OTOMATIS dari harga
+// live USDT/IDR di CoinGecko (lihat getUsdToIdrRate() di payment.js, di-cache
+// 5 menit) - nilai USD_TO_IDR_RATE di .env cuma dipakai sebagai FALLBACK
+// kalau API kurs live-nya lagi down/timeout, jadi tidak wajib diupdate manual
+// tiap hari.
+const USD_TO_IDR_RATE_FALLBACK = Number(process.env.USD_TO_IDR_RATE) || 17750;
+// Kurs TON -> USD dipakai untuk hitung berapa TON yang setara nominal USD
+// yang diminta user saat topup TON. Diambil live (lihat getTonToUsdRate() di
+// payment.js, di-cache 5 menit) - nilai TON_TO_USD_RATE di .env cuma fallback
+// kalau API kurs live-nya lagi down/timeout DAN belum pernah berhasil fetch
+// sama sekali sejak bot nyala.
+const TON_TO_USD_RATE_FALLBACK = Number(process.env.TON_TO_USD_RATE) || 5;
+// Nominal minimum pembayaran QRIS dalam Rupiah - di bawah ini biasanya
+// ditolak provider QRIS (ShopeePay/GoPay/dst).
+const MIN_QRIS_IDR = 1000;
+// Hitung ulang minimum USD berdasarkan kurs LIVE saat itu juga (dibulatkan ke
+// atas per sen), supaya user cukup mikir dalam USD saja saat mengetik - tidak
+// perlu itung-itung ke Rupiah, dan otomatis nyesuaiin kalau kurs naik/turun.
+async function getMinQrisUsd() {
+  const rate = await payment.getUsdToIdrRate(USD_TO_IDR_RATE_FALLBACK);
+  return Math.ceil((MIN_QRIS_IDR / rate) * 100) / 100;
+}
+
+// ================= WALLET TOPUP (QRIS & USDT BEP20 - OTOMATIS) =================
+
+const QRIS_POLL_INTERVAL_MS = 7000;         // cek status tiap 7 detik
+const QRIS_EXPIRE_MS = 10 * 60 * 1000;      // QR berlaku 10 menit
+const USDT_POLL_INTERVAL_MS = 20000;        // cek mutasi on-chain tiap 20 detik
+const USDT_EXPIRE_MS = 30 * 60 * 1000;      // alamat/nominal berlaku 30 menit
+const TON_POLL_INTERVAL_MS = 15000;         // cek mutasi on-chain tiap 15 detik
+const TON_EXPIRE_MS = 30 * 60 * 1000;       // alamat/nominal berlaku 30 menit
+const BINANCE_POLL_INTERVAL_MS = 20000;     // cek histori Binance Pay tiap 20 detik
+const BINANCE_EXPIRE_MS = 30 * 60 * 1000;   // Binance ID/nominal berlaku 30 menit
+const MIN_TOPUP_AMOUNT = 1;                 // nominal topup minimum (USD) - dipakai QRIS
+const MIN_TOPUP_USDT_AMOUNT = 0.1;          // nominal topup minimum khusus USDT (BEP20)
+const MIN_TOPUP_TON_AMOUNT = 0.1;           // nominal topup minimum khusus TON
+const MIN_TOPUP_BINANCE_AMOUNT = 0.1;       // nominal topup minimum khusus Binance Pay
+
+// Pesan "🛒 Buy Product" TERAKHIR yang lagi dibuka tiap user (chatId ->
+// messageId) - dipakai scheduleProductListRepaint() untuk repaint ULANG
+// warna tombol (hijau/merah, lihat productListKeyboard()) kalau stok
+// berubah SETELAH pesan itu terkirim, tanpa perlu user manual buka-tutup
+// menunya lagi. In-memory saja (bukan disimpan ke db.json) - cukup untuk
+// UI nicety ini, dan otomatis "kosong" lagi kalau bot restart (user cukup
+// buka ulang menu sekali biar ke-track lagi, tidak ada dampak fungsional).
+const openProductListMsg = new Map();
+// ===== PATCH v4: tracking halaman DETAIL produk (bukan cuma daftar) =====
+// Sama konsepnya kaya openProductListMsg di atas, tapi buat halaman detail
+// (descKeyboard, tombol "Buy Now") - supaya warna tombol "Buy Now" juga
+// ikut auto-repaint tiap PRODUCT_LIST_REPAINT_INTERVAL_MS selama buyer
+// masih membuka halaman detail itu, bukan cuma sekali pas halaman pertama
+// dibuka. Value-nya simpan productId+variantId (bukan cuma messageId) -
+// beda dari daftar produk yang keyboard-nya sama untuk semua orang,
+// halaman detail ini spesifik per produk/varian yang lagi dilihat buyer.
+const openProductDescMsg = new Map(); // chatId -> { messageId, productId, variantId }
+const MAX_TOPUP_AMOUNT = 10000;             // nominal topup maksimum (USD) - sesuaikan kalau perlu
+// Ambang batas saldo Stars userbot - kalau sisa Stars di bawah ini SETELAH
+// sebuah gift berhasil dikirim, semua admin dapat notifikasi 1x (lihat
+// maybeNotifyLowStars() di dekat executeGiftSend()) supaya bisa top up
+// sebelum buyer berikutnya kena "Stars habis, order tertunda".
+const GIFT_LOW_STARS_THRESHOLD = 100;
+
+function topupMethodKeyboard(chatId) {
+  return {
+    inline_keyboard: [
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_topup_qris'), callback_data: 'topup:qris' }, 'topup_qris'), 'primary')],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_topup_usdt'), callback_data: 'topup:usdt' }, 'topup_usdt'), 'primary')],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_topup_ton'), callback_data: 'topup:ton' }, 'topup_ton'), 'primary')],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_topup_binance'), callback_data: 'topup:binance' }, 'topup_binance'), 'primary')],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back'), 'danger')]
+    ]
+  };
+}
+
+function cancelToTopupKeyboard(chatId) {
+  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:topup' }, 'batal')]] };
+}
+
+const QRIS_QUICK_AMOUNTS = [1, 5, 10, 25, 50, 100];
+
+function qrisAmountKeyboard(chatId) {
+  const rows = [];
+  for (let i = 0; i < QRIS_QUICK_AMOUNTS.length; i += 2) {
+    rows.push(
+      QRIS_QUICK_AMOUNTS.slice(i, i + 2).map(v =>
+        withStyle(withButtonIcon({ text: usd(v, chatId), callback_data: `qrisamt:${v}` }, 'nominal_cepat'), 'primary')
+      )
+    );
+  }
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_custom_amount'), callback_data: 'qris:custom' }, 'nominal_custom'), 'primary')]);
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:topup' }, 'back'), 'danger')]);
+  return { inline_keyboard: rows };
+}
+
+function cancelToQrisAmountKeyboard(chatId) {
+  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'topup:qris' }, 'batal')]] };
+}
+
+function qrisCancelKeyboard(chatId, depositId) {
+  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_qris_cancel'), callback_data: `qris:cancel:${depositId}` }, 'batalkan_qris')]] };
+}
+
+async function startQrisTopup(chatId, amountUsd) {
+  const rate = await payment.getUsdToIdrRate(USD_TO_IDR_RATE_FALLBACK);
+  const amountIdr = Math.round(amountUsd * rate);
+  if (amountIdr < MIN_QRIS_IDR) {
+    const minUsd = Math.ceil((MIN_QRIS_IDR / rate) * 100) / 100;
+    return bot.sendMessage(
+      chatId,
+      lang.t(chatId, 'qris_too_small', { min: usd(minUsd, chatId) }),
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const reference = 'DEP-' + Date.now() + '-' + chatId;
+  let order;
+  try {
+    // PayKita/QRIS cuma menerima nominal Rupiah, jadi base_amount di sini
+    // sudah dalam IDR (hasil konversi dari nominal USD yang diminta user).
+    order = await payment.paykitaCreateOrder(amountIdr, reference);
+  } catch (err) {
+    console.error('PayKita create order error:', err.message);
+    return bot.sendMessage(chatId, lang.t(chatId, 'qris_create_failed'), { parse_mode: 'Markdown' });
+  }
+
+  const deposit = db.createDeposit({
+    chatId,
+    method: 'qris',
+    requestedAmount: amountUsd,
+    requestedAmountIdr: amountIdr,
+    expiresAt: new Date(Date.now() + QRIS_EXPIRE_MS).toISOString(),
+    paykitaOrderId: order.orderId,
+    paykitaReference: reference,
+    finalAmount: order.finalAmount
+  });
+
+  const caption = lang.t(chatId, 'qris_invoice_caption', {
+    orderId: deposit.id,
+    amount: usd(amountUsd, chatId),
+    total: rupiah(order.finalAmount),
+    // Emoji per-baris diambil lewat teksEmoji() supaya custom emoji yang
+    // di-set admin di "🎨 Kelola Emoji ID" -> "Tagihan QRIS (Topup)" berlaku.
+    title_icon: teksEmoji('qris_title', '🪙'),
+    rocket_icon: teksEmoji('qris_rocket', '🚀'),
+    orderid_icon: teksEmoji('qris_orderid', '🧾'),
+    saldo_icon: teksEmoji('qris_saldo', '💵'),
+    total_icon: teksEmoji('qris_total', '💰'),
+    expire_icon: teksEmoji('qris_expire', '⏳'),
+    carabayar_icon: teksEmoji('qris_carabayar', '📲'),
+    step1_icon: teksEmoji('qris_step1', '1️⃣'),
+    step2_icon: teksEmoji('qris_step2', '2️⃣'),
+    step3_icon: teksEmoji('qris_step3', '3️⃣'),
+    auto_icon: teksEmoji('qris_auto', '⚡'),
+    tip_icon: teksEmoji('qris_tip', '💡')
+  });
+
+  const replyMarkup = qrisCancelKeyboard(chatId, deposit.id);
+  let sentMsg;
+  try {
+    if (order.qrImage) {
+      sentMsg = await bot.sendPhoto(chatId, order.qrImage, { caption, parse_mode: 'HTML', reply_markup: replyMarkup });
+    } else if (order.qrString) {
+      const QRCode = require('qrcode');
+      const buffer = await QRCode.toBuffer(order.qrString, { width: 512, margin: 1 });
+      sentMsg = await bot.sendPhoto(chatId, buffer, { caption, parse_mode: 'HTML', reply_markup: replyMarkup });
+    } else {
+      sentMsg = await bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: replyMarkup });
+    }
+    db.updateDeposit(deposit.id, { qrChatId: chatId, qrMessageId: sentMsg.message_id });
+  } catch (err) {
+    console.error('Gagal kirim QR:', err.message);
+    await bot.sendMessage(chatId, caption + lang.t(chatId, 'qris_qr_send_failed'), { parse_mode: 'HTML', reply_markup: replyMarkup });
+  }
+
+  pollQrisDeposit(deposit.id);
+}
+
+function pollQrisDeposit(depositId) {
+  // Guard supaya tick BERIKUTNYA tidak mulai selagi tick SEBELUMNYA masih
+  // nunggu response API (mis. API lambat/hang) - tanpa ini, 2 tick bisa
+  // overlap, sama-sama nemu status "paid", dan sama-sama nge-credit saldo
+  // user -> DOUBLE CREDIT dari 1 pembayaran yang sama. Lihat juga USDT/TON.
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const deposit = db.getDeposit(depositId);
+      if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
+
+      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): SEBELUMNYA
+      // urutan cek-nya expired DULU baru match. Kalau buyer transfer mepet
+      // menjelang batas waktu (atau ada delay konfirmasi PayKita), pada tick
+      // TERAKHIR bot langsung declare "expired" dan return TANPA sempat cek
+      // status paid sama sekali - padahal pembayarannya sebenarnya valid.
+      // Sekarang match/status SELALU dicek dulu di setiap tick (termasuk
+      // tick yang kebetulan sudah lewat expiresAt) - baru declare expired
+      // kalau memang belum ketemu match sama sekali.
+      try {
+        const result = await payment.paykitaGetOrderStatus(deposit.paykitaOrderId);
+        if (result && result.paid) {
+          // Baca ulang deposit SETELAH await, lalu cek lagi statusnya - jaga-jaga
+          // kalau selama nunggu response PayKita di atas, deposit ini sudah
+          // keburu dibatalkan/expired dari tempat lain (mis. user pencet
+          // "❌ Batalkan QRIS" pas di saat yang bersamaan). Tanpa ini, status
+          // 'cancelled' bisa ketiban balik jadi 'paid' dan saldo tetap
+          // dikreditkan meski user sudah membatalkan. Sama seperti pola yang
+          // sudah dipakai di pollUsdtDeposit()/pollTonDeposit().
+          const fresh = db.getDeposit(depositId);
+          if (!fresh || fresh.status !== 'pending') return;
+          db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString() });
+          clearInterval(timer);
+          if (fresh.qrChatId && fresh.qrMessageId) {
+            bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: fresh.qrChatId, message_id: fresh.qrMessageId }).catch(() => {});
+          }
+          const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          bot.sendMessage(
+            fresh.chatId,
+            lang.t(fresh.chatId, 'qris_paid', { amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'qris', fresh.requestedAmount));
+          return;
+        }
+      } catch (err) {
+        console.error(`Cek status QRIS (${depositId}) error:`, err.message);
+      }
+
+      if (Date.now() > new Date(deposit.expiresAt).getTime()) {
+        // Re-check sekali lagi status terkini sebelum benar-benar expire -
+        // jaga-jaga kalau match di atas SEBENARNYA berhasil tapi paid-branch
+        // di atas gagal nulis ke DB gara-gara error lain (defensif, harusnya
+        // jarang kejadian).
+        const fresh = db.getDeposit(depositId);
+        if (!fresh || fresh.status !== 'pending') return;
+        db.updateDeposit(depositId, { status: 'expired' });
+        clearInterval(timer);
+        if (fresh.qrChatId && fresh.qrMessageId) {
+          bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: fresh.qrChatId, message_id: fresh.qrMessageId }).catch(() => {});
+        }
+        bot.sendMessage(fresh.chatId, lang.t(fresh.chatId, 'qris_expired', { id: depositId }), { parse_mode: 'Markdown' }).catch(() => {});
+      }
+    } finally {
+      busy = false;
+    }
+  }, QRIS_POLL_INTERVAL_MS);
+}
+
+async function startUsdtTopup(chatId, usdAmount) {
+  // Toko sudah pakai USD, dan USDT dipatok ~1:1 ke USD, jadi tidak perlu kurs konversi lagi.
+  const baseUsdt = usdAmount;
+  const usedAmounts = db.getUsedUsdtAmounts();
+  const uniqueAmount = payment.generateUniqueUsdtAmount(baseUsdt, usedAmounts);
+
+  const deposit = db.createDeposit({
+    chatId,
+    method: 'usdt_bep20',
+    requestedAmount: usdAmount,
+    expiresAt: new Date(Date.now() + USDT_EXPIRE_MS).toISOString(),
+    usdtAmount: uniqueAmount,
+    walletAddress: payment.USDT_BEP20_ADDRESS
+  });
+
+  const text = lang.t(chatId, 'usdt_invoice_text', {
+    min: usd(MIN_TOPUP_USDT_AMOUNT, chatId),
+    max: usd(MAX_TOPUP_AMOUNT, chatId),
+    orderId: deposit.id,
+    uniqueAmount,
+    address: payment.USDT_BEP20_ADDRESS,
+    // Emoji per-baris diambil lewat teksEmoji() supaya custom emoji yang
+    // di-set admin di "🎨 Kelola Emoji ID" -> "Deposit USDT (BEP20)" berlaku.
+    title_icon: teksEmoji('usdt_title', '🪙'),
+    min_icon: teksEmoji('usdt_min', '🈷️'),
+    max_icon: teksEmoji('usdt_max', '🈷️'),
+    address_icon: teksEmoji('usdt_address_label', '🔺'),
+    auto_icon: teksEmoji('usdt_auto', '✅')
+  });
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_address'), copy_text: { text: payment.USDT_BEP20_ADDRESS } }, 'copy_address_usdt'), 'primary')],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_usdt_cancel'), callback_data: `usdt:cancel:${deposit.id}` }, 'batalkan_usdt'), 'danger')]
+    ]
+  };
+
+  const sentMsg = await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: replyMarkup });
+  db.updateDeposit(deposit.id, { qrChatId: chatId, qrMessageId: sentMsg.message_id });
+  pollUsdtDeposit(deposit.id);
+}
+
+function pollUsdtDeposit(depositId) {
+  // Lihat komentar "busy" di pollQrisDeposit() - guard yang sama di sini
+  // krusial karena panggilan ke Etherscan API sering lambat/error, jadi
+  // peluang overlap antar tick jauh lebih besar daripada QRIS.
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const deposit = db.getDeposit(depositId);
+      if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
+
+      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): urutan cek
+      // dibalik - match SELALU dicek dulu di tiap tick (termasuk tick yang
+      // waktunya sudah lewat expiresAt), baru declare expired kalau memang
+      // belum ketemu. Lihat komentar lebih lengkap di pollQrisDeposit().
+      try {
+        const transfers = await payment.fetchIncomingUsdtTransfers();
+        // Baca ulang deposit SETELAH await, lalu cek lagi statusnya - jaga-jaga
+        // kalau selama nunggu API di atas, deposit ini sudah keburu ditandai
+        // 'paid'/'expired' dari tempat lain (mis. tick sebelumnya yang telat selesai).
+        const fresh = db.getDeposit(depositId);
+        if (!fresh || fresh.status !== 'pending') return;
+        const createdAtMs = new Date(fresh.createdAt).getTime();
+        const match = transfers.find(tx =>
+          Math.abs(tx.amount - fresh.usdtAmount) < 0.00005 &&
+          tx.timestamp >= createdAtMs - 60000 && // toleransi 1 menit untuk selisih jam block
+          !db.isTxHashUsed(tx.hash) // cegah 1 tx on-chain dipakai kredit 2 deposit (lihat komentar isTxHashUsed di db.js)
+        );
+        if (match) {
+          db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString(), txHash: match.hash });
+          clearInterval(timer);
+          const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          bot.sendMessage(
+            fresh.chatId,
+            lang.t(fresh.chatId, 'usdt_paid', { hash: match.hash, amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'usdt_bep20', fresh.requestedAmount));
+          return;
+        }
+      } catch (err) {
+        console.error(`Cek mutasi USDT (${depositId}) error:`, err.message);
+      }
+
+      if (Date.now() > new Date(deposit.expiresAt).getTime()) {
+        const fresh = db.getDeposit(depositId);
+        if (!fresh || fresh.status !== 'pending') return;
+        db.updateDeposit(depositId, { status: 'expired' });
+        clearInterval(timer);
+        bot.sendMessage(fresh.chatId, lang.t(fresh.chatId, 'usdt_expired', { id: depositId }), { parse_mode: 'Markdown' }).catch(() => {});
+        // ===== BUG FIX (jaring pengaman): deposit yang expired TANPA match
+        // sebelumnya cuma diam-diam hilang - kalau ternyata buyer SUDAH
+        // transfer on-chain (mis. gara-gara RPC publik sempat down/telat pas
+        // window deposit-nya, lihat catatan RANGE_BLOCKS di payment.js),
+        // tidak ada satu pun pihak (admin) yang tahu ada dana masuk yang
+        // belum ke-credit. Sekarang admin dikasih notifikasi tiap kali ini
+        // terjadi, sertakan nominal unik & alamat wallet, supaya admin bisa
+        // cek manual di block explorer (BscScan) dan kredit manual kalau
+        // ternyata memang sudah dibayar.
+        notifyAdmins(
+          `⚠️ <b>Deposit USDT BEP20 expired (tidak ketemu)</b>\n\n` +
+          `Deposit ID: <code>${escapeHtml(depositId)}</code>\n` +
+          `User ID: ${escapeHtml(String(fresh.chatId))}\n` +
+          `Nominal unik: <code>${escapeHtml(String(fresh.usdtAmount))} USDT</code>\n` +
+          `Alamat: <code>${escapeHtml(fresh.walletAddress || '-')}</code>\n` +
+          `Dibuat: ${escapeHtml(fresh.createdAt)}\n\n` +
+          `ℹ️ Kalau buyer klaim sudah transfer, cek manual di BscScan (transfer USDT ke alamat di atas, nominal persis di atas, dalam rentang waktu dibuat s/d sekarang). Kalau memang ketemu & valid, kredit saldo user secara manual.`
+        );
+      }
+    } finally {
+      busy = false;
+    }
+  }, USDT_POLL_INTERVAL_MS);
+}
+
+async function startTonTopup(chatId, usdAmount) {
+  const rate = await payment.getTonToUsdRate(TON_TO_USD_RATE_FALLBACK);
+  const baseTon = usdAmount / rate;
+  const usedAmounts = db.getUsedTonAmounts();
+  const uniqueAmount = payment.generateUniqueTonAmount(baseTon, usedAmounts);
+
+  const deposit = db.createDeposit({
+    chatId,
+    method: 'ton',
+    requestedAmount: usdAmount,
+    expiresAt: new Date(Date.now() + TON_EXPIRE_MS).toISOString(),
+    tonAmount: uniqueAmount,
+    walletAddress: payment.TON_ADDRESS
+  });
+
+  const text = lang.t(chatId, 'ton_invoice_text', {
+    min: usd(MIN_TOPUP_TON_AMOUNT, chatId),
+    max: usd(MAX_TOPUP_AMOUNT, chatId),
+    orderId: deposit.id,
+    uniqueAmount,
+    address: payment.TON_ADDRESS,
+    // Emoji per-baris diambil lewat teksEmoji() supaya custom emoji yang
+    // di-set admin di "🎨 Kelola Emoji ID" -> "Deposit TON" berlaku.
+    title_icon: teksEmoji('ton_title', '💎'),
+    min_icon: teksEmoji('ton_min', '🈷️'),
+    max_icon: teksEmoji('ton_max', '🈷️'),
+    address_icon: teksEmoji('ton_address_label', '🔺'),
+    auto_icon: teksEmoji('ton_auto', '✅')
+  });
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_address'), copy_text: { text: payment.TON_ADDRESS } }, 'copy_address_ton'), 'primary')],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_ton_cancel'), callback_data: `ton:cancel:${deposit.id}` }, 'batalkan_ton'), 'danger')]
+    ]
+  };
+
+  const sentMsg = await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: replyMarkup });
+  db.updateDeposit(deposit.id, { qrChatId: chatId, qrMessageId: sentMsg.message_id });
+  pollTonDeposit(deposit.id);
+}
+
+function pollTonDeposit(depositId) {
+  // Lihat komentar "busy" di pollQrisDeposit()/pollUsdtDeposit().
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const deposit = db.getDeposit(depositId);
+      if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
+
+      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): match SELALU
+      // dicek dulu tiap tick sebelum declare expired - lihat komentar
+      // lengkap di pollQrisDeposit().
+      try {
+        const transfers = await payment.fetchIncomingTonTransfers();
+        const fresh = db.getDeposit(depositId);
+        if (!fresh || fresh.status !== 'pending') return;
+        const createdAtMs = new Date(fresh.createdAt).getTime();
+        const match = transfers.find(tx =>
+          Math.abs(tx.amount - fresh.tonAmount) < 0.000005 &&
+          tx.timestamp >= createdAtMs - 60000 && // toleransi 1 menit untuk selisih jam block
+          !db.isTxHashUsed(tx.hash) // cegah 1 tx on-chain dipakai kredit 2 deposit (lihat komentar isTxHashUsed di db.js)
+        );
+        if (match) {
+          db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString(), txHash: match.hash });
+          clearInterval(timer);
+          const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          bot.sendMessage(
+            fresh.chatId,
+            lang.t(fresh.chatId, 'ton_paid', { amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'ton', fresh.requestedAmount));
+          return;
+        }
+      } catch (err) {
+        console.error(`Cek mutasi TON (${depositId}) error:`, err.message);
+      }
+
+      if (Date.now() > new Date(deposit.expiresAt).getTime()) {
+        const fresh = db.getDeposit(depositId);
+        if (!fresh || fresh.status !== 'pending') return;
+        db.updateDeposit(depositId, { status: 'expired' });
+        clearInterval(timer);
+        bot.sendMessage(fresh.chatId, lang.t(fresh.chatId, 'ton_expired', { id: depositId }), { parse_mode: 'Markdown' }).catch(() => {});
+        // Sama seperti safety-net di pollUsdtDeposit() - lihat komentar di sana.
+        notifyAdmins(
+          `⚠️ <b>Deposit TON expired (tidak ketemu)</b>\n\n` +
+          `Deposit ID: <code>${escapeHtml(depositId)}</code>\n` +
+          `User ID: ${escapeHtml(String(fresh.chatId))}\n` +
+          `Nominal unik: <code>${escapeHtml(String(fresh.tonAmount))} TON</code>\n` +
+          `Alamat: <code>${escapeHtml(fresh.walletAddress || '-')}</code>\n` +
+          `Dibuat: ${escapeHtml(fresh.createdAt)}\n\n` +
+          `ℹ️ Kalau buyer klaim sudah transfer, cek manual di TON explorer. Kalau memang ketemu & valid, kredit saldo user secara manual.`
+        );
+      }
+    } finally {
+      busy = false;
+    }
+  }, TON_POLL_INTERVAL_MS);
+}
+
+async function startBinanceTopup(chatId, usdAmount) {
+  // Binance Pay dipatok 1:1 ke USD/USDT (buyer transfer nominal dalam USDT
+  // lewat menu "Pay" di app Binance), sama seperti USDT BEP20 di atas.
+  const baseAmount = usdAmount;
+  const usedAmounts = db.getUsedBinanceAmounts();
+  const uniqueAmount = payment.generateUniqueBinanceAmount(baseAmount, usedAmounts);
+
+  const deposit = db.createDeposit({
+    chatId,
+    method: 'binance',
+    requestedAmount: usdAmount,
+    expiresAt: new Date(Date.now() + BINANCE_EXPIRE_MS).toISOString(),
+    binanceAmount: uniqueAmount,
+    binancePayId: BINANCE_PAY_ID
+  });
+
+  const text = lang.t(chatId, 'binance_invoice_text', {
+    min: usd(MIN_TOPUP_BINANCE_AMOUNT, chatId),
+    max: usd(MAX_TOPUP_AMOUNT, chatId),
+    orderId: deposit.id,
+    uniqueAmount,
+    payId: BINANCE_PAY_ID,
+    title_icon: teksEmoji('binance_title', '🟡'),
+    min_icon: teksEmoji('binance_min', '🈷️'),
+    max_icon: teksEmoji('binance_max', '🈷️'),
+    payid_icon: teksEmoji('binance_payid_label', '🔺'),
+    auto_icon: teksEmoji('binance_auto', '✅')
+  });
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_binance_id'), copy_text: { text: BINANCE_PAY_ID } }, 'copy_id_binance'), 'primary')],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_binance_cancel'), callback_data: `binance:cancel:${deposit.id}` }, 'batalkan_binance'), 'danger')]
+    ]
+  };
+
+  const sentMsg = await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: replyMarkup });
+  db.updateDeposit(deposit.id, { qrChatId: chatId, qrMessageId: sentMsg.message_id });
+  pollBinanceDeposit(deposit.id);
+}
+
+function pollBinanceDeposit(depositId) {
+  // Lihat komentar "busy" di pollQrisDeposit()/pollUsdtDeposit()/pollTonDeposit().
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const deposit = db.getDeposit(depositId);
+      if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
+
+      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): match SELALU
+      // dicek dulu tiap tick sebelum declare expired - lihat komentar
+      // lengkap di pollQrisDeposit().
+      try {
+        const transactions = await payment.fetchIncomingBinancePayTransactions();
+        // Baca ulang deposit SETELAH await - lihat komentar sama di pollUsdtDeposit().
+        const fresh = db.getDeposit(depositId);
+        if (!fresh || fresh.status !== 'pending') return;
+        const createdAtMs = new Date(fresh.createdAt).getTime();
+        // ===== BUG FIX (SECURITY - kredit gratis): dulu match cuma cocokkan
+        // `tx.amount` (angka mentah) tanpa PERNAH cek `tx.currency`. Binance
+        // Pay C2C bisa kirim ASET APAPUN yang dipilih pengirim (USDT, BNB,
+        // SHIB, dst - bukan cuma USDT), dan invoice-nya sendiri cuma minta
+        // "kirim PERSIS jumlah ini" tanpa sebut aset. Karena nominal unik
+        // dibuat dari angka desimal biasa (mis. 5.0037), BUYER BISA kirim
+        // 5.0037 dari aset receh (mis. SHIB senilai < 1 sen) alih-alih 5.0037
+        // USDT senilai $5 - match tetap "berhasil" murni dari angkanya SAJA,
+        // dan buyer dapat kredit Wallet PENUH walau transfer aslinya nyaris
+        // tidak bernilai. Sekarang WAJIB currency-nya juga cocok dengan
+        // BINANCE_EXPECTED_CURRENCY ('USDT') - transfer aset lain dengan
+        // angka yang sama sekalipun TIDAK akan pernah match.
+        const match = transactions.find(tx =>
+          tx.currency === payment.BINANCE_EXPECTED_CURRENCY &&
+          Math.abs(tx.amount - fresh.binanceAmount) < 0.00005 &&
+          tx.timestamp >= createdAtMs - 60000 && // toleransi 1 menit
+          !db.isTxHashUsed(`binance:${tx.id}`) // cegah 1 transaksi Binance dipakai kredit 2 deposit
+        );
+        if (match) {
+          db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString(), txHash: `binance:${match.id}` });
+          clearInterval(timer);
+          const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          bot.sendMessage(
+            fresh.chatId,
+            lang.t(fresh.chatId, 'binance_paid', { id: match.id, amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'binance', fresh.requestedAmount));
+          return;
+        }
+      } catch (err) {
+        console.error(`Cek histori Binance Pay (${depositId}) error:`, err.message);
+      }
+
+      if (Date.now() > new Date(deposit.expiresAt).getTime()) {
+        const fresh = db.getDeposit(depositId);
+        if (!fresh || fresh.status !== 'pending') return;
+        db.updateDeposit(depositId, { status: 'expired' });
+        clearInterval(timer);
+        bot.sendMessage(fresh.chatId, lang.t(fresh.chatId, 'binance_expired', { id: depositId }), { parse_mode: 'Markdown' }).catch(() => {});
+        // ⚠️ PATCH diagnostik: sebelumnya notifikasi expired ini cuma kasih
+        // tahu "tidak ketemu" tanpa data apapun buat cari tahu KENAPA - admin
+        // wajib buka app Binance manual dulu. Sekarang tarik ulang transaksi
+        // mentah (tanpa filter ketat currency/orderType) di rentang waktu
+        // deposit ini, dan sertakan di notifikasi kalau ada - supaya langsung
+        // kelihatan misalnya currency-nya bukan USDT, orderType-nya bukan
+        // C2C, atau nominalnya beda tipis dari yang diminta.
+        let rawTxDetail = '';
+        try {
+          const rawTx = await payment.fetchRawBinancePayTransactionsInRange(
+            new Date(fresh.createdAt).getTime() - 60000,
+            new Date(fresh.expiresAt).getTime() + 60000
+          );
+          if (rawTx.length > 0) {
+            const lines = rawTx.map(tx =>
+              `• ${tx.amount} ${tx.currency || '?'} (orderType: ${tx.orderType || '?'}, id: ${tx.id})`
+            ).join('\n');
+            rawTxDetail = `\n\n<b>Transaksi Binance Pay di rentang waktu ini (tidak match otomatis, cek manual):</b>\n${escapeHtml(lines)}`;
+          } else {
+            rawTxDetail = `\n\n<i>Tidak ada transaksi Binance Pay sama sekali di rentang waktu ini - kemungkinan buyer belum benar-benar transfer, salah kirim ke ID lain, atau transfer belum settle.</i>`;
+          }
+        } catch (rawErr) {
+          rawTxDetail = `\n\n<i>Gagal ambil data diagnostik transaksi: ${escapeHtml(rawErr.message)}</i>`;
+        }
+        notifyAdmins(
+          `⚠️ <b>Deposit Binance Pay expired (tidak ketemu)</b>\n\n` +
+          `Deposit ID: <code>${escapeHtml(depositId)}</code>\n` +
+          `User ID: ${escapeHtml(String(fresh.chatId))}\n` +
+          `Nominal unik: <code>${escapeHtml(String(fresh.binanceAmount))}</code>\n` +
+          `Binance ID tujuan: <code>${escapeHtml(fresh.binancePayId || '-')}</code>\n` +
+          `Dibuat: ${escapeHtml(fresh.createdAt)}` +
+          rawTxDetail +
+          `\n\nℹ️ Kalau buyer klaim sudah transfer, cek manual di app Binance -> Pay -> History. Kalau memang ketemu & valid, kredit saldo user secara manual.`
+        );
+      }
+    } finally {
+      busy = false;
+    }
+  }, BINANCE_POLL_INTERVAL_MS);
+}
+
+// Lanjutkan pantau semua deposit yang masih 'pending' saat bot baru di-restart
+// (mis. abis update kode / server reboot), supaya topup yang belum selesai
+// tetap kedeteksi otomatis begitu bot nyala lagi.
+function resumePendingDeposits() {
+  const pending = db.getPendingDeposits();
+  pending.forEach(d => {
+    if (d.method === 'qris') pollQrisDeposit(d.id);
+    else if (d.method === 'usdt_bep20') pollUsdtDeposit(d.id);
+    else if (d.method === 'ton') pollTonDeposit(d.id);
+    else if (d.method === 'binance') pollBinanceDeposit(d.id);
+  });
+}
+
+// Ada 2 sumber custom emoji premium yang beda mekanismenya:
+//
+// 1) boltEmojiMenu() / boltEmojiText() -> 1 ID yang di-hardcode manual di
+//    emoji-id-teks.js, dipakai untuk bullet "⚡" bawaan bot: {e} di deskripsi/
+//    how-to-use, dan teks menu/notifikasi (welcome, order berhasil, dll).
+//
+// 2) embedOwnerCustomEmoji() -> TANPA perlu isi ID manual sama sekali. Kalau
+//    OWNER (yang beneran punya Telegram Premium) ngetik teks bebas untuk
+//    deskripsi/how-to-use dan MEMILIH emoji premium langsung dari emoji panel
+//    Telegram-nya sendiri (bukan cuma ngetik unicode biasa), Telegram otomatis
+//    menyertakan custom_emoji_id ASLI emoji tsb di message.entities saat pesan
+//    itu sampai ke bot. Bot tinggal baca entities itu & sisipkan balik jadi tag
+//    <tg-emoji emoji-id="...">, lalu simpan ke database sebagai HTML - jadi
+//    begitu owner ketik, emoji itu LANGSUNG jadi premium permanen di deskripsi/
+//    how-to-use tsb, tanpa sentuh file emoji-id manapun. (Lihat pemakaiannya di
+//    handler 'addproduct_desc' & 'sethowto_text' di bagian TEXT MESSAGES.)
+//
+// Sesuai Bot API 9.4 (rilis 9 Feb 2026, core.telegram.org/bots/api-changelog#february-9-2026):
+// bot BOLEH kirim custom emoji di teks pesan asal akun PEMILIK BOT (bukan bot-nya)
+// punya langganan Telegram Premium aktif - baik lewat mekanisme (1) maupun (2) di
+// atas. Kalau ID kosong / owner belum Premium, otomatis fallback ke unicode biasa,
+// tidak ada error dari Telegram.
+// Prioritas ID: (1) hasil "tangkap otomatis" via admin "🎨 Kelola Emoji ID"
+// (persisten di data/db.json), lalu (2) ID statis di emoji-id-teks.js.
+const boltEmojiMenu = () => {
+  const id = db.getEmojiId('teks:menu_notif') || BOLT_EMOJI_ID_MENU;
+  return id ? `<tg-emoji emoji-id="${id}">⚡</tg-emoji>` : '⚡';
+};
+const boltEmojiText = () => {
+  const id = db.getEmojiId('teks:product_desc') || BOLT_EMOJI_ID_TEXT;
+  return id ? `<tg-emoji emoji-id="${id}">⚡</tg-emoji>` : '⚡';
+};
+
+// Versi UMUM dari mekanisme di atas: dipakai untuk emoji APA SAJA di dalam
+// teks pesan (bukan cuma placeholder "⚡"), key-nya masing-masing punya slot
+// sendiri di admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan". Prioritas
+// ID: (1) hasil "tangkap otomatis" di data/db.json, lalu (2) backup statis
+// EMOJI_ID_TEKS_BACKUP di emoji-id-teks.js. Kalau dua-duanya kosong,
+// otomatis fallback ke emoji unicode biasa (parameter kedua), TIDAK ERROR.
+function teksEmoji(key, fallback) {
+  const id = db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEKS_BACKUP[key];
+  return id ? `<tg-emoji emoji-id="${id}">${fallback}</tg-emoji>` : fallback;
+}
+
+// Teks welcome (/start) - dipakai di 6 tempat berbeda (start pertama kali,
+// ganti bahasa, dll), jadi disatukan di 1 helper supaya kalau mau ubah lagi
+// nanti cukup edit di sini saja. Tiap baris fitur punya slot ikon sendiri
+// (teksEmoji) supaya bisa di-custom lewat admin "🎨 Kelola Emoji ID" ->
+// "✍️ Emoji di Teks Pesan" -> "👋 Pesan Welcome (/start)".
+function buildWelcomeText(chatId) {
+  return `${teksEmoji('welcome_wave', '👋')} ${lang.t(chatId, 'welcome', {
+    store: escapeHtml(STORE_NAME),
+    cart_icon: teksEmoji('welcome_cart', '🛒'),
+    wallet_icon: teksEmoji('welcome_wallet', '💳'),
+    bolt_icon: teksEmoji('welcome_bolt', '⚡'),
+    gift_icon: teksEmoji('welcome_gift', '🎁'),
+    arrow_icon: teksEmoji('welcome_arrow', '👉')
+  })}`;
+}
+
+// Teks Mode Maintenance (/admin -> 🛠️ Maintenance Bot). Kalau admin sudah
+// isi pesan CUSTOM (lewat "✏️ Set Pesan Custom"), pakai itu apa adanya
+// (sudah termasuk tag <tg-emoji> hasil embedOwnerCustomEmoji() kalau admin
+// pilih emoji premium langsung saat ngetik - sama mekanismenya dengan
+// Broadcast). Kalau belum diisi (null/kosong), fallback ke teks default
+// "keren" yang tiap ikonnya lewat teksEmoji() -> otomatis pakai emoji
+// Premium yang SUDAH ADA di file (dipinjam dari slot lain, lihat komentar
+// di emoji-id-teks.js), dan tetap bisa di-custom lewat admin "🎨 Kelola
+// Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "🛠️ Mode Maintenance" TANPA
+// perlu ubah kode sama sekali.
+function buildMaintenanceText(chatId) {
+  const { message } = db.getMaintenanceSettings();
+  if (message) return message;
+  const title = lang.t(chatId, 'maintenance_title', {
+    wrench_icon: teksEmoji('maintenance_wrench', '🛠️')
+  });
+  const desc = lang.t(chatId, 'maintenance_desc', {
+    store: escapeHtml(STORE_NAME),
+    sparkle_icon: teksEmoji('maintenance_sparkle', '✨'),
+    bolt_icon: teksEmoji('maintenance_bolt', '⚡'),
+    clock_icon: teksEmoji('maintenance_clock', '⏳'),
+    heart_icon: teksEmoji('maintenance_heart', '🙏')
+  });
+  return `${title}\n\n${desc}`;
+}
+
+// Teks broadcast "Maintenance SELESAI" - dikirim otomatis ke SEMUA user
+// begitu admin nonaktifkan Mode Maintenance lewat "🔴 Nonaktifkan" (lihat
+// handler 'maintenance_toggle' di bawah). Sama pola dengan
+// buildMaintenanceText() di atas: tiap ikon lewat teksEmoji() supaya
+// otomatis pakai emoji Premium yang SUDAH ADA di file (dipinjam dari slot
+// lain, lihat catatan di emoji-id-teks.js), dan tetap bisa di-custom lewat
+// admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "🛠️ Mode
+// Maintenance" TANPA perlu ubah kode sama sekali. Beda dari
+// buildMaintenanceText(), teks ini SELALU pakai template default (bukan
+// pesan custom admin) karena memang khusus 1 kali kirim saat maintenance
+// baru saja selesai, bukan status yang ditampilkan berulang.
+function buildMaintenanceFinishedText(chatId) {
+  const title = lang.t(chatId, 'maintenance_finished_title', {
+    rocket_icon: teksEmoji('maintenance_finished_rocket', '🚀')
+  });
+  const desc = lang.t(chatId, 'maintenance_finished_desc', {
+    store: escapeHtml(STORE_NAME),
+    sparkle_icon: teksEmoji('maintenance_finished_sparkle', '✨'),
+    check_icon: teksEmoji('maintenance_finished_check', '✅'),
+    bolt_icon: teksEmoji('maintenance_finished_bolt', '⚡'),
+    gift_icon: teksEmoji('maintenance_finished_gift', '🎁'),
+    heart_icon: teksEmoji('maintenance_finished_heart', '🙏')
+  });
+  return `${title}\n\n${desc}`;
+}
+
+// ================= WAJIB JOIN CHANNEL/GRUP (Force Subscribe) =================
+// Cek status join 1 user ke 1 channel ATAU grup/supergroup lewat getChatMember
+// - mekanismenya SAMA untuk keduanya, Telegram tidak membedakan cara cek
+// member-nya berdasarkan tipe chat. chatRef boleh @username (channel/grup
+// publik) atau chat id numerik (wajib buat channel/grup PRIVATE - bot harus
+// jadi admin di situ dulu supaya bisa baca statusnya). Kalau API error apapun
+// (bot bukan admin, channel/grup sudah dihapus, dll), dianggap BELUM join -
+// lebih aman daripada diam-diam meloloskan semua orang.
+async function isUserMemberOfChannel(chatRef, userId) {
+  try {
+    const member = await bot.getChatMember(chatRef, userId);
+    return ['creator', 'administrator', 'member'].includes(member.status);
+  } catch (err) {
+    console.error(`⚠️ Gagal cek status join channel ${chatRef}:`, err.message);
+    return false;
+  }
+}
+
+// Return array channel yang BELUM di-join user (subset dari seluruh channel
+// wajib-join yang aktif). Array kosong = user sudah join semuanya.
+async function getUnjoinedChannels(userId) {
+  const { enabled, channels } = db.getForceJoinSettings();
+  if (!enabled || !channels.length) return [];
+  const results = await Promise.all(
+    channels.map(async ch => ({ ch, joined: await isUserMemberOfChannel(ch.chatRef, userId) }))
+  );
+  return results.filter(r => !r.joined).map(r => r.ch);
+}
+
+function forceJoinKeyboard(chatId, channels) {
+  const rows = channels.map(ch => ([
+    withButtonIcon({ text: lang.t(chatId, 'btn_join_channel', { title: ch.title }), url: ch.link }, 'join_channel')
+  ]));
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_checkjoin'), callback_data: 'checkjoin' }, 'checkjoin'), 'success')]);
+  return { inline_keyboard: rows };
+}
+
+function forceJoinText(chatId, unjoinedChannels, allChannels) {
+  const unjoinedIds = new Set(unjoinedChannels.map(c => c.id));
+  const joinedIcon = teksEmoji('forcejoin_status_joined', '✅');
+  const pendingIcon = teksEmoji('forcejoin_status_pending', '🔸');
+  const lines = allChannels.map(ch => lang.t(chatId, 'forcejoin_channel_line', {
+    status: unjoinedIds.has(ch.id) ? pendingIcon : joinedIcon,
+    title: escapeHtml(ch.title)
+  }));
+  const title = lang.t(chatId, 'forcejoin_title', { lock_icon: teksEmoji('forcejoin_lock', '🔐') });
+  const desc = lang.t(chatId, 'forcejoin_desc', {
+    store: escapeHtml(STORE_NAME),
+    lock_icon: teksEmoji('forcejoin_lock', '🔐'),
+    sparkle_icon: teksEmoji('forcejoin_sparkle', '✨'),
+    bolt_icon: teksEmoji('forcejoin_bolt', '⚡'),
+    arrow_icon: teksEmoji('forcejoin_arrow', '👇'),
+    check_icon: teksEmoji('forcejoin_check', '✅')
+  });
+  return `${title}\n\n${desc}\n\n${lines.join('\n')}`;
+}
+
+// Gerbang utama: kalau fitur wajib-join aktif & user masih ada channel yang
+// belum di-join, tampilkan layar join (kirim pesan baru ATAU edit pesan yang
+// ada, tergantung `messageId`) lalu return false (caller WAJIB berhenti di
+// sini, jangan lanjut ke menu). Return true kalau aman lanjut (fitur nonaktif,
+// tidak ada channel, atau user sudah join semuanya).
+async function checkForceJoinAndPrompt(chatId, messageId) {
+  const { enabled, channels } = db.getForceJoinSettings();
+  if (!enabled || !channels.length) return true;
+  const unjoined = await getUnjoinedChannels(chatId);
+  if (!unjoined.length) return true;
+
+  const text = forceJoinText(chatId, unjoined, channels);
+  const keyboard = forceJoinKeyboard(chatId, channels);
+  if (messageId) {
+    await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: keyboard });
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: keyboard });
+  }
+  return false;
+}
+
+// Ambil teks pesan APA ADANYA (msg.text, belum di-trim) plus entity-nya, cari
+// entity bertipe "custom_emoji" (ini muncul kalau pengirim beneran memilih
+// custom emoji dari panel Telegram Premium-nya - beda dari sekadar ngetik
+// karakter unicode biasa), lalu sisipkan balik posisinya sebagai tag
+// <tg-emoji emoji-id="...">. Diproses dari belakang (offset terbesar dulu)
+// supaya offset entity yang lebih awal tidak ikut bergeser oleh tag yang
+// baru disisipkan. Offset/length dari Telegram dalam UTF-16 code unit, sama
+// persis dengan representasi native string JavaScript, jadi slicing di bawah
+// aman dipakai langsung tanpa konversi tambahan.
+function embedOwnerCustomEmojiFrom(text, entities) {
+  const raw = text || '';
+  const customEmojiEntities = (entities || [])
+    .filter(e => e.type === 'custom_emoji')
+    .sort((a, b) => b.offset - a.offset);
+  let result = raw;
+  for (const ent of customEmojiEntities) {
+    const start = ent.offset;
+    const end = ent.offset + ent.length;
+    const original = result.slice(start, end);
+    result = result.slice(0, start) + `<tg-emoji emoji-id="${ent.custom_emoji_id}">${original}</tg-emoji>` + result.slice(end);
+  }
+  return result.trim();
+}
+function embedOwnerCustomEmoji(msg) {
+  return embedOwnerCustomEmojiFrom(msg.text, msg.entities);
+}
+
+// Render deskripsi produk / how-to-use untuk ditampilkan ke user: satu-satunya
+// hal yang perlu diganti di sini adalah placeholder legacy "{e}". Emoji premium
+// lain yang diketik owner sudah berupa tag <tg-emoji> valid sejak disimpan
+// (lewat embedOwnerCustomEmoji() di atas), jadi tidak perlu diproses lagi -
+// diproses ulang di sini justru bisa bikin tag ke-nest dobel.
+const renderDescription = (text) => (text || '').split('{e}').join(boltEmojiText());
+
+// ============================================================
+// Auto-translate deskripsi produk (fitur "Admin isi 1 bahasa, otomatis
+// berubah saat /setlanguage") — pakai endpoint publik Google Translate
+// (translate.googleapis.com) TANPA API key. Endpoint ini tidak resmi/tidak
+// didukung Google secara formal, jadi WAJIB dibungkus try/catch dan boleh
+// gagal kapan saja (rate-limit, endpoint berubah, dst) — kalau gagal, fallback
+// ke teks asli apa adanya supaya buyer tetap dapat info produk (lebih baik
+// tampil bahasa "salah" daripada error/kosong).
+async function translateText(text, sourceLang, targetLang) {
+  if (!text) return null;
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const data = await res.json();
+    // Bentuk respons: [[[translated_chunk, original_chunk, ...], ...], ...]
+    // Teks panjang dipecah Google jadi beberapa chunk, harus digabung balik.
+    const chunks = Array.isArray(data) && Array.isArray(data[0]) ? data[0] : [];
+    const translated = chunks.map(c => (Array.isArray(c) ? c[0] : '')).join('');
+    return translated || null;
+  } catch (err) {
+    console.error('⚠️ Auto-translate deskripsi gagal:', err.message);
+    return null;
+  }
+}
+
+// Ambil teks deskripsi varian dalam bahasa yang SEDANG dipakai buyer
+// (lang.getUserLang(chatId)), auto-translate + cache kalau bahasa deskripsi
+// aslinya (variant.descriptionLang, default 'id' untuk data lama) beda dari
+// bahasa buyer. Cache tersimpan permanen di data/db.json
+// (variant.descriptionTranslated[targetLang]) sampai admin edit ulang teks
+// aslinya (lihat db.setDescription() yang reset cache ini).
+async function getLocalizedDescription(chatId, productId, variant) {
+  const raw = variant.description || '';
+  if (!raw) return '';
+  const sourceLang = variant.descriptionLang === 'en' ? 'en' : 'id';
+  const targetLang = lang.getUserLang(chatId) === 'en' ? 'en' : 'id';
+  if (sourceLang === targetLang) return raw;
+
+  const cached = variant.descriptionTranslated && variant.descriptionTranslated[targetLang];
+  if (cached) return cached;
+
+  const translated = await translateText(raw, sourceLang, targetLang);
+  if (translated) {
+    db.cacheDescriptionTranslation(productId, variant.id, targetLang, translated);
+    return translated;
+  }
+  return raw; // fallback: gagal translate, tampilkan bahasa asli daripada kosong
+}
+
+// Buang 1 emoji unicode (+ spasi setelahnya) di AWAL sebuah teks. Dipakai
+// begitu icon_custom_emoji_id dipasang ke tombol, supaya emoji tidak tampil
+// DUA KALI - sekali sebagai ikon tombol (custom, premium) dan sekali lagi
+// sebagai karakter unicode biasa yang masih nempel di teks labelnya.
+// Regex ini cover emoji dasar, emoji+variation selector (️), dan emoji ZWJ
+// sequence (👨‍👩‍👧 dkk) supaya seluruh cluster emoji-nya kebuang, bukan cuma
+// separuh.
+function stripLeadingEmoji(text) {
+  return String(text || '').replace(
+    /^\s*\p{Extended_Pictographic}(?:\uFE0F)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F)?)*\s*/u,
+    ''
+  );
+}
+
+// Sisipkan icon_custom_emoji_id ke sebuah tombol inline keyboard (Bot API 9.4+).
+// "key" merujuk ke salah satu key di object EMOJI_IDS pada emoji-id-menu-inline.js,
+// jadi tiap tombol bisa punya ikon custom emoji yang BEDA-BEDA, bukan cuma 1 ID
+// yang sama untuk semua tombol. Kalau ID untuk key itu tidak diisi (atau owner
+// belum Telegram Premium), field ini otomatis tidak disisipkan sama sekali ->
+// tombol tampil normal tanpa ikon, tidak ada error dari Telegram.
+function withButtonIcon(button, key) {
+  const id = iconFor(key);
+  if (!id) return button;
+  return { ...button, text: stripLeadingEmoji(button.text), icon_custom_emoji_id: id };
+}
+
+// Sama seperti withButtonIcon(), tapi PRIORITASKAN emoji premium milik produk
+// itu sendiri (product.emojiId, mis. logo/ikon khas Netflix/Spotify/Gemini
+// yang owner pilih sendiri saat produk itu dibuat - lihat productEmojiHtml())
+// kalau ada, baru fallback ke ID global "key" (mis. tombol "buy_now" biasa)
+// kalau produk itu belum punya emojiId sendiri. Dipakai di tombol-tombol
+// yang tampil PER PRODUK (mis. "✅ Buy Now" di halaman deskripsi, "🛒 Order
+// Sekarang" di notifikasi channel) supaya ikonnya "sesuai aplikasi" yang
+// dibeli, bukan cuma 1 ikon generik yang sama untuk semua produk.
+function withButtonIconPreferProduct(button, key, product) {
+  if (product && product.emojiId) {
+    return { ...button, text: stripLeadingEmoji(button.text), icon_custom_emoji_id: product.emojiId };
+  }
+  return withButtonIcon(button, key);
+}
+
+// Beri warna latar ke tombol inline keyboard lewat field "style" (Bot API 9.4+,
+// rilis 9 Feb 2026). Nilai valid: 'primary' (biru), 'success' (hijau), 'danger'
+// (merah). Kalau tidak diisi, Telegram pakai tampilan default (transparan/putih).
+// Berbeda dari icon_custom_emoji_id, style TIDAK butuh Telegram Premium sama
+// sekali - berlaku untuk semua bot, jadi aman dipakai langsung tanpa fallback.
+function withStyle(button, style) {
+  return { ...button, style };
+}
+
+// ===== Emoji premium PER PRODUK (beda lagi dari 2 mekanisme di atas) =====
+// Sumbernya BUKAN file emoji-id-teks.js / emoji-id-menu-inline.js (yang isinya
+// manual & global untuk 1 nilai/1 key), tapi emoji premium yang owner pilih
+// SENDIRI langsung dari panel Telegram Premium-nya saat ngetik nama produk di
+// alur "➕ Tambah Produk" (lihat handler 'addproduct_name'). Begitu diketik,
+// Telegram sudah kasih custom_emoji_id ASLI-nya lewat message.entities -> ID
+// itu disimpan per-produk sebagai product.emojiId (+ product.emoji sebagai
+// fallback karakter unicode-nya). Tidak perlu isi ID manual di file manapun.
+
+// Untuk teks dengan parse_mode 'HTML' -> render sebagai <tg-emoji> asli kalau
+// produk itu punya emojiId, kalau tidak fallback ke emoji unicode biasa / 📦.
+function productEmojiHtml(product) {
+  if (!product) return '📦';
+  return product.emojiId
+    ? `<tg-emoji emoji-id="${product.emojiId}">${product.emoji || '📦'}</tg-emoji>`
+    : (product.emoji || '📦');
+}
+
+// Untuk tombol inline keyboard -> teks tombol tetap pakai emoji unicode biasa
+// (Telegram tidak bisa render custom emoji DI DALAM teks tombol), tapi kalau
+// produk punya emojiId, tambahkan juga sebagai ICON tombol (Bot API 9.4+)
+// supaya tetap kelihatan premium di sebelah teksnya.
+function withProductIcon(button, product) {
+  return product && product.emojiId ? { ...button, icon_custom_emoji_id: product.emojiId } : button;
+}
+
+// ===== Emoji premium PER GIFT (🎁 Buy Gift / 💌 Confess Gift) =====
+// Beda gift Telegram (Snoop Cigar, Vintage Cigar, dll) bisa aja harganya
+// SAMA (mis. sama-sama 50⭐) tapi bentuknya beda - jadi key-nya PER GIFT ID
+// (g.id), BUKAN per nominal stars, supaya 2 gift beda yang kebetulan
+// harganya sama tetap bisa dikasih ikon beda-beda.
+//
+// Prioritas ID ikon (dari yang paling diutamakan):
+//   1. Override manual admin lewat "🎁 Kelola Emoji Gift" (db key
+//      `gift:<giftId>`) - paling reliable, karena banyak sticker gift asli
+//      dari Telegram TIDAK terdaftar sebagai custom emoji (lihat
+//      giftStickerEmojiId() di userbot.js), jadi live detection sering null.
+//   2. custom_emoji_id ASLI dari sticker gift itu sendiri (live dari
+//      Telegram, kalau kebetulan terdaftar sebagai custom emoji).
+//   3. Fallback 1 ikon global "gift" (emoji-id-menu-inline.js / "🎨 Kelola
+//      Emoji ID" -> kategori "🎁 Tombol Pilihan Gift").
+// Balikin null kalau ketiganya kosong (tombol/teks tampil normal tanpa
+// ikon premium, tidak error).
+function giftIconId(gift) {
+  if (!gift) return null;
+  return db.getEmojiId(`gift:${gift.id}`) || gift.emojiId || iconFor('gift') || null;
+}
+
+// Untuk teks dengan parse_mode 'HTML' -> render sebagai <tg-emoji> asli kalau
+// gift itu (lewat giftIconId()) punya ID, kalau tidak fallback ke 🎁 biasa.
+function giftEmojiHtml(gift) {
+  const id = giftIconId(gift);
+  return id ? `<tg-emoji emoji-id="${id}">🎁</tg-emoji>` : '🎁';
+}
+
+// Sama seperti withProductIcon() tapi untuk gift - dipakai di tombol list
+// "🎁 Buy Gift" / "💌 Confess Gift" supaya tiap gift bisa tampil dengan ikon
+// yang "sesuai" gift aslinya (bukan cuma 1 ikon generik yang sama semua).
+function withGiftIcon(button, gift) {
+  const id = giftIconId(gift);
+  return id ? { ...button, icon_custom_emoji_id: id } : button;
+}
+
+// ===== Logo produk PER PRODUK (mis. logo resmi Netflix/Spotify/Gemini) =====
+// Diisi admin sendiri lewat /admin -> "🖼️ Set Logo Produk" (URL gambar https,
+// disimpan sebagai product.logoUrl). Ini TERPISAH dari emoji premium (emojiId)
+// di atas - emoji tetap tampil di teks (via <tg-emoji>), sedangkan logo ini
+// dipakai sebagai GAMBAR pada notifikasi channel (dikirim lewat sendPhoto,
+// caption tetap pakai tag HTML yang sama seperti teks biasa). Kalau belum
+// diisi -> null, pemanggilnya otomatis fallback ke sendMessage teks biasa
+// (emoji tetap tampil normal), tidak ada error/bug dari sini.
+function productLogoUrl(product) {
+  const url = product && product.logoUrl;
+  return (typeof url === 'string' && /^https?:\/\//i.test(url.trim())) ? url.trim() : null;
+}
+
+// Aman dipakai di dalam parse_mode: 'HTML' (link redeem yang diinput admin
+// bisa saja mengandung karakter & < > secara tidak sengaja -> wajib di-escape
+// dulu supaya Telegram tidak menolak pesan / bot tidak error).
+const escapeHtml = (s) => String(s)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;');
+
+// Kirim 1 pesan (HTML) ke SEMUA admin di ADMIN_IDS - dipakai untuk notifikasi
+// yang bukan "order baru" biasa (mis. kegagalan order Supplier API), supaya
+// tidak duplikasi pola ADMIN_IDS.forEach(...) di banyak tempat.
+function notifyAdmins(text) {
+  ADMIN_IDS.forEach(adminId => {
+    bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+  });
+}
+
+// Kirim 1 pesan (HTML) ke GROUP TELEGRAM yang sama dipakai fitur "💾 Auto
+// Backup" (Group ID di db.settings.backup.groupId, diatur lewat /admin ->
+// 💾 Auto Backup -> ganti Group ID - lihat db.getBackupSettings()). Dipakai
+// untuk notifikasi order (mis. Buy Gift/Confess sukses) yang admin mau
+// tembus ke group, bukan cuma DM pribadi ke ADMIN_IDS. Sengaja pakai ulang
+// group yang sama (bukan bikin GROUP_ID terpisah) - bot memang sudah jadi
+// member di situ untuk keperluan backup. Silent-fail (di-skip) kalau
+// groupId belum pernah di-set, supaya tidak ganggu jalannya order utama.
+function notifyOrderGroup(text) {
+  const groupId = db.getBackupSettings().groupId;
+  if (!groupId) return; // belum di-set, skip diam-diam (order tetap jalan normal)
+  bot.sendMessage(groupId, text, { parse_mode: 'HTML' }).catch(err => {
+    logError('notifyOrderGroup', err); // biar ketahuan di log kalau bot ternyata bukan member/di-kick dari group
+  });
+}
+
+// ===== Deteksi error "saldo supplier habis" dari pesan error API luar =====
+// Dipakai supaya buyer TIDAK melihat pesan generik "stok tidak tersedia"
+// (menyesatkan - kesannya stok remote-nya kosong) padahal penyebab
+// sebenarnya adalah saldo wallet TOKO KITA di sisi supplier (AIVerse Hub
+// atau Canboso) yang habis/belum di-top-up. Cukup dicek dari kata kunci
+// umum yang lazim dipakai di pesan error semacam ini (balance/saldo/
+// insufficient/top up/fund dsb) - TANPA pernah menyebut nama brand
+// supplier ke buyer (lihat supplier_balance_empty di lang.js), karena
+// buyer tidak perlu tahu supplier mana yang dipakai di belakang layar.
+function isSupplierBalanceError(message) {
+  if (!message) return false;
+  const m = String(message).toLowerCase();
+  const balanceWord = /(balance|saldo|wallet|fund|dana)/.test(m);
+  const emptyWord = /(insufficient|not enough|tidak cukup|kurang|habis|empty|low|belum.*top.?up|top.?up dulu)/.test(m);
+  return balanceWord && emptyWord;
+}
+
+// ===== BUG FIX: alert admin saat live stock Canboso GAGAL diparse =====
+// Sebelumnya, kalau canboso.getLiveStock() balik stock = NaN (nama field
+// stok di response Canboso belum dikenali oleh pick() di supplierCanboso.js)
+// atau produk sudah tidak ketemu di Canboso, bot cuma console.error() -
+// TIDAK ada yang memberi tahu admin. Akibatnya variant.stock lokal
+// (mis. 0 dari awal link) tidak pernah ter-update selamanya, buyer selalu
+// lihat "Stok tersedia: 0" walau stok sebenarnya di Canboso ADA, dan admin
+// baru sadar kalau kebetulan buka 🔄 Refresh Harga & Stok manual. Sekarang
+// dialert otomatis begitu buyer pertama kali kena kondisi ini, dengan
+// cooldown 30 menit PER varian supaya tidak spam admin tiap buyer buka
+// halaman produk yang sama.
+const canbosoStockAlertCooldown = new Map(); // canbosoProductId -> timestamp alert terakhir
+function alertCanbosoStockIssue(variant, reason) {
+  const key = String(variant.canbosoProductId);
+  const now = Date.now();
+  const last = canbosoStockAlertCooldown.get(key) || 0;
+  if (now - last < 30 * 60 * 1000) return; // masih dalam cooldown, skip
+  canbosoStockAlertCooldown.set(key, now);
+  notifyAdmins(
+    `⚠️ <b>Live stock Canboso gagal disinkron</b>\n\n` +
+    `Product ID: <code>${escapeHtml(key)}</code>\n` +
+    `Alasan: ${escapeHtml(reason)}\n\n` +
+    `Buyer akan tetap melihat stok LOKAL lama (bisa saja salah/basi) sampai ini diperbaiki. ` +
+    `Cek <b>/admin → 🔌 Canboso API → 🐞 Lihat Raw Response</b> untuk lihat nama field stok yang sebenarnya dipakai Canboso, lalu sesuaikan daftar kandidat di <code>supplierCanboso.js</code>.`
+  );
+}
+
+// ===== Bug fix: diagnostik raw response dulu kepotong duluan sama field
+// panjang (mis. "description") sebelum sempat sampai ke field price/stock -
+// jadi admin tidak pernah benar-benar lihat nama field yang dicari. Sekarang
+// diringkas jadi daftar "key=value" per field (bukan JSON.stringify utuh),
+// dengan value string panjang (>40 char, misal description) dipotong supaya
+// field pendek seperti price/stock/qty tetap ikut kebawa & tidak keburu
+// kena limit potongan pesan Telegram.
+function describeRawFields(raw, maxLen = 600) {
+  if (!raw || typeof raw !== 'object') return String(raw);
+  const parts = [];
+  for (const [k, v] of Object.entries(raw)) {
+    let vStr;
+    if (v && typeof v === 'object') vStr = JSON.stringify(v).slice(0, 60);
+    else vStr = String(v);
+    if (vStr.length > 40) vStr = vStr.slice(0, 40) + '…';
+    parts.push(`${k}=${vStr}`);
+  }
+  const joined = parts.join(' | ');
+  return joined.length > maxLen ? joined.slice(0, maxLen) + '…' : joined;
+}
+
+// ================= NOTIFIKASI CHANNEL OTOMATIS =================
+// Fitur: /admin -> 📢 Set Notifikasi Channel. Tiap ada pembelian produk sukses
+// ATAU topup Wallet sukses (QRIS/USDT/TON), bot otomatis kirim 1 pesan teks +
+// menu inline ke channel/group tujuan yang diatur admin (data/db.json ->
+// settings.channelNotif). Semua ikon di pesan ini WAJIB pakai custom emoji
+// premium yang sudah ada (lewat teksEmoji()/withButtonIcon() - prioritas ID
+// dari admin "🎨 Kelola Emoji ID", fallback ke ID yang sudah dipakai di
+// halaman lain - lihat komentar grup "channelnotif_*" di emoji-id-teks.js),
+// bukan ID baru yang belum tentu ke-capture. Admin tetap bisa ganti emoji
+// manapun di sini kapan saja lewat "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks
+// Pesan" -> "📢 Notifikasi Channel".
+
+// Mask sebagian ID (chatId user / Order ID / Deposit ID) sebelum ditampilkan
+// ke channel PUBLIK - supaya tetap ada jejak identifikasi (buat verifikasi
+// manual admin) tapi tidak membocorkan ID utuh user ke publik. Contoh:
+// "6148372901107" -> "6148***107". Kalau ID terlalu pendek untuk dipotong
+// aman (<= 7 karakter), tampilkan apa adanya.
+function maskChannelId(raw) {
+  const str = String(raw);
+  if (str.length <= 7) return str;
+  return `${str.slice(0, 4)}***${str.slice(-3)}`;
+}
+
+// Format waktu WIB (Asia/Jakarta) gaya "31-Aug-2026 01:41 AM WIB" - dipakai
+// khusus di notifikasi channel supaya konsisten & mudah dibaca publik,
+// terpisah dari format tanggal lain di bot yang pakai lang.js/locale user.
+function formatChannelTime() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true
+  }).formatToParts(now);
+  const get = (t) => (parts.find(p => p.type === t) || {}).value || '';
+  return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod')} WIB`;
+}
+
+// Menu inline yang menempel di SETIAP notifikasi channel (baik New Purchase
+// maupun New Wallet Top-Up) - ajakan aksi buat orang yang lihat channel-nya:
+// order sekarang / hubungi admin. Kedua tombol otomatis disembunyikan kalau
+// data yang dibutuhkan belum diisi di .env (BOT_USERNAME / ADMIN_IDS).
+// "product" opsional - kalau diisi (notifikasi kind 'purchase') DAN produk
+// itu punya emojiId sendiri, ikon tombol "Order Now" pakai emoji premium
+// PRODUK itu (sesuai aplikasi yang baru dibeli), bukan cuma ikon 🛒 generik.
+function channelNotifKeyboard(product) {
+  const row = [];
+  if (BOT_USERNAME) {
+    row.push(withStyle(withButtonIconPreferProduct({ text: '🛒 Order Now', url: `https://t.me/${BOT_USERNAME}` }, 'buy_now', product), 'primary'));
+  }
+  const ownerId = ADMIN_IDS && ADMIN_IDS[0];
+  if (ownerId) {
+    row.push(withStyle(withButtonIcon({ text: '💬 Contact Admin', url: `tg://user?id=${ownerId}` }, 'contact_support'), 'primary'));
+  }
+  return row.length ? { inline_keyboard: [row] } : undefined;
+}
+
+// Teks "🎉 New Purchase!" - dikirim setelah 1 order berhasil (auto-delivery
+// ATAU manual, sama saja - channel cuma nampilin ringkasan transaksinya).
+function buildChannelPurchaseText(chatId, product, variant, qty, total) {
+  const border = teksEmoji('channelnotif_border', '✨');
+  const line = `${border}━━━━━━━━━━${border}`;
+  const title = teksEmoji('channelnotif_purchase_title', '🎉');
+  const footer = teksEmoji('channelnotif_footer', '🔥');
+  return (
+    `${line}\n` +
+    `${title} <b>NEW PURCHASE!</b> ${title}\n` +
+    `${line}\n\n` +
+    `<blockquote>` +
+    `${teksEmoji('channelnotif_id', '📌')} <b>ID:</b> <code>${maskChannelId(chatId)}</code>\n` +
+    `${teksEmoji('channelnotif_product', '🛒')} <b>Product:</b> ${productEmojiHtml(product)} ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
+    `${teksEmoji('channelnotif_qty', '⭐️')} <b>Quantity:</b> ${qty}\n` +
+    `${teksEmoji('channelnotif_total', '💰')} <b>Total:</b> ${usd(total)}\n` +
+    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `</blockquote>\n\n` +
+    `${footer} <i>${escapeHtml(STORE_NAME)} — Fast &amp; Trusted!</i>`
+  );
+}
+
+// Teks "💳 New Wallet Top-Up!" - dikirim setelah 1 deposit Wallet sukses
+// (QRIS / USDT BEP20 / TON), network label disesuaikan otomatis dari method-nya.
+function buildChannelTopupText(chatId, method, amount) {
+  const border = teksEmoji('channelnotif_border', '✨');
+  const line = `${border}━━━━━━━━━━${border}`;
+  const title = teksEmoji('channelnotif_topup_title', '💳');
+  const footer = teksEmoji('channelnotif_footer', '🔥');
+  const networkLabel = method === 'usdt_bep20' ? 'BSC (USDT BEP20)'
+    : method === 'ton' ? 'TON'
+    : method === 'binance' ? 'Binance Pay'
+    : 'QRIS';
+  return (
+    `${line}\n` +
+    `${title} <b>NEW WALLET TOP-UP!</b> ${title}\n` +
+    `${line}\n\n` +
+    `<blockquote>` +
+    `${teksEmoji('channelnotif_id', '📌')} <b>ID:</b> <code>${maskChannelId(chatId)}</code>\n` +
+    `${teksEmoji('channelnotif_network', '✅')} <b>Network:</b> ${networkLabel}\n` +
+    `${teksEmoji('channelnotif_amount', '💵')} <b>Amount:</b> ${usd(amount)}\n` +
+    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `</blockquote>\n\n` +
+    `${footer} <i>${escapeHtml(STORE_NAME)} — Instant &amp; Automatic!</i>`
+  );
+}
+
+// Format nominal reward referral gaya "+$0.0500" (4 desimal + tanda "+") -
+// dipakai KHUSUS di notifikasi channel referral supaya nominal reward yang
+// biasanya kecil (mis. $0.05) tetap kelihatan presisi & jelas ini reward
+// MASUK (bukan potongan). Nilai selalu diambil LANGSUNG dari REFERRAL_REWARD
+// di .env, jadi otomatis ngikut kalau admin ganti.
+//
+// CATATAN: sengaja TIDAK dikasih suffix "USDT" - reward ini nambah SALDO
+// WALLET internal toko (unit generik "$", sama seperti di seluruh bagian
+// bot lain), BUKAN transfer token USDT asli. Saldo itu sendiri bisa terisi
+// dari QRIS/USDT BEP20/TON manapun, jadi label "USDT" di sini berpotensi
+// bikin member channel mengira dapat kripto USDT beneran padahal cuma
+// saldo toko. Kalau suatu saat pakai reward berbasis token asli, ganti
+// suffix di bawah sesuai kebutuhan.
+function formatReferralReward(amount) {
+  return `+$${Number(amount).toFixed(4)}`;
+}
+
+// ===== PATCH v7: trigger reward referral - dipanggil dari 4 titik konfirmasi
+// deposit sukses (QRIS/USDT/TON/Binance) setelah saldo user dikreditkan, alih-
+// alih langsung di /start (lihat penjelasan lengkap di db.registerReferral()
+// & db.creditReferralOnFirstDeposit() kenapa dipindah). Aman dipanggil untuk
+// SETIAP deposit sukses - fungsi db-nya sendiri yang mastiin reward cuma
+// diberikan SEKALI (deposit pertama), pemanggil tidak perlu cek apa-apa lagi.
+function triggerReferralRewardIfEligible(newUserChatId) {
+  const result = db.creditReferralOnFirstDeposit(newUserChatId, REFERRAL_REWARD);
+  if (!result) return;
+  bot.sendMessage(
+    result.referrerChatId,
+    lang.t(result.referrerChatId, 'referral_success', { amount: usd(REFERRAL_REWARD, result.referrerChatId), balance: usd(result.newBalance, result.referrerChatId) }),
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+  sendChannelNotif('referral', buildChannelReferralText(newUserChatId, result.referrerChatId, REFERRAL_REWARD));
+}
+
+// Teks "🎉 New Referral Success!" - dikirim setiap ada reward referral yang
+// BERHASIL dikreditkan (lihat triggerReferralRewardIfEligible() di atas),
+// yaitu saat user yang diundang BENERAN top-up saldo pertama kalinya.
+// User & referrer sama-sama ditampilkan dalam bentuk ID tersamar (lihat
+// maskChannelId) supaya tetap ada jejak verifikasi tanpa membocorkan ID
+// utuh ke publik. Reward yang ditampilkan = REFERRAL_REWARD dari .env.
+function buildChannelReferralText(newUserChatId, referrerChatId, reward) {
+  const border = teksEmoji('channelnotif_border', '✨');
+  const line = `${border}━━━━━━━━━━${border}`;
+  const title = teksEmoji('channelnotif_referral_title', '🎉');
+  const footer = teksEmoji('channelnotif_footer', '🔥');
+  return (
+    `${line}\n` +
+    `${title} <b>NEW REFERRAL SUCCESS!</b> ${title}\n` +
+    `${line}\n\n` +
+    `<blockquote>` +
+    `${teksEmoji('channelnotif_referral_user', '👤')} <b>User:</b> <code>${maskChannelId(newUserChatId)}</code>\n` +
+    `${teksEmoji('channelnotif_referral_referredby', '🎁')} <b>Referred by:</b> <code>${maskChannelId(referrerChatId)}</code>\n` +
+    `${teksEmoji('channelnotif_referral_reward', '💵')} <b>Reward:</b> ${formatReferralReward(reward)}\n` +
+    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `</blockquote>\n\n` +
+    `${footer} <i>${escapeHtml(STORE_NAME)} — Refer &amp; Earn!</i>`
+  );
+}
+
+// Teks notifikasi channel "🛠️ MAINTENANCE DIMULAI!" / "🚀 MAINTENANCE
+// SELESAI!" - dikirim ke channel/group tujuan (settings.channelNotif) tiap
+// admin aktif/nonaktifkan Mode Maintenance (lihat handler
+// 'maintenance_toggle' di bawah), supaya member channel juga tahu tanpa
+// perlu buka bot langsung. status: 'start' | 'finish'.
+function buildChannelMaintenanceText(status) {
+  const border = teksEmoji('channelnotif_border', '✨');
+  const line = `${border}━━━━━━━━━━${border}`;
+  const footer = teksEmoji('channelnotif_footer', '🔥');
+  const isStart = status === 'start';
+  const title = isStart
+    ? teksEmoji('channelnotif_maintenance_start_title', '🛠️')
+    : teksEmoji('channelnotif_maintenance_finish_title', '🚀');
+  const titleText = isStart ? 'MAINTENANCE DIMULAI!' : 'MAINTENANCE SELESAI!';
+  const statusIcon = isStart
+    ? teksEmoji('channelnotif_maintenance_start_status', '⏳')
+    : teksEmoji('channelnotif_maintenance_finish_status', '✅');
+  const statusLabel = isStart
+    ? 'Bot sementara tidak bisa dipakai user, sedang di-upgrade'
+    : 'Bot sudah kembali normal, semua fitur bisa dipakai lagi';
+  return (
+    `${line}\n` +
+    `${title} <b>${titleText}</b> ${title}\n` +
+    `${line}\n\n` +
+    `<blockquote>` +
+    `${statusIcon} <b>Status:</b> ${statusLabel}\n` +
+    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `</blockquote>\n\n` +
+    `${footer} <i>${escapeHtml(STORE_NAME)}</i>`
+  );
+}
+
+// Kirim 1 pesan notifikasi ke channel tujuan (kalau fitur aktif & chatRef
+// sudah diisi). kind: 'purchase' | 'topup' | 'referral' - dicek terhadap
+// toggle notifyPurchase/notifyTopup/notifyReferral masing-masing supaya
+// admin bisa matikan salah satu jenis notifikasi tanpa mematikan semuanya.
+// Gagal kirim (mis. bot belum jadi admin di channel) di-log saja, TIDAK
+// boleh sampai mengganggu alur utama (user tetap harus dapat produk/
+// saldo/reward-nya biarpun notif channel gagal).
+// "product" opsional - kalau diisi DAN produk itu punya logoUrl (lihat
+// productLogoUrl() di atas), notifikasi dikirim sebagai FOTO (logo aplikasi
+// asli, mis. Netflix/Spotify/Gemini) dengan teksnya jadi caption (tetap HTML,
+// tag <tg-emoji> premium & <b>/<code> tetap tampil sama seperti di teks
+// biasa). Caption Telegram dibatasi 1024 karakter (beda dari teks biasa yang
+// sampai 4096) - kalau teksnya kepanjangan untuk jadi caption, otomatis
+// fallback kirim teks biasa TANPA logo supaya tidak pernah gagal kirim gara-
+// gara limit itu. Kalau logoUrl-nya ternyata rusak/tidak bisa diakses,
+// sendPhoto juga otomatis fallback ke sendMessage teks biasa - jadi
+// notifikasi TETAP terkirim di kedua kasus, tidak ada error yang bikin
+// notifikasi hilang total.
+function sendChannelNotif(kind, text, product) {
+  const settings = db.getChannelNotifSettings();
+  if (!settings.enabled || !settings.chatRef) return;
+  if (kind === 'purchase' && !settings.notifyPurchase) return;
+  if (kind === 'topup' && !settings.notifyTopup) return;
+  if (kind === 'referral' && !settings.notifyReferral) return;
+  if (kind === 'maintenance' && !settings.notifyMaintenance) return;
+  const logoUrl = productLogoUrl(product);
+  const keyboard = channelNotifKeyboard(product);
+  const sendAsText = () => bot.sendMessage(settings.chatRef, text, { parse_mode: 'HTML', reply_markup: keyboard })
+    .catch(err => console.error('Gagal kirim notifikasi channel:', err.message));
+  if (logoUrl && text.length <= 1024) {
+    bot.sendPhoto(settings.chatRef, logoUrl, { caption: text, parse_mode: 'HTML', reply_markup: keyboard })
+      .catch(err => {
+        console.error('Gagal kirim notifikasi channel (foto logo), fallback ke teks biasa:', err.message);
+        sendAsText();
+      });
+  } else {
+    sendAsText();
+  }
+}
+
+// Format 1 item stok untuk ditampilkan (ke buyer maupun admin). Sebuah item
+// bisa berupa 2 bentuk, dibedakan lewat karakter pemisah "|":
+//   - Link/kode polos (tidak ada "|")            -> ditampilkan apa adanya
+//   - Kombo akun "email|password|2fa|link"       -> ditampilkan per-field rapi
+// Posisi field kombo SELALU tetap (Email, Password, Kode 2FA, Link) mengikuti
+// STOCK_COMBO_LABELS di bawah - kalau Kode 2FA tidak ada, segmennya tetap
+// harus dikosongkan di antara 2 tanda "|" (mis. "email|password||link"),
+// BUKAN dihapus, supaya "link" tidak ketuker posisi jadi "Kode 2FA". Baris
+// yang segmennya kosong otomatis tidak ditampilkan ke buyer.
+//
+// Field Kode 2FA (index 2) khusus: kalau isinya adalah TOTP secret base32
+// (format yang sama dipakai situs https://2fa.cn/ / Google Authenticator -
+// boleh pakai spasi, boleh huruf kecil), bot HITUNG SENDIRI kode 6 digit
+// yang aktif SEKARANG (live, bukan statis) pakai algoritma standar TOTP
+// (RFC 6238) di totp.js - hasilnya identik dengan yang ditampilkan 2fa.cn
+// untuk secret yang sama. Kalau isinya bukan secret (mis. kode digit statis
+// gaya lama), ditampilkan apa adanya seperti sebelumnya.
+const STOCK_COMBO_LABELS = ['📧 Email', '🔑 Password', '🔐 Kode 2FA', '🔗 Link'];
+function formatStockItem(raw, index, chatId) {
+  const num = index != null ? `${index + 1}. ` : '';
+  const str = String(raw);
+  if (!str.includes('|')) {
+    return `${num}${escapeHtml(str)}`;
+  }
+  const parts = str.split('|').map(s => s.trim());
+  const fieldLines = parts
+    .map((val, i) => ({ label: STOCK_COMBO_LABELS[i] || `Field ${i + 1}`, val, isTotpField: i === 2 }))
+    .filter(f => f.val !== '')
+    .map(f => {
+      if (f.isTotpField && totp.looksLikeTotpSecret(f.val)) {
+        const code = totp.generateTOTP(f.val);
+        const sisa = totp.secondsRemaining();
+        return code
+          ? `    ${f.label}: <code>${code}</code>  ${lang.t(chatId, 'live_totp_note', { seconds: sisa })}`
+          : `    ${f.label}: <code>${escapeHtml(f.val)}</code>`;
+      }
+      return `    ${f.label}: <code>${escapeHtml(f.val)}</code>`;
+    })
+    .join('\n');
+  if (!fieldLines) {
+    return `${num}${escapeHtml(str)}`;
+  }
+  return `${num}<b>${lang.t(chatId, 'account_label')}:</b>\n${fieldLines}`;
+}
+
+// Cek apakah salah satu item di deliveredItems punya field Kode 2FA berupa
+// TOTP secret (bukan kode statis) - dipakai untuk memunculkan tombol
+// "🔄 Refresh Kode 2FA" karena kodenya berubah tiap 30 detik.
+function hasLiveTotpSecret(deliveredItems) {
+  if (!deliveredItems || !deliveredItems.length) return false;
+  return deliveredItems.some(raw => {
+    const parts = String(raw).split('|');
+    return parts.length > 2 && totp.looksLikeTotpSecret(parts[2]);
+  });
+}
+
+// Bangun teks "Order Berhasil" full-premium + lampirkan produk (link redeem
+// dkk) kalau tersedia dari stok auto-delivery.
+function buildSuccessText(product, variant, qty, total, orderId, deliveredItems, chatId) {
+  const bolt = boltEmojiMenu();
+  const border = teksEmoji('success_border', '✨');
+  const line = `${border}━━━━━━━━━━${border}`;
+  let text =
+    `${line}\n` +
+    `${teksEmoji('success_title', '🎉')} ${lang.t(chatId, 'success_title')} ${teksEmoji('success_title', '🎉')}\n` +
+    `${line}\n\n` +
+    `${bolt} ${lang.t(chatId, 'success_product_label')} ${productEmojiHtml(product)} ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
+    `${bolt} ${lang.t(chatId, 'success_qty_label')} ${lang.t(chatId, 'success_qty_unit', { qty })}\n` +
+    `${bolt} ${lang.t(chatId, 'success_total_label')} ${usd(total, chatId)}\n` +
+    `${bolt} ${lang.t(chatId, 'success_orderid_label')} <code>${orderId}</code>\n\n`;
+
+  if (deliveredItems && deliveredItems.length) {
+    text +=
+      `${teksEmoji('success_delivered', '🚀')} ${lang.t(chatId, 'success_delivered_title')}\n\n` +
+      `${teksEmoji('success_link', '🔗')} ${lang.t(chatId, 'success_delivered_detail')}\n` +
+      deliveredItems.map((item, i) => formatStockItem(item, i, chatId)).join('\n\n') +
+      `\n\n`;
+  } else {
+    text += `${teksEmoji('success_manual', '📦')} ${lang.t(chatId, 'success_manual')}\n\n`;
+  }
+
+  text += `${teksEmoji('success_thanks', '🙏')} ${lang.t(chatId, 'success_thanks', { store: escapeHtml(STORE_NAME) })} ${bolt}`;
+  return text;
+}
+
+// Format 1 entri audit log pengiriman otomatis - dipakai untuk admin:deliverylog
+// (daftar terbaru) dan admin:checkorder (cari 1 order spesifik by ID).
+function formatDeliveryLogEntry(order) {
+  const product = db.findProduct(order.productId);
+  const variant = product && product.variants.find(v => v.id === order.variantId);
+  const productLabel = product && variant ? `${product.name} - ${variant.label}` : `${order.productId}/${order.variantId}`;
+  const who = order.username ? `@${escapeHtml(order.username)}` : `ID ${order.chatId}`;
+  const when = new Date(order.createdAt).toLocaleString('id-ID');
+
+  let text =
+    `🧾 <b>Order</b> <code>${escapeHtml(order.id)}</code>\n` +
+    `👤 User: ${who} (${order.chatId})\n` +
+    `📦 ${escapeHtml(productLabel)} x${order.qty}\n` +
+    `🕒 ${when}\n`;
+
+  if (order.delivered && order.deliveredItems && order.deliveredItems.length) {
+    text += `🔗 Item terkirim:\n` + order.deliveredItems.map((item, i) => formatStockItem(item, i)).join('\n\n');
+  } else {
+    text += `📦 Dikirim manual oleh admin (bukan auto-delivery).`;
+  }
+  return text;
+}
+
+// ================= MENU BUILDERS =================
+
+function mainMenuKeyboard(chatId) {
+  // Menu utama dibagi 2 kolom penuh (bukan 1 tombol per baris lagi), supaya
+  // lebih ringkas dan tidak makan banyak scroll di layar HP.
+  return {
+    inline_keyboard: [
+      [
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_buy_product'), callback_data: 'menu:products' }, 'buy_produk'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_profile'), callback_data: 'menu:profile' }, 'profile'), 'primary')
+      ],
+      [
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_balance'), callback_data: 'menu:balance' }, 'saldo_saya'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_wallet'), callback_data: 'menu:topup' }, 'topup'), 'primary')
+      ],
+      [
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_orders'), callback_data: 'menu:history' }, 'riwayat_pembelian'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_howto'), callback_data: 'menu:howtouse' }, 'how_to_use'), 'primary')
+      ],
+      [
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_support'), callback_data: 'menu:support' }, 'support'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_referral'), callback_data: 'menu:referral' }, 'referral'), 'success')
+      ],
+      [
+        withStyle({ text: lang.t(chatId, 'btn_gift_menu'), callback_data: 'gift:mode' }, 'success')
+      ]
+    ]
+  };
+}
+
+// ================= GIFT (Buy Gift / Confess Gift, via userbot GramJS) =================
+// mode: 'buy'     -> gift dikirim atas nama akun userbot, TANPA pesan.
+//       'confess' -> gift + pesan anonim yang diketik buyer, identitas
+//                     pengirim disembunyikan (hideName: true di userbot.js).
+
+// Harga jual gift = modal (stars x kurs) + markup%. Kurs & markup-nya BISA
+// di-override admin live lewat menu "💲 Atur Harga Gift" (db.settings.
+// giftPricing, lihat db.js) - kalau belum pernah diisi (masih null), pakai
+// default dari .env (GIFT_MARKUP_PCT / STARS_TO_USD_RATE di config.js).
+function giftPriceUsd(stars) {
+  const pricing = db.getGiftPricingSettings();
+  const rate = pricing.starsToUsdRate != null ? pricing.starsToUsdRate : STARS_TO_USD_RATE;
+  const markupPct = pricing.markupPct != null ? pricing.markupPct : GIFT_MARKUP_PCT;
+  const modal = stars * rate;
+  return modal * (1 + markupPct / 100);
+}
+
+// Grid 3 kolom per baris (bukan 1 kolom kayak sebelumnya) - rapi & lebih
+// banyak muat kelihatan tanpa scroll panjang, niru layout toko gift Telegram
+// pada umumnya. Teks tombol TIDAK dikasih emoji 🎁 lagi di depan harga -
+// ikon gift-nya sudah terwakili lewat icon_custom_emoji_id (withGiftIcon()),
+// jadi 🎁 generik di teks cuma bikin dobel & menuh-menuhin tombol yang
+// kecil. Gift limited dikasih style 'success' (hijau) biar menonjol beda
+// dari gift reguler (default/tanpa style - transparan sesuai tema client).
+// cols default 2 (bukan 3) - dengan 3 kolom, layar HP kecil bikin teks harga
+// kepotong (mis. "Rp5.000" jadi "Rp5" doang). 2 kolom kasih ruang lebih
+// lebar per tombol supaya harga penuh kelihatan.
+function giftGridRows(items, buttonForItem, cols = 2) {
+  const rows = [];
+  let row = [];
+  items.forEach((item, idx) => {
+    row.push(buttonForItem(item));
+    if (row.length === cols || idx === items.length - 1) {
+      rows.push(row);
+      row = [];
+    }
+  });
+  return rows;
+}
+
+async function giftListKeyboard(chatId, mode) {
+  const rows = [];
+  try {
+    const catalog = await userbot.getGiftCatalog();
+    const items = catalog.slice(0, 30);
+    const gridRows = giftGridRows(items, g => {
+      const priceLabel = usd(giftPriceUsd(g.stars), chatId);
+      // Ikon tombol pakai giftIconId() - prioritas: override manual admin
+      // per-gift ("🎁 Kelola Emoji Gift") > custom_emoji_id ASLI dari sticker
+      // gift itu sendiri (kalau Telegram kebetulan expose) > 1 ikon fallback
+      // global "gift". Lihat komentar lengkap di definisi giftIconId().
+      const button = { text: `${priceLabel}`, callback_data: `gift:pick:${mode}:${g.id}` };
+      const withIcon = withGiftIcon(button, g);
+      return g.limited ? withStyle(withIcon, 'success') : withIcon;
+    });
+    rows.push(...gridRows);
+  } catch (err) {
+    logError('giftListKeyboard', err);
+  }
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'gift:mode' }, 'back'), 'danger')]);
+  return { inline_keyboard: rows };
+}
+
+function giftListText(chatId, mode) {
+  return mode === 'confess'
+    ? lang.t(chatId, 'gift_list_title_confess')
+    : lang.t(chatId, 'gift_list_title_buy');
+}
+
+async function giftDetailText(chatId, gift, mode) {
+  const priceLabel = usd(giftPriceUsd(gift.stars), chatId);
+  const emojiHtml = giftEmojiHtml(gift);
+  return (
+    `${emojiHtml} <b>Gift ${gift.stars}⭐</b>\n` +
+    `${lang.t(chatId, 'gift_detail_price_line', { price: priceLabel })}\n\n` +
+    lang.t(chatId, 'gift_ask_target')
+  );
+}
+
+function giftCancelKeyboard(chatId) {
+  return { inline_keyboard: [[withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:main' }, 'batal'), 'danger')]] };
+}
+
+// Tampilkan layar konfirmasi terakhir (harga, target, preview pesan kalau
+// confess) sebelum saldo dipotong & gift beneran dikirim. confirmToken acak
+// dipakai supaya tombol "✅ Kirim" di bawah cuma valid untuk SATU pending
+// action yang lagi aktif ini (bukan orderId asli - order baru benar-benar
+// dibuat di handler 'gift:confirm:' setelah tombol ini ditekan).
+async function showGiftConfirmation(chatId, { mode, giftId, stars, target, message }) {
+  const priceUsd = giftPriceUsd(stars);
+  const confirmToken = crypto.randomBytes(6).toString('hex');
+  db.setPendingAction(chatId, { type: 'gift_confirm', data: { mode, giftId, stars, target, message, priceUsd, confirmToken } });
+
+  const modeLabel = mode === 'confess' ? lang.t(chatId, 'btn_gift_confess') : lang.t(chatId, 'btn_gift_buy');
+  const lines = [
+    lang.t(chatId, 'gift_confirm_title', { mode: modeLabel }),
+    lang.t(chatId, 'gift_confirm_gift_line', { stars }),
+    lang.t(chatId, 'gift_detail_price_line', { price: usd(priceUsd, chatId) }),
+    lang.t(chatId, 'gift_confirm_target_line', { target: escapeHtml(target) })
+  ];
+  if (mode === 'confess' && message) {
+    lines.push(lang.t(chatId, 'gift_confirm_message_line', { message: escapeHtml(message) }));
+  }
+  lines.push('', lang.t(chatId, 'gift_confirm_hidden_notice'));
+
+  await bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [withStyle({ text: lang.t(chatId, 'btn_gift_send_now'), callback_data: `gift:confirm:${confirmToken}` }, 'success')],
+        [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:main' }, 'batal'), 'danger')]
+      ]
+    }
+  });
+}
+
+// Notifikasi ke SEMUA admin kalau saldo Stars userbot sudah di bawah ambang
+// batas (GIFT_LOW_STARS_THRESHOLD). Dikasih cooldown 6 jam supaya admin
+// TIDAK di-spam notifikasi yang sama tiap kali ada 1 gift order baru masuk
+// selama Stars belum sempat di-top up (bukan re-notify tiap order, cukup
+// sekali per periode).
+let lastLowStarsNotifyAt = 0;
+const LOW_STARS_NOTIFY_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 jam
+
+async function maybeNotifyLowStars(chatIdForLangFallback) {
+  try {
+    const stars = await userbot.getUserbotStarsBalance();
+    if (stars >= GIFT_LOW_STARS_THRESHOLD) return;
+    const now = Date.now();
+    if (now - lastLowStarsNotifyAt < LOW_STARS_NOTIFY_COOLDOWN_MS) return;
+    lastLowStarsNotifyAt = now;
+
+    const text = `⚠️ <b>Saldo Stars userbot menipis!</b>\n\n🌟 Sisa: ${stars}⭐ (ambang batas: ${GIFT_LOW_STARS_THRESHOLD}⭐)\n\nBuyer bisa mulai kena "Stok Stars habis" untuk order 🎁 Buy Gift / 💌 Confess Gift. Top up segera lewat Settings > Stars di akun userbot.`;
+    for (const adminId of ADMIN_IDS) {
+      bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(err => logError('maybeNotifyLowStars', err));
+    }
+  } catch (err) {
+    logError('maybeNotifyLowStars check', err);
+  }
+}
+
+// Eksekusi pengiriman gift (dipanggil setelah buyer konfirmasi & saldo
+// sudah dipotong di muka). Kalau gagal, saldo DIKEMBALIKAN otomatis - buyer
+// tidak pernah rugi karena kegagalan teknis (target tidak ditemukan, gift
+// sold out, dsb).
+// Admin SELALU dapat notifikasi per order (sukses maupun gagal-refund).
+async function executeGiftSend(chatId, order) {
+  const who = order.username ? `@${escapeHtml(order.username)}` : `ID ${order.chatId}`;
+  const modeLabel = order.mode === 'confess' ? '💌 Confess Gift' : '🎁 Buy Gift';
+
+  // ===== BUG FIX (notif sukses "hilang" ke group + refund ganda):
+  // SEBELUMNYA pengiriman gift DAN langkah notifikasi (pesan ke buyer,
+  // notif admin, notif group) ada di dalam try/catch YANG SAMA. Kalau
+  // gift-nya SUDAH berhasil terkirim tapi kirim pesan konfirmasi ke buyer
+  // gagal (mis. buyer blokir bot / akun nonaktif / "chat not found"),
+  // exception itu ketangkep catch block yang sama -> order yang SUDAH
+  // SUKSES salah ditandai 'failed_refunded', buyer dapat REFUND GANDA
+  // (gift + saldo balik), dan notif sukses ke admin/GROUP TIDAK PERNAH
+  // terkirim - malah kekirim notif "GAGAL". Sekarang pengiriman gift
+  // (yang menentukan sukses/gagal + refund) dipisah TOTAL dari langkah
+  // notifikasi sesudahnya - kegagalan kirim notifikasi tidak akan pernah
+  // bisa mengubah status order yang sudah sukses lagi.
+  let sendError = null;
+  try {
+    await userbot.sendGiftToUser({
+      targetUsernameOrId: order.target,
+      giftId: order.giftId,
+      message: order.mode === 'confess' ? order.message : undefined,
+      hideName: true
+    });
+  } catch (err) {
+    sendError = err;
+  }
+
+  if (!sendError) {
+    db.updateGiftOrder(order.id, { status: 'sent' });
+    maybeNotifyLowStars(chatId); // cek & notif admin kalau Stars mulai menipis (non-blocking)
+    // .catch(() => {}) sengaja - gagal kirim notif ke BUYER tidak boleh
+    // dianggap sebagai kegagalan ORDER (gift-nya sudah pasti terkirim).
+    bot.sendMessage(chatId,
+      `✅ Gift berhasil dikirim ke <b>${escapeHtml(order.target)}</b>!\n` +
+      `🧾 ID Order: <code>${order.id}</code>`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+    notifyAdmins(
+      `${modeLabel} - <b>BERHASIL</b>\n\n` +
+      `👤 Buyer: ${who} (${order.chatId})\n` +
+      `🎁 Gift ID: <code>${escapeHtml(String(order.giftId))}</code> (${order.stars} Stars)\n` +
+      `🎯 Target: <code>${escapeHtml(order.target)}</code>\n` +
+      `💰 Harga: ${usd(order.priceUsd)}\n` +
+      (order.mode === 'confess' && order.message ? `💬 Pesan: ${escapeHtml(order.message)}\n` : '') +
+      `🧾 Order ID: <code>${order.id}</code>`
+    );
+    // Sesuai permintaan: notif ke GROUP WAJIB cuma untuk order "Buy Gift"
+    // (mode !== 'confess') yang BERHASIL. Confess Gift TIDAK dikirim ke
+    // group (pesan anonimnya tidak ikut ke-expose ke grup), dan order
+    // GAGAL juga TIDAK dikirim ke group (cukup DM admin di atas).
+    if (order.mode !== 'confess') {
+      notifyOrderGroup(
+        `${modeLabel} - <b>BERHASIL</b> ✅\n\n` +
+        `👤 Buyer: ${who}\n` +
+        `🎁 Gift ID: <code>${escapeHtml(String(order.giftId))}</code> (${order.stars} Stars)\n` +
+        `🎯 Target: <code>${escapeHtml(order.target)}</code>\n` +
+        `💰 Harga: ${usd(order.priceUsd)}\n` +
+        `🧾 Order ID: <code>${order.id}</code>`
+      );
+    }
+  } else {
+    const err = sendError;
+    logError('executeGiftSend', err);
+    // Refund otomatis - INI WAJIB, jangan pernah biarkan saldo buyer
+    // hilang gara-gara kegagalan pengiriman gift.
+    db.updateBalance(chatId, order.priceUsd);
+    db.updateGiftOrder(order.id, { status: 'failed_refunded', error: String(err.message || err) });
+    bot.sendMessage(chatId,
+      `❌ Gift gagal dikirim (${escapeHtml(String(err.message || err))}).\n` +
+      `💰 Saldo <b>${usd(order.priceUsd, chatId)}</b> sudah dikembalikan otomatis ke wallet kamu.`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+    notifyAdmins(
+      `${modeLabel} - <b>GAGAL (refund otomatis)</b>\n\n` +
+      `👤 Buyer: ${who} (${order.chatId})\n` +
+      `🎁 Gift ID: <code>${escapeHtml(String(order.giftId))}</code> (${order.stars} Stars)\n` +
+      `🎯 Target: <code>${escapeHtml(order.target)}</code>\n` +
+      `💰 Harga (dikembalikan): ${usd(order.priceUsd)}\n` +
+      `🧾 Order ID: <code>${order.id}</code>\n` +
+      `❌ Error: ${escapeHtml(String(err.message || err))}`
+    );
+    // Sesuai permintaan: order GAGAL tidak dikirim ke group (cuma DM admin
+    // di atas) - group cuma untuk Buy Gift yang BERHASIL.
+  }
+}
+
+// Link referral pribadi user, dalam format deep-link /start standar Telegram
+// (https://t.me/<bot_username>?start=<payload>). Payload yang dipakai di sini
+// adalah chatId si pengundang sendiri, supaya saat teman yang diundang buka
+// bot lewat link ini, handler /start bisa langsung tahu siapa pengundangnya.
+function referralLink(chatId) {
+  return `https://t.me/${BOT_USERNAME}?start=${chatId}`;
+}
+
+function profileText(chatId, from) {
+  const user = db.getUser(chatId, from && from.username);
+  const orders = db.getOrdersByUser(chatId);
+  const stats = db.getReferralStats(chatId);
+  const displayName = (from && (from.first_name || from.username)) || 'User';
+  const usernameLine = user.username ? `@${escapeHtml(user.username)}` : lang.t(chatId, 'profile_username_empty');
+
+  return (
+    `${teksEmoji('profile_title', '👤')} <b>${lang.t(chatId, 'profile_title').replace(/^👤\s*/, '')}</b>\n\n` +
+    `${teksEmoji('profile_nama', '🙍')} <b>${lang.t(chatId, 'profile_name')}:</b> ${escapeHtml(displayName)}\n` +
+    `${teksEmoji('profile_username', '🔖')} <b>${lang.t(chatId, 'profile_username')}:</b> ${usernameLine}\n` +
+    `${teksEmoji('profile_chatid', '🆔')} <b>${lang.t(chatId, 'profile_chatid')}:</b> <code>${chatId}</code>\n\n` +
+    `${teksEmoji('profile_saldo', '💰')} <b>${lang.t(chatId, 'profile_balance')}:</b> ${usd(user.balance, chatId)}\n` +
+    `${teksEmoji('profile_order', '🧾')} <b>${lang.t(chatId, 'profile_orders')}:</b> ${orders.length}\n` +
+    `${teksEmoji('profile_referral', '🎁')} <b>${lang.t(chatId, 'profile_referral')}:</b> ${stats.referralCount} (${usd(stats.referralEarnings, chatId)})`
+  );
+}
+
+function profileKeyboard(chatId) {
+  return {
+    inline_keyboard: [
+      [
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_wallet'), callback_data: 'menu:topup' }, 'topup'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_orders'), callback_data: 'menu:history' }, 'riwayat_pembelian'), 'primary')
+      ],
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back'), 'danger')]
+    ]
+  };
+}
+
+function supportKeyboard(chatId) {
+  const ownerId = ADMIN_IDS && ADMIN_IDS[0];
+  const rows = [];
+  if (ownerId) {
+    rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_contact_support'), url: `tg://user?id=${ownerId}` }, 'contact_support'), 'primary')]);
+  }
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back'), 'danger')]);
+  return { inline_keyboard: rows };
+}
+
+function referralKeyboard(chatId) {
+  const rows = [
+    [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_share_referral'), url: `https://t.me/share/url?url=${encodeURIComponent(referralLink(chatId))}&text=${encodeURIComponent(`Yuk belanja akun premium murah di ${STORE_NAME}!`)}` }, 'share_referral'), 'primary')]
+  ];
+  if (BOT_USERNAME) {
+    // Tombol copy_text bawaan Telegram (Bot API 7.x+) - begitu dipencet,
+    // link referral LANGSUNG kecopy ke clipboard user, TANPA bot kirim
+    // pesan/chat baru berisi link itu.
+    rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_referral'), copy_text: { text: referralLink(chatId) } }, 'copy_referral'), 'primary')]);
+  } else {
+    // BOT_USERNAME belum diisi -> link belum valid, tetap kasih tombol yang
+    // munculin peringatan lewat callback (bukan copy_text statis yang salah).
+    rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_referral'), callback_data: 'referral:copy' }, 'copy_referral'), 'primary')]);
+  }
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back'), 'danger')]);
+  return { inline_keyboard: rows };
+}
+
+function referralText(chatId) {
+  const stats = db.getReferralStats(chatId);
+  // Judul halaman: emoji-nya diambil lewat teksEmoji() supaya custom emoji
+  // yang di-set admin di menu "🎨 Kelola Emoji ID" -> "Halaman Refer & Earn"
+  // ke-apply. Kalau belum di-set, otomatis fallback ke emoji unicode biasa.
+  const title = `${teksEmoji('referral_title', '🎁')} ${lang.t(chatId, 'referral_title')}`;
+  if (!BOT_USERNAME) {
+    return `${title}\n\n${lang.t(chatId, 'referral_disabled')}`;
+  }
+  return `${title}\n\n` + lang.t(chatId, 'referral_body', {
+    store: STORE_NAME,
+    reward: usd(REFERRAL_REWARD, chatId),
+    link: referralLink(chatId),
+    count: stats.referralCount,
+    earnings: usd(stats.referralEarnings, chatId),
+    // Sama seperti title: masing-masing baris pakai key emoji sendiri
+    // (cocok dengan key di admin menu: referral_reward, referral_link,
+    // referral_howitworks, referral_total, referral_earnings).
+    reward_emoji: teksEmoji('referral_reward', '💎'),
+    link_emoji: teksEmoji('referral_link', '🔗'),
+    how_emoji: teksEmoji('referral_howitworks', '💳'),
+    total_emoji: teksEmoji('referral_total', '👥'),
+    earnings_emoji: teksEmoji('referral_earnings', '💰')
+  });
+}
+
+// Label stok yang aman ditampilkan ke buyer. Sejak stok varian Supplier API
+// (Supplier) disinkron otomatis lewat scheduleSupplierSync(), angka
+// variant.stock-nya sudah live - jadi cukup ditampilkan apa adanya dengan
+// ikon di depan supaya buyer tahu ini stok yang di-supply otomatis lewat
+// API (bukan stok manual admin), bukan indikator generik seperti dulu.
+// ===== BUG FIX: BUTTON_DATA_INVALID untuk produk/varian bernama panjang =====
+// Sebelumnya banyak tombol (desc/howto/variant/qty/qtycustom/confirm)
+// menempel productId+variantId APA ADANYA ke callback_data, mis.
+// `variant:${productId}:${variantId}`. Telegram membatasi callback_data KERAS
+// di 64 byte - untuk produk dengan nama panjang (co. "Netflix 1M Premium 4K
+// HDR" -> id "netflix-1m-premium-4k-hdr", variant id "...-default") ini
+// gampang lewat batas itu. Begitu terjadi, Telegram TOLAK seluruh pesan yang
+// mengandung keyboard itu (error "BUTTON_DATA_INVALID"), bikin buyer cuma
+// dapat pesan error generik pas buka halaman deskripsi produknya - padahal
+// produk lain yang namanya lebih pendek (Gemini, Spotify) baik-baik saja.
+// (successKeyboard() di atas sudah pernah kena masalah SAMA PERSIS dan
+// diperbaiki dengan cara serupa - simpan referensi pendek, bukan id mentah.)
+//
+// Fix: ganti productId+variantId mentah dengan hash pendek 10 karakter yang
+// SELALU muat berapa pun panjang nama produknya, lalu resolve balik ke
+// productId/variantId asli lewat resolveProductRef() begitu tombolnya
+// dipencet. Katalog produk toko ini kecil, jadi loop penuh saat resolve
+// murah dan tidak perlu index/cache tambahan.
+function productRef(productId, variantId) {
+  return crypto.createHash('sha1').update(`${productId}\u0000${variantId}`).digest('hex').slice(0, 10);
+}
+
+function resolveProductRef(ref) {
+  for (const p of db.getAllProducts()) {
+    for (const v of p.variants) {
+      if (productRef(p.id, v.id) === ref) return { productId: p.id, variantId: v.id };
+    }
+  }
+  return null;
+}
+
+function stockLabel(variant) {
+  // BUG FIX: dulu selalu tampil teks statis "Auto (API)" berapapun stok
+  // sebenarnya, karena stok lokal varian Supplier API cuma di-refresh manual
+  // (dan sering lupa). Sekarang variant.liveStock disinkron otomatis tiap
+  // SUPPLIER_SYNC_INTERVAL_MINUTES lewat scheduleSupplierSync(), jadi angka
+  // ini sudah live - aman ditampilkan langsung ke buyer.
+  // Varian Canboso API sekarang JUGA dicek live tiap buyer buka halaman
+  // varian (lihat handler 'variant:') - variant.liveStock-nya disinkron di
+  // situ, jadi angka di sini pun sudah cukup segar untuk ditampilkan apa
+  // adanya (bukan lagi label generik "Auto (API)").
+  // ===== PATCH: stok live (variant.liveStock) & stok manual (variant.stock,
+  // dimirror dari stockItems.length) sekarang field TERPISAH (lihat
+  // db.setVariantStock) - jadi keduanya harus DIJUMLAH di sini lewat
+  // db.getTotalStock() supaya angka yang ditampilkan mencerminkan total
+  // yang benar-benar bisa dipenuhi (live + manual), bukan cuma salah satu.
+  return String(db.getTotalStock(variant));
+}
+
+// Flat list of every SKU (product + variant) as its own buy button, color-coded by stock
+// ===== PATCH v3: live-check varian Canboso API sebelum hitung warna =====
+// Sebelumnya warna tombol (hijau/merah) di sini murni pakai db.getTotalStock(v),
+// yaitu angka LOKAL yang cuma ter-update lewat sync terjadwal (scheduleCanbosoSync,
+// tiap CANBOSO_SYNC_INTERVAL_SECONDS) atau repaint 30 detik (scheduleProductListRepaint) -
+// keduanya cuma menghitung ULANG dari angka lokal yang SAMA, bukan menyegarkan
+// angkanya sendiri. Akibatnya ada jendela waktu di mana tombol masih hijau
+// padahal stok di sisi Canboso sudah 0 (baru kepakai buyer lain), sampai buyer
+// pencet "Buy Now" dan baru ketahuan "Out of stock" - lihat handler 'variant:'
+// yang sudah lebih dulu punya live-check serupa.
+// Sekarang productListKeyboard() jadi ASYNC dan mem-fetch stok live utk semua
+// varian yang py canbosoProductId, PERSIS pola yg sama kaya di handler 'variant:'
+// (pakai canboso.getLiveStock(), yang sudah di-cache 20 detik di level
+// supplierCanboso.js -> getProductsCached(), jadi tidak nambah beban API kalau
+// dipanggil berulang kali dlm rentang <20 detik oleh banyak buyer/repaint timer).
+// Kalau fetch gagal/timeout, JANGAN block - fallback diam-diam ke angka lokal
+// yang sudah ada (db.getTotalStock(v)), sama seperti prinsip di handler lain:
+// live-check ini cuma penyegar tampilan, BUKAN validasi final (placeOrder() di
+// handler 'confirm:' tetap jadi validasi final sebenarnya).
+// Supplier API (AIVerse Hub) TIDAK diikutkan di sini - modulnya (supplier.js)
+// belum punya lapisan cache seperti getProductsCached() milik Canboso, jadi
+// live-check per buka menu di sini bisa lebih berat/rawan rate-limit. Untuk
+// varian Supplier API, percepat SUPPLIER_SYNC_INTERVAL_MINUTES di .env kalau
+// mau jendela basi-nya lebih pendek.
+async function productListKeyboard(chatId) {
+  const products = db.getAllProducts();
+  const rows = [];
+  for (const p of products) {
+    for (const v of p.variants) {
+      if (v.canbosoProductId) {
+        try {
+          const live = await canboso.getLiveStock(v.canbosoProductId);
+          if (live && !isNaN(live.stock)) {
+            db.setVariantStock(p.id, v.id, live.stock);
+            v.liveStock = live.stock;
+          }
+          // Kalau live null/NaN (produk hilang dari Canboso / field tak
+          // dikenali), diamkan di sini - alertCanbosoStockIssue() sudah
+          // dipicu dari tempat lain (handler 'variant:'/sync terjadwal),
+          // tidak perlu dobel alert tiap kali menu list dibuka.
+        } catch (err) {
+          // Fetch gagal (network/API down/timeout) - pakai angka lokal
+          // terakhir yang ada, jangan sampai error di sini bikin seluruh
+          // menu produk gagal tampil.
+          console.error(`Canboso getLiveStock (list) gagal (product_id=${v.canbosoProductId}):`, err.message);
+        }
+      }
+      const label = p.variants.length > 1 ? `${p.name} ${v.label}` : p.name;
+      // Kalau produk punya emojiId, emoji-nya sudah tampil lewat icon tombol
+      // (icon_custom_emoji_id) -> jangan ulang lagi p.emoji di teks label,
+      // supaya tidak dobel.
+      const emojiPart = p.emojiId ? '' : (p.emoji ? `${p.emoji} ` : '');
+      // ===== PATCH v2: warna tombol beneran (Bot API 9.4 "style" field) =====
+      // Sebelumnya di sini cuma nempel teks dot 🟢/🔴 di depan label, karena
+      // waktu itu dikira Telegram belum bisa mewarnai LATAR tombol inline.
+      // Ternyata bisa - persis mekanisme yang sudah dipakai tombol-tombol
+      // menu /start (lihat withStyle(), style 'primary'/'success'/'danger').
+      // Sekarang dipakai juga di sini: stok > 0 -> 'success' (hijau beneran),
+      // stok habis -> 'danger' (merah beneran) - dot emoji teks dihapus
+      // karena sudah redundan dengan warna latar tombolnya sendiri.
+      const stockStyle = db.getTotalStock(v) > 0 ? 'success' : 'danger';
+      rows.push([withStyle(withProductIcon({
+        text: `${emojiPart}${label} - ${usd(db.getBulkPrice(v), chatId)} | Stock: ${stockLabel(v)}`,
+        callback_data: `desc:${productRef(p.id, v.id)}`
+      }, p), stockStyle)]);
+    }
+  }
+  rows.push([withButtonIcon({ text: lang.t(chatId, 'btn_go_back'), callback_data: 'menu:main' }, 'go_back')]);
+  return { inline_keyboard: rows };
+}
+
+// ===== PATCH v3: warna tombol "Buy Now" di halaman detail ikut stock =====
+// Sebelumnya tombol ini selalu abu-abu netral berapapun stok-nya - beda
+// dari daftar produk (productListKeyboard) yang sudah diwarnai hijau/merah.
+// Efeknya buyer baru tahu produk habis SETELAH pencet "Buy Now" (muncul
+// alert "Stok habis"), padahal harusnya sudah kelihatan dari warna tombol
+// begitu halaman detail dibuka. Sekarang terima parameter `variant`
+// (opsional, buat backward-compat kalau ada pemanggil lain yang belum
+// diupdate) - kalau ada, tombol "Buy Now" ikut diwarnai 'success'/'danger'
+// persis pola yang sama seperti productListKeyboard().
+function descKeyboard(productId, variantId, chatId, product, variant) {
+  const ref = productRef(productId, variantId);
+  const buyButton = withButtonIconPreferProduct({ text: lang.t(chatId, 'btn_buy_now'), callback_data: `variant:${ref}` }, 'buy_now', product);
+  const buyRow = variant ? [withStyle(buyButton, db.getTotalStock(variant) > 0 ? 'success' : 'danger')] : [buyButton];
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: lang.t(chatId, 'btn_how_to_use'), callback_data: `howto:${ref}` }, 'how_to_use')],
+      buyRow,
+      [withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:products' }, 'back')]
+    ]
+  };
+}
+
+// ===== FITUR BARU: 🔔 Notifikasi Live Stock ke SEMUA User =====
+// Dipicu OTOMATIS setiap kali admin berhasil nambah stok 1 varian, lewat
+// cara apapun (📋 paste link/kode -> addstock_items, ATAU 🔢 angka manual ->
+// addstock_manual_qty - lihat kedua handler itu di bagian TEXT MESSAGES).
+// Setiap ikon di teks ini punya slot sendiri lewat teksEmoji() (grup
+// "stockalert" di TEKS_GROUPS) - JADI SELALU pakai custom emoji Premium
+// begitu admin isi ID-nya lewat "🎨 Kelola Emoji ID" (fallback ke unicode
+// biasa kalau belum diisi/owner belum Premium, sama seperti mekanisme
+// lain di bot ini - tidak pernah error).
+function buildStockAlertText(product, variant, qtyAdded, chatId) {
+  const title = product.variants.length > 1 ? `${product.name} - ${variant.label}` : product.name;
+  return (
+    `${teksEmoji('stockalert_bell', '🔔')} <b>STOK BARU TERSEDIA!</b>\n\n` +
+    `${teksEmoji('stockalert_product', '📦')} <b>Produk:</b> ${productEmojiHtml(product)} ${escapeHtml(title)}\n` +
+    `${teksEmoji('stockalert_added', '➕')} <b>Ditambahkan:</b> ${qtyAdded} pcs\n` +
+    `${teksEmoji('stockalert_total', '📊')} <b>Total Stok Sekarang:</b> ${db.getTotalStock(variant)} pcs\n` +
+    `${teksEmoji('stockalert_price', '💲')} <b>Harga:</b> ${usd(db.getBasePrice(variant), chatId)}\n\n` +
+    `${teksEmoji('stockalert_footer', '⚡')} Buruan checkout sebelum kehabisan lagi!`
+  );
+}
+
+// Tombol "✅ Buy Now" nempel di notifikasi live stock - PRIORITASKAN emoji
+// premium milik produk itu sendiri (sama seperti descKeyboard() di atas),
+// dan langsung nyambung ke callback `variant:${ref}` yang SAMA persis
+// dipakai tombol Buy Now di halaman deskripsi produk (lihat handler
+// `data.startsWith('variant:')`) - jadi begitu user pencet, langsung masuk
+// ke alur pilih jumlah beli, bukan cuma buka halaman deskripsi lagi.
+function stockAlertKeyboard(productId, variantId, product) {
+  const ref = productRef(productId, variantId);
+  return {
+    inline_keyboard: [
+      [withStyle(withButtonIconPreferProduct({ text: '✅ Buy Now', callback_data: `variant:${ref}` }, 'buy_now', product), 'success')]
+    ]
+  };
+}
+
+// Broadcast generik ke SEMUA user terdaftar (pola sama persis dengan 📢
+// Broadcast/Mode Maintenance: loop 1-per-1 + jeda kecil antar pesan biar
+// tidak kena rate limit Telegram). buildTextForUser(uid) dipanggil PER user
+// supaya harga/bahasa bisa dipersonalisasi (usd() beda Rp/$ sesuai lang
+// user). keyboard sama untuk semua user. adminChatId opsional - kalau
+// diisi, ringkasan berhasil/gagal dikirim balik ke situ setelah selesai.
+async function broadcastToAllUsers(buildTextForUser, keyboard, adminChatId, label) {
+  const allDb = db.readDb();
+  const userIds = Object.keys(allDb.users);
+  let success = 0, failed = 0;
+  for (const uid of userIds) {
+    try {
+      await bot.sendMessage(uid, buildTextForUser(uid), { parse_mode: 'HTML', reply_markup: keyboard });
+      success++;
+    } catch (err) {
+      failed++; // biasanya user sudah blokir/hapus bot - lanjut ke user berikutnya
+    }
+    await new Promise(r => setTimeout(r, 40));
+  }
+  if (adminChatId) {
+    bot.sendMessage(adminChatId,
+      `🔔 <i>${escapeHtml(label)} selesai dikirim ke semua user.</i>\n📨 Berhasil: <b>${success}</b> • ⚠️ Gagal: <b>${failed}</b>`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+  }
+}
+
+// Broadcast notifikasi live stock ke SEMUA user terdaftar begitu admin
+// nambah stok manual (📥 Tambah Stock - lihat addstock_items/
+// addstock_manual_qty). SENGAJA TIDAK di-await oleh pemanggilnya - supaya
+// admin yang lagi nambah stok (apalagi kalau paste banyak link sekaligus,
+// 1 pesan/baris) tidak harus nunggu broadcast ke semua user selesai dulu
+// baru bisa lanjut kirim baris berikutnya. Ringkasan berhasil/gagal dikirim
+// balik ke admin yang mentrigger (adminChatId) setelah broadcast selesai.
+async function broadcastStockAlert(product, variant, qtyAdded, adminChatId) {
+  const keyboard = stockAlertKeyboard(product.id, variant.id, product);
+  await broadcastToAllUsers(
+    uid => buildStockAlertText(product, variant, qtyAdded, uid),
+    keyboard, adminChatId, `Notifikasi live stock (${product.name})`
+  );
+}
+
+// ===== FITUR BARU: 🔔 Notifikasi Live Stock dari SYNC Supplier/Canboso =====
+// Beda dari broadcastStockAlert() di atas (dipicu admin nambah stok
+// MANUAL), ini dipicu OTOMATIS tiap kali auto-sync terjadwal
+// (scheduleSupplierSync()/scheduleCanbosoSync() - lihat refreshSupplierData/
+// refreshCanbosoData di bawah) mendeteksi TOTAL stok 1+ varian berubah
+// (naik ATAU turun) dibanding sync sebelumnya - sesuai permintaan: kirim
+// tiap kali sync, bukan cuma pas restock dari 0. Semua varian yang
+// berubah di 1 siklus sync yang SAMA digabung jadi 1 pesan broadcast (bukan
+// 1 pesan terpisah per varian) supaya user tidak kebanjiran banyak pesan
+// sekaligus kalau kebetulan banyak varian berubah bareng.
+function buildStockSyncBroadcastText(changes, chatId) {
+  const bell = teksEmoji('stockalert_bell', '🔔');
+  const footer = teksEmoji('stockalert_footer', '⚡');
+  const blocks = changes.map(c => {
+    const title = c.product.variants.length > 1 ? `${c.product.name} - ${c.variant.label}` : c.product.name;
+    const arrow = c.newTotal > c.oldTotal ? '📈' : '📉';
+    return (
+      `${productEmojiHtml(c.product)} <b>${escapeHtml(title)}</b>\n` +
+      `${teksEmoji('stockalert_total', '📊')} Stok: ${c.oldTotal} → <b>${c.newTotal}</b> pcs ${arrow}\n` +
+      `${teksEmoji('stockalert_price', '💲')} ${usd(db.getBasePrice(c.variant), chatId)}`
+    );
+  });
+  return `${bell} <b>STOK DIPERBARUI (Live Supplier)!</b>\n\n${blocks.join('\n\n')}\n\n${footer} Cek & checkout sekarang!`;
+}
+
+function stockSyncBroadcastKeyboard(changes) {
+  const rows = changes.map(c => ([
+    withStyle(withButtonIconPreferProduct({
+      text: `✅ Buy Now - ${c.product.variants.length > 1 ? c.variant.label : c.product.name}`,
+      callback_data: `variant:${productRef(c.product.id, c.variant.id)}`
+    }, 'buy_now', c.product), 'success')
+  ]));
+  return { inline_keyboard: rows };
+}
+
+// Dipanggil fire-and-forget dari scheduleSupplierSync()/scheduleCanbosoSync()
+// - TIDAK ada adminChatId (auto, bukan ditrigger admin manual dari chat),
+// jadi tidak ada ringkasan balik ke admin di sini (biar tidak dobel spam -
+// laporan error sync yang relevan buat admin sudah ada jalur sendiri lewat
+// notifyAdmins() di scheduleSupplierSync/scheduleCanbosoSync).
+async function broadcastStockSyncChanges(changes) {
+  if (!changes || !changes.length) return;
+  const keyboard = stockSyncBroadcastKeyboard(changes);
+  await broadcastToAllUsers(uid => buildStockSyncBroadcastText(changes, uid), keyboard, null, 'Notifikasi live stock (sync supplier)');
+}
+
+function howToListKeyboard(chatId) {
+  const products = db.getAllProducts();
+  const rows = [];
+  products.forEach(p => {
+    p.variants.forEach(v => {
+      const label = p.variants.length > 1 ? `${p.name} ${v.label}` : p.name;
+      const emojiPart = p.emojiId ? '' : (p.emoji ? `${p.emoji} ` : '');
+      rows.push([withProductIcon({
+        text: `${emojiPart}${label}`,
+        callback_data: `howto:${productRef(p.id, v.id)}:list`
+      }, p)]);
+    });
+  });
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_close_menu'), callback_data: 'howtouse:close' }, 'close_menu'), 'danger')]);
+  return { inline_keyboard: rows };
+}
+
+// Keyboard untuk pesan "ORDER BERHASIL" - selalu ada How to Use, dan kalau
+// ada item dengan TOTP secret (Kode 2FA live), tambahkan tombol Refresh
+// karena kodenya berubah tiap 30 detik dan bisa basi kalau cuma statis.
+function successKeyboard(productId, variantId, orderId, deliveredItems, chatId) {
+  // PENTING: tombol ini cuma bawa orderId ("howtoorder:<orderId>"), BUKAN
+  // productId+variantId+orderId sekaligus. productId/variantId gampang
+  // panjang (variant.id sering sudah mengandung product.id sebagai prefix),
+  // dan callback_data Telegram dibatasi 64 byte - kalau ketiganya digabung
+  // gampang lewat batas itu dan bikin Telegram TOLAK kirim seluruh pesan
+  // "ORDER BERHASIL" (lihat .catch(() => {}) di pemanggilnya, jadi buyer
+  // diam-diam TIDAK dapat pesan order sama sekali kalau ini kejadian).
+  // Handler 'howtoorder:' di bawah ambil productId/variantId dari data
+  // order tersimpan, sama seperti pola "backtoorder:" yang sudah ada.
+  const rows = [
+    [withButtonIcon({ text: '❗️ How to Use', callback_data: `howtoorder:${orderId}` }, 'how_to_use')]
+  ];
+  if (hasLiveTotpSecret(deliveredItems)) {
+    rows.push([withButtonIcon({ text: lang.t(chatId, 'btn_refresh_2fa'), callback_data: `refresh2fa:${orderId}` }, 'refresh_2fa')]);
+  }
+  return { inline_keyboard: rows };
+}
+
+function howToKeyboard(productId, variantId, context, chatId) {
+  // Back button balik ke konteks asal tombol "How to Use" dipencet:
+  // - context 'list'  -> balik ke menu utama "How to Use" (dari menu utama)
+  // - context ord_xxx -> balik ke pesan "ORDER BERHASIL" asal
+  // - kosong          -> balik ke halaman deskripsi produk (dari "Buy Now")
+  let backCallback;
+  if (context === 'list') backCallback = 'menu:howtouse';
+  else if (context) backCallback = `backtoorder:${context}`;
+  else backCallback = `desc:${productRef(productId, variantId)}`;
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: backCallback }, 'back')]
+    ]
+  };
+}
+
+// Ikon 🎉/✅ di blok "Diskon Grosir" di bawah ini SEBELUMNYA hardcode
+// unicode biasa langsung di lang.js (bulk_discount_title/bulk_discount_line)
+// - jadi TIDAK PERNAH tampil premium walau ikon lain di halaman yang sama
+// (mis. ⚠️/📦 di enter_qty_title) sudah premium. Sekarang keduanya lewat
+// teksEmoji() juga, PINJAM ID yang sudah ada & sudah kepakai di tempat lain
+// (bukan ID baru) supaya konsisten gaya-nya: 🎉 pinjam dari 'success_title'
+// (judul "ORDER BERHASIL"), ✅ pinjam dari 'forcejoin_check' (ikon centang
+// wajib-join) - keduanya tetap bisa diganti terpisah kapan saja lewat admin
+// "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" kalau owner mau beda.
+function tiersText(variant, chatId) {
+  if (!variant.tiers || variant.tiers.length <= 1) {
+    return lang.t(chatId, 'price_per_pcs', { price: usd(db.getBasePrice(variant), chatId) });
+  }
+  const lines = variant.tiers.map(t => {
+    const range = t.max === null ? `${t.min}+` : `${t.min} - ${t.max}`;
+    return lang.t(chatId, 'bulk_discount_line', { range, price: usd(t.price, chatId), emoji_check: teksEmoji('bulk_check', '✅') });
+  });
+  return `${lang.t(chatId, 'bulk_discount_title', { emoji_title: teksEmoji('bulk_title', '🎉') })}\n${lines.join('\n')}`;
+}
+
+function quantityKeyboard(productId, variantId, chatId) {
+  const ref = productRef(productId, variantId);
+  const quicks = [1, 5, 10, 20, 30, 50, 100];
+  const rows = [];
+  for (let i = 0; i < quicks.length; i += 4) {
+    rows.push(quicks.slice(i, i + 4).map(n => ({
+      text: String(n), callback_data: `qty:${ref}:${n}`
+    })));
+  }
+  rows.push([withButtonIcon({ text: lang.t(chatId, 'qty_custom'), callback_data: `qtycustom:${ref}` }, 'jumlah_custom')]);
+  rows.push([withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: `desc:${ref}` }, 'back')]);
+  return { inline_keyboard: rows };
+}
+
+// Baris tombol quick-topup (QRIS/USDT/TON) untuk nominal tertentu (USD) -
+// dipakai di 2 tempat sesuai keputusan produk: (1) langsung di halaman Order
+// Confirmation kalau saldo kurang, (2) di pesan tambahan begitu user pencet
+// "Place Order" tapi saldo ternyata masih kurang. Nominal dikirim via
+// callback_data dalam SEN (integer) - bukan desimal - supaya tidak ada
+// masalah pembulatan/parsing float di data callback yang cuma string.
+function quickTopupButtonsRow(amountUsd) {
+  const cents = Math.max(1, Math.round(amountUsd * 100));
+  // Pakai key emoji yang SAMA dengan tombol topup:qris/usdt/ton/binance di
+  // menu Wallet utama ('topup_qris'/'topup_usdt'/'topup_ton'/'topup_binance'
+  // di emoji-id-menu-inline.js) - supaya kalau admin sudah pasang emoji
+  // premium buat tombol itu lewat "🎨 Kelola Emoji ID", ikon yang sama
+  // otomatis kepakai juga di sini tanpa perlu di-set ulang.
+  // Balikin 2 ROWS (bukan 1 row 4 tombol) supaya tidak kepencet/kegepeng di
+  // layar HP sekarang yang sudah nambah 1 metode (Binance) - pemanggilnya
+  // WAJIB spread hasil ini (...quickTopupButtonsRows(...)), bukan push
+  // sebagai 1 array tunggal.
+  return [
+    [
+      withButtonIcon({ text: '📱 QRIS', callback_data: `qtopup:qris:${cents}` }, 'topup_qris'),
+      withButtonIcon({ text: '💵 USDT', callback_data: `qtopup:usdt:${cents}` }, 'topup_usdt')
+    ],
+    [
+      withButtonIcon({ text: '💎 TON', callback_data: `qtopup:ton:${cents}` }, 'topup_ton'),
+      withButtonIcon({ text: 'Binance', callback_data: `qtopup:binance:${cents}` }, 'topup_binance')
+    ]
+  ];
+}
+
+function confirmKeyboard(productId, variantId, qty, chatId, shortfall) {
+  const ref = productRef(productId, variantId);
+  const rows = [
+    [withButtonIcon({ text: lang.t(chatId, 'btn_place_order'), callback_data: `confirm:${ref}:${qty}` }, 'place_order')],
+    [withButtonIcon({ text: lang.t(chatId, 'btn_cancel_order'), callback_data: `variant:${ref}` }, 'cancel_order')]
+  ];
+  // Kalau saldo user masih kurang buat order ini, tambahkan baris quick-topup
+  // (QRIS/USDT/TON/Binance) langsung di sini - user tinggal pencet salah satu
+  // tanpa perlu keluar dulu ke menu Wallet, nominalnya otomatis sejumlah
+  // KEKURANGAN saldo (bukan total order), supaya begitu selesai bayar, saldo
+  // pas cukup.
+  if (shortfall > 0) {
+    rows.push(...quickTopupButtonsRow(shortfall));
+  }
+  return { inline_keyboard: rows };
+}
+
+async function showOrderConfirmation(chatId, messageId, productId, variantId, qty) {
+  const product = db.findProduct(productId);
+  const variant = db.findVariant(productId, variantId);
+  if (!product || !variant || !qty || qty <= 0) {
+    return bot.sendMessage(chatId, lang.t(chatId, 'invalid_qty'));
+  }
+  const unitPrice = db.getUnitPriceForQty(variant, qty);
+  const total = Math.round(unitPrice * qty * 100) / 100; // lihat catatan bug fix floating-point di handler 'confirm:'
+  const user = db.getUser(chatId);
+  const shortfall = Math.max(0, total - user.balance);
+
+  const text =
+    `${lang.t(chatId, 'order_confirm_title', { title_icon: teksEmoji('order_confirm_title', '✅') })}\n\n` +
+    lang.t(chatId, 'order_confirm_body', {
+      product: `${productEmojiHtml(product)} ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}`,
+      qty,
+      total: usd(total, chatId),
+      balance: usd(user.balance, chatId),
+      stock: stockLabel(variant),
+      balance_icon: teksEmoji('order_confirm_balance', '💰'),
+      stock_icon: teksEmoji('order_confirm_stock', '⭐')
+    });
+
+  const opts = { parse_mode: 'HTML', reply_markup: confirmKeyboard(productId, variantId, qty, chatId, shortfall) };
+  if (messageId) {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...opts }).catch(() => {
+      bot.sendMessage(chatId, text, opts);
+    });
+  } else {
+    bot.sendMessage(chatId, text, opts);
+  }
+}
+
+// ================= START =================
+
+bot.onText(/^\/start(?:\s+(.+))?/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const isNewUser = !db.readDb().users[chatId];
+  db.getUser(chatId, msg.from.username);
+
+  // Gerbang Mode Maintenance: admin selalu tetap bisa akses normal (supaya
+  // owner tidak pernah ikut terkunci dari bot-nya sendiri), tapi SEMUA user
+  // lain langsung dikasih lihat pesan maintenance dan berhenti di sini -
+  // tidak lanjut ke proses referral, pilih bahasa, wajib join, atau menu
+  // utama sama sekali.
+  if (!isAdmin(chatId) && db.getMaintenanceSettings().enabled) {
+    return bot.sendMessage(chatId, buildMaintenanceText(chatId), { parse_mode: 'HTML' });
+  }
+
+  // payload dari deep-link https://t.me/<bot>?start=<referrerChatId> ->
+  // hanya diproses kalau user ini BENERAN baru (belum pernah /start
+  // sebelumnya), supaya user lama tidak bisa "refer" diri sendiri berkali-kali
+  // cuma dengan buka ulang link yang sama.
+  // ===== PATCH v7: reward TIDAK lagi diberikan di sini (lihat db.registerReferral()
+  // & db.creditReferralOnFirstDeposit() untuk penjelasan lengkap kenapa) -
+  // di sini cuma catat relasinya. Reward baru dikreditkan nanti begitu user
+  // ini beneran top-up saldo pertama kalinya lewat payment gateway asli.
+  const referrerChatId = match && match[1] ? match[1].trim() : null;
+  if (isNewUser && referrerChatId) {
+    db.registerReferral(chatId, referrerChatId);
+  }
+
+  // Kalau user ini BELUM PERNAH pilih bahasa sama sekali, tampilkan layar
+  // pilih bahasa dulu SEBELUM menu utama. Setelah dipilih (lihat callback
+  // 'lang:id' / 'lang:en' di bawah), bot langsung lanjut nampilin menu utama.
+  if (!db.hasChosenLang(chatId)) {
+    return bot.sendMessage(
+      chatId,
+      `${lang.tr('id', 'choose_language')}\n${lang.tr('en', 'choose_language')}`,
+      { reply_markup: lang.languageKeyboard() }
+    );
+  }
+
+  // Admin tetap bisa langsung masuk tanpa wajib join, biar owner tidak
+  // pernah terkunci dari bot-nya sendiri (mis. lupa join channel sendiri).
+  if (!isAdmin(chatId)) {
+    const passed = await checkForceJoinAndPrompt(chatId, null);
+    if (!passed) return;
+  }
+
+  bot.sendMessage(
+    chatId,
+    buildWelcomeText(chatId),
+    { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) }
+  );
+});
+
+// ================= SET LANGUAGE (command) =================
+// Bisa dipanggil kapan saja buat ganti bahasa, tidak cuma pas /start awal.
+bot.onText(/^\/(setlanguage|language|lang|bahasa)/, (msg) => {
+  const chatId = msg.chat.id;
+  db.getUser(chatId, msg.from.username);
+  bot.sendMessage(
+    chatId,
+    `${lang.tr('id', 'choose_language')}\n${lang.tr('en', 'choose_language')}`,
+    { reply_markup: lang.languageKeyboard('menu:main') }
+  );
+});
+
+// ================= CALLBACK QUERY =================
+
+// Wrapper aman untuk editMessageText - kalau kontennya PERSIS sama dengan yang
+// sudah tampil di layar (Telegram bakal nolak dengan error "message is not
+// modified" - paling sering kejadian kalau user DOBEL-TAP tombol yang sama,
+// atau koneksi lemot bikin Telegram kirim callback yang sama 2x), diamkan
+// saja TANPA kirim pesan baru (supaya tidak dobel/nyampah di chat). Untuk
+// error lain (mis. pesan kelewat lama buat di-edit), fallback kirim pesan baru
+// seperti biasa.
+async function safeEditMessage(chatId, messageId, text, opts) {
+  try {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...opts });
+  } catch (err) {
+    const desc = (err && err.response && err.response.body && err.response.body.description) || (err && err.message) || '';
+    if (/message is not modified/i.test(desc)) {
+      return; // isi yang mau ditampilkan sudah sama persis - aman diabaikan
+    }
+    await bot.sendMessage(chatId, text, opts).catch(() => {});
+  }
+}
+
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+  const data = query.data;
+
+  // Callback data yang diawali "admin:" SEPENUHNYA ditangani oleh handler
+  // bot.on('callback_query', ...) KEDUA di bawah (lihat guard
+  // `if (!data.startsWith('admin:') ...) return;` di sana). Tanpa guard ini,
+  // handler PERTAMA ini akan tetap jalan sampai baris `bot.answerCallbackQuery`
+  // di paling bawah (karena tidak ada if/else yang cocok untuk data 'admin:...'),
+  // dan MENJAWAB callback query itu duluan dengan toast KOSONG - Telegram
+  // cuma mengizinkan 1x jawaban per callback query, jadi toast/alert asli
+  // dari handler admin (mis. "⚠️ Produk tidak ditemukan.") jadi GAGAL TAMPIL
+  // secara diam-diam. Guard ini mencegah bug itu.
+  if (data.startsWith('admin:')) return;
+
+  // ===== Guard untuk fitur live-repaint (lihat openProductListMsg &
+  // scheduleProductListRepaint() di atas) =====
+  // Bot ini (seperti kebanyakan bot Telegram) EDIT pesan yang SAMA di
+  // tempat setiap kali user pindah menu (bukan kirim pesan baru tiap kali) -
+  // jadi 1 message_id yang sama bisa gantian menampilkan menu utama, daftar
+  // produk, saldo, dst tergantung tombol apa yang terakhir dipencet.
+  // openProductListMsg nge-track message_id TERAKHIR yang menampilkan
+  // daftar produk, supaya bisa direpaint ulang warnanya nanti - TAPI kalau
+  // user lanjut navigasi ke menu LAIN di message_id yang SAMA itu (mis. buka
+  // 'desc:' salah satu produk, atau balik ke 'menu:main'), pesan itu SUDAH
+  // TIDAK LAGI menampilkan daftar produk. Tanpa guard ini, repaint job
+  // berikutnya akan menimpa keyboard menu BARU itu dengan
+  // productListKeyboard() - salah total, bisa bikin tombol menu lain
+  // kelihatan seperti daftar produk padahal teksnya menu lain.
+  // Guard ini menghapus tracking SEBELUM branch manapun dieksekusi kalau
+  // data-nya BUKAN 'menu:products' - handler 'menu:products' sendiri
+  // langsung set ulang tracking-nya lagi setelah ini (lihat di bawah), jadi
+  // aman untuk kasus itu.
+  if (data !== 'menu:products') openProductListMsg.delete(chatId);
+  // Guard yang sama untuk tracking halaman detail (openProductDescMsg) -
+  // handler 'desc:' di bawah akan set ULANG tracking-nya lagi kalau data
+  // memang 'desc:...', jadi aman dihapus dulu di sini untuk semua kasus lain.
+  if (!data.startsWith('desc:')) openProductDescMsg.delete(chatId);
+
+  try {
+    // ---- Wajib Join Channel/Grup: cek "✅ Saya Sudah Join" (auto deteksi) ----
+    if (data === 'checkjoin') {
+      const unjoined = await getUnjoinedChannels(chatId);
+      if (unjoined.length) {
+        const { channels } = db.getForceJoinSettings();
+        await safeEditMessage(chatId, messageId, forceJoinText(chatId, unjoined, channels), {
+          parse_mode: 'HTML', reply_markup: forceJoinKeyboard(chatId, channels)
+        });
+        return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'forcejoin_still_locked'), show_alert: true }).catch(() => {});
+      }
+      bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'forcejoin_all_joined_toast') }).catch(() => {});
+      const welcomeText = buildWelcomeText(chatId);
+      return safeEditMessage(chatId, messageId, welcomeText, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) });
+    }
+
+    // ---- Gerbang Mode Maintenance: blokir SEMUA interaksi menu lain kalau
+    // fitur aktif (admin selalu lolos, sama seperti gerbang wajib-join). ----
+    if (!isAdmin(chatId) && !data.startsWith('lang:') && db.getMaintenanceSettings().enabled) {
+      await safeEditMessage(chatId, messageId, buildMaintenanceText(chatId), { parse_mode: 'HTML' });
+      return bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    // ---- Gerbang wajib-join: blokir SEMUA interaksi menu lain kalau fitur
+    // aktif & user masih ada channel yang belum di-join (admin selalu lolos). ----
+    if (!isAdmin(chatId) && !data.startsWith('lang:')) {
+      const passed = await checkForceJoinAndPrompt(chatId, messageId);
+      if (!passed) return bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    // ---- Ganti bahasa lewat command (/language, /lang, /bahasa, /setlanguage)
+    // sekarang, BUKAN tombol inline di menu utama lagi - tapi callback
+    // 'lang:id' / 'lang:en' dari keyboard yang dikirim command itu tetap
+    // ditangani di sini. ----
+    if (data.startsWith('lang:')) {
+      const code = data.slice('lang:'.length);
+      lang.setUserLang(chatId, code === 'en' ? 'en' : 'id');
+      db.clearPendingAction(chatId);
+      bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'language_changed').replace(/<\/?b>/g, '') }).catch(() => {});
+      // Setelah bahasa dipilih (baik pas /start pertama kali maupun ganti
+      // bahasa belakangan), cek dulu status wajib-join SEBELUM tampilkan menu
+      // utama - kalau masih ada channel yang belum di-join, layar join yang
+      // tampil duluan (kecuali untuk admin, yang selalu boleh lewat).
+      if (!isAdmin(chatId)) {
+        const passed = await checkForceJoinAndPrompt(chatId, messageId);
+        if (!passed) return;
+      }
+      // Tampilkan ULANG menu utama FULL dalam bahasa yang baru dipilih - baik
+      // teksnya maupun semua tombol inline-nya.
+      const welcomeText = buildWelcomeText(chatId);
+      return safeEditMessage(chatId, messageId, welcomeText, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) });
+    }
+
+    // ---- Main menu navigation ----
+    else if (data === 'menu:main') {
+      db.clearPendingAction(chatId);
+      const welcomeText = buildWelcomeText(chatId);
+      await safeEditMessage(chatId, messageId, welcomeText, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) });
+    }
+
+    else if (data === 'menu:products') {
+      db.clearPendingAction(chatId);
+      await bot.editMessageText(lang.t(chatId, 'products_title'), {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: await productListKeyboard(chatId)
+      });
+      // Catat pesan ini supaya scheduleProductListRepaint() bisa ikut
+      // menyegarkan warna tombolnya nanti kalau stok berubah SEMENTARA
+      // buyer masih melihat menu ini di layarnya (lihat definisi
+      // openProductListMsg di atas).
+      openProductListMsg.set(chatId, messageId);
+    }
+
+    else if (data === 'menu:balance') {
+      db.clearPendingAction(chatId);
+      const user = db.getUser(chatId, query.from.username);
+      await bot.editMessageText(lang.t(chatId, 'balance_line', { balance: usd(user.balance, chatId), icon: teksEmoji('balance_line', '💰') }), {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back')]] }
+      });
+    }
+
+    // ---- Gift (Buy Gift / Confess Gift, via userbot GramJS - lihat userbot.js) ----
+    // Menu utama cuma punya 1 tombol gabungan "🎁 Buy Gift / Confess Gift" ->
+    // submenu ini yang baru nanya mau mode "buy" (tanpa pesan, atas nama
+    // toko) atau "confess" (+ pesan anonim, identitas disembunyikan).
+    else if (data === 'gift:mode') {
+      db.clearPendingAction(chatId);
+      if (!userbot.isConfigured()) {
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'gift_not_configured'), show_alert: true });
+        return;
+      }
+      await safeEditMessage(chatId, messageId,
+        lang.t(chatId, 'gift_mode_title'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [withStyle({ text: lang.t(chatId, 'btn_gift_buy'), callback_data: 'gift:list:buy' }, 'success')],
+              [withStyle({ text: lang.t(chatId, 'btn_gift_confess'), callback_data: 'gift:list:confess' }, 'success')],
+              [withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back')]
+            ]
+          }
+        }
+      );
+    }
+
+    else if (data.startsWith('gift:list:')) {
+      db.clearPendingAction(chatId);
+      const mode = data.split(':')[2]; // 'buy' | 'confess'
+      if (!userbot.isConfigured()) {
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'gift_not_configured'), show_alert: true });
+        return;
+      }
+      await bot.editMessageText(giftListText(chatId, mode), {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: await giftListKeyboard(chatId, mode)
+      });
+    }
+
+    else if (data.startsWith('gift:pick:')) {
+      const [, , mode, giftId] = data.split(':');
+      let gift = null;
+      try {
+        const catalog = await userbot.getGiftCatalog();
+        gift = catalog.find(g => g.id === giftId);
+      } catch (err) {
+        logError('gift:pick catalog', err);
+      }
+      if (!gift) {
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'gift_not_found'), show_alert: true });
+        return;
+      }
+      db.setPendingAction(chatId, { type: 'gift_target', data: { mode, giftId, stars: gift.stars } });
+      await bot.editMessageText(await giftDetailText(chatId, gift, mode), {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: giftCancelKeyboard(chatId)
+      });
+    }
+
+    else if (data.startsWith('gift:confirm:')) {
+      // Cegah double-tap/duplikat callback memicu 2 gift order berjalan
+      // bersamaan buat chatId yang sama - pakai lock yang sama dengan
+      // handler 'confirm:' (order produk biasa) di atas. Tanpa ini, tap
+      // ganda pada "✅ Kirim Sekarang" bisa lolos cek saldo 2x sebelum
+      // salah satunya sempat clearPendingAction/updateBalance (karena ada
+      // `await userbot.getUserbotStarsBalance()` di tengah), sehingga
+      // saldo user kepotong 2x dan gift terkirim 2x untuk 1 konfirmasi.
+      if (pendingOrderConfirms.has(chatId)) {
+        return bot.answerCallbackQuery(query.id, { text: '⏳ Order sebelumnya masih diproses, tunggu sebentar...', show_alert: true }).catch(() => {});
+      }
+      pendingOrderConfirms.add(chatId);
+      try {
+      const confirmToken = data.split(':')[2];
+      const pending = db.getPendingAction(chatId);
+      if (!pending || pending.type !== 'gift_confirm' || pending.data.confirmToken !== confirmToken) {
+        await bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi order sudah tidak berlaku, ulangi dari menu Gift.', show_alert: true });
+        return;
+      }
+      const { priceUsd, stars } = pending.data;
+      const user = db.getUser(chatId, query.from.username);
+      if (user.balance < priceUsd) {
+        // Sama seperti order produk biasa (lihat handler 'confirm:' di atas) -
+        // bukan cuma toast alert doang, tapi juga kirim pesan actionable
+        // dengan tombol quick-topup (QRIS/USDT/TON/Binance) SEJUMLAH PERSIS
+        // kekurangan saldonya, jadi user bisa langsung bayar tanpa keluar
+        // dulu ke menu Wallet lalu balik lagi cari gift-nya. Pending action
+        // gift_confirm SENGAJA tidak dihapus supaya begitu saldo sudah
+        // cukup, user tinggal tap lagi "✅ Kirim Sekarang" di pesan
+        // konfirmasi sebelumnya tanpa perlu ulang dari awal.
+        const shortfall = priceUsd - user.balance;
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'insufficient_balance'), show_alert: true }).catch(() => {});
+        await bot.sendMessage(chatId,
+          `${teksEmoji('insufficient_balance_warn', '⚠️')} ${lang.t(chatId, 'insufficient_balance')}\n\n${teksEmoji('insufficient_balance_shortfall', '💰')} ${lang.t(chatId, 'insufficient_balance_shortfall_label')}: <b>${usd(shortfall, chatId)}</b>\n\n${lang.t(chatId, 'insufficient_balance_cta')}`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: quickTopupButtonsRow(shortfall) } }
+        );
+        return;
+      }
+
+      // Cek dulu saldo Stars akun userbot SEBELUM potong saldo buyer - kalau
+      // Stars-nya habis, buyer JANGAN sampai kepotong saldo sama sekali,
+      // cukup diminta tunggu admin top up lalu order ulang. Pending action
+      // sengaja TIDAK dihapus di sini supaya buyer bisa langsung tap lagi
+      // "✅ Kirim Sekarang" begitu Stars sudah di-top up, tanpa perlu ulang
+      // dari awal (pilih gift & ketik target lagi).
+      try {
+        const starsBalance = await userbot.getUserbotStarsBalance();
+        if (starsBalance < stars) {
+          await bot.answerCallbackQuery(query.id, {
+            text: `⚠️ Stok Stars toko lagi habis. Saldo kamu TIDAK dipotong.`,
+            show_alert: true
+          });
+          await bot.sendMessage(chatId,
+            `⚠️ <b>Stok Stars toko lagi habis</b>, admin belum sempat top up.\n\n` +
+            `💰 Saldo wallet kamu <b>tidak dipotong sama sekali</b> - aman.\n` +
+            `🔁 Order kamu masih tersimpan, tinggal tap lagi <b>"✅ Kirim Sekarang"</b> di pesan konfirmasi sebelumnya kalau mau coba lagi nanti.`,
+            { parse_mode: 'HTML' }
+          );
+          return;
+        }
+      } catch (err) {
+        // Kalau cek saldo sendiri gagal (mis. userbot lagi disconnect), jangan
+        // block buyer di sini - biarkan lanjut, kegagalan sebenarnya akan
+        // tetap ketangkep & di-refund otomatis di executeGiftSend() di bawah.
+        logError('gift:confirm pre-check stars balance', err);
+      }
+
+      db.clearPendingAction(chatId);
+      db.updateBalance(chatId, -priceUsd);
+      const order = db.createGiftOrder({
+        chatId, username: query.from.username, mode: pending.data.mode,
+        giftId: pending.data.giftId, stars: pending.data.stars, priceUsd,
+        target: pending.data.target, message: pending.data.message
+      });
+      await bot.editMessageText(`⏳ Mengirim gift ke <b>${escapeHtml(pending.data.target)}</b>...`, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML'
+      });
+      executeGiftSend(chatId, order); // async, tidak di-await - hasil dikirim sbg pesan baru
+      } finally {
+        pendingOrderConfirms.delete(chatId);
+      }
+    }
+
+    else if (data === 'menu:topup') {
+      db.clearPendingAction(chatId);
+      await bot.editMessageText(
+        lang.t(chatId, 'topup_title', { emoji_wallet: teksEmoji('wallet_title', '💳') }),
+        { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: topupMethodKeyboard(chatId) }
+      );
+    }
+
+    else if (data === 'topup:qris') {
+      if (!PAYKITA_API_KEY) {
+        await bot.editMessageText(lang.t(chatId, 'topup_qris_not_configured'), {
+          chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: cancelToTopupKeyboard(chatId)
+        });
+      } else {
+        db.clearPendingAction(chatId);
+        await bot.editMessageText(
+          lang.t(chatId, 'qris_choose_amount_title', { emoji_qris_amount: teksEmoji('qris_choose_amount_title', '💰') }),
+          { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: qrisAmountKeyboard(chatId) }
+        );
+      }
+    }
+
+    else if (data.startsWith('qrisamt:')) {
+      const amount = Number(data.slice('qrisamt:'.length));
+      if (!amount || amount < MIN_TOPUP_AMOUNT || amount > MAX_TOPUP_AMOUNT) {
+        return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'qris_invalid_amount') });
+      }
+      await bot.editMessageText(lang.t(chatId, 'qris_creating', { amount: usd(amount, chatId), emoji_hourglass: teksEmoji('qris_creating', '⏳') }), {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML'
+      }).catch(() => {});
+      await startQrisTopup(chatId, amount);
+    }
+
+    else if (data === 'qris:custom') {
+      db.setPendingAction(chatId, { type: 'topup_qris_amount' });
+      const minUsd = await getMinQrisUsd();
+      await bot.editMessageText(
+        lang.t(chatId, 'qris_custom_prompt', { min: usd(minUsd, chatId) }),
+        { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: cancelToQrisAmountKeyboard(chatId) }
+      );
+    }
+
+    else if (data.startsWith('qris:cancel:')) {
+      const depositId = data.slice('qris:cancel:'.length);
+      const deposit = db.getDeposit(depositId);
+      // Fix: cegah user LAIN membatalkan deposit pending milik user lain
+      // (callback_data bisa dikirim manual lewat client custom, tidak boleh
+      // dipercaya begitu saja tanpa verifikasi kepemilikan).
+      if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
+        db.updateDeposit(depositId, { status: 'cancelled' });
+      }
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (err) {
+        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+      }
+      await bot.sendMessage(
+        chatId,
+        buildWelcomeText(chatId),
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) }
+      );
+      return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_payment_cancelled') }).catch(() => {});
+    }
+
+    else if (data.startsWith('usdt:cancel:')) {
+      const depositId = data.slice('usdt:cancel:'.length);
+      const deposit = db.getDeposit(depositId);
+      // Fix: cegah user LAIN membatalkan deposit pending milik user lain.
+      if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
+        db.updateDeposit(depositId, { status: 'cancelled' });
+      }
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (err) {
+        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+      }
+      await bot.sendMessage(
+        chatId,
+        buildWelcomeText(chatId),
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) }
+      );
+      return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_topup_cancelled') }).catch(() => {});
+    }
+
+    else if (data === 'topup:usdt') {
+      if (!USDT_BEP20_ADDRESS) {
+        await bot.editMessageText(lang.t(chatId, 'topup_usdt_not_configured'), {
+          chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: cancelToTopupKeyboard(chatId)
+        });
+      } else {
+        db.setPendingAction(chatId, { type: 'topup_usdt_amount' });
+        await bot.editMessageText(
+          lang.t(chatId, 'usdt_topup_prompt', { min: usd(MIN_TOPUP_USDT_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_usdt: teksEmoji('usdt_prompt', '💵') }),
+          { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: cancelToTopupKeyboard(chatId) }
+        );
+      }
+    }
+
+    else if (data.startsWith('ton:cancel:')) {
+      const depositId = data.slice('ton:cancel:'.length);
+      const deposit = db.getDeposit(depositId);
+      // Fix: cegah user LAIN membatalkan deposit pending milik user lain.
+      if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
+        db.updateDeposit(depositId, { status: 'cancelled' });
+      }
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (err) {
+        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+      }
+      await bot.sendMessage(
+        chatId,
+        buildWelcomeText(chatId),
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) }
+      );
+      return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_topup_cancelled') }).catch(() => {});
+    }
+
+    else if (data === 'topup:ton') {
+      if (!TON_ADDRESS) {
+        await bot.editMessageText(lang.t(chatId, 'topup_ton_not_configured'), {
+          chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: cancelToTopupKeyboard(chatId)
+        });
+      } else {
+        db.setPendingAction(chatId, { type: 'topup_ton_amount' });
+        await bot.editMessageText(
+          lang.t(chatId, 'ton_topup_prompt', { min: usd(MIN_TOPUP_TON_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_ton: teksEmoji('ton_prompt', '💎') }),
+          { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: cancelToTopupKeyboard(chatId) }
+        );
+      }
+    }
+
+    else if (data.startsWith('binance:cancel:')) {
+      const depositId = data.slice('binance:cancel:'.length);
+      const deposit = db.getDeposit(depositId);
+      // Fix: cegah user LAIN membatalkan deposit pending milik user lain.
+      if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
+        db.updateDeposit(depositId, { status: 'cancelled' });
+      }
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (err) {
+        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+      }
+      await bot.sendMessage(
+        chatId,
+        buildWelcomeText(chatId),
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) }
+      );
+      return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_topup_cancelled') }).catch(() => {});
+    }
+
+    else if (data === 'topup:binance') {
+      if (!BINANCE_API_KEY || !BINANCE_PAY_ID) {
+        await bot.editMessageText(lang.t(chatId, 'topup_binance_not_configured'), {
+          chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: cancelToTopupKeyboard(chatId)
+        });
+      } else {
+        db.setPendingAction(chatId, { type: 'topup_binance_amount' });
+        await bot.editMessageText(
+          lang.t(chatId, 'binance_topup_prompt', { min: usd(MIN_TOPUP_BINANCE_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_binance: teksEmoji('binance_prompt', '🟡') }),
+          { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: cancelToTopupKeyboard(chatId) }
+        );
+      }
+    }
+
+    // ---- Quick topup (tombol QRIS/USDT/TON di halaman Order Confirmation
+    // atau di pesan "saldo kurang") - beda dari topup:qris/usdt/ton biasa,
+    // ini SKIP layar pilih nominal - nominalnya sudah ditentukan di muka
+    // (dikirim di callback_data, dalam SEN) sesuai kekurangan saldo order
+    // yang lagi diproses, jadi user tidak perlu ngitung/ketik manual lagi.
+    else if (data.startsWith('qtopup:')) {
+      const [, method, centsStr] = data.split(':');
+      const amountUsd = Number(centsStr) / 100;
+      if (!amountUsd || isNaN(amountUsd) || amountUsd <= 0) {
+        return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'qris_invalid_amount') });
+      }
+
+      if (method === 'qris') {
+        if (!PAYKITA_API_KEY) {
+          return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'topup_qris_not_configured').replace(/[`*_]/g, ''), show_alert: true });
+        }
+        const minUsd = await getMinQrisUsd();
+        const finalAmount = Math.max(amountUsd, minUsd);
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_creating_qris') }).catch(() => {});
+        await startQrisTopup(chatId, finalAmount);
+      } else if (method === 'usdt') {
+        if (!USDT_BEP20_ADDRESS) {
+          return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'topup_usdt_not_configured').replace(/[`*_]/g, ''), show_alert: true });
+        }
+        const finalAmount = Math.max(amountUsd, MIN_TOPUP_USDT_AMOUNT);
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_creating_usdt_invoice') }).catch(() => {});
+        await startUsdtTopup(chatId, finalAmount);
+      } else if (method === 'ton') {
+        if (!TON_ADDRESS) {
+          return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'topup_ton_not_configured').replace(/[`*_]/g, ''), show_alert: true });
+        }
+        const finalAmount = Math.max(amountUsd, MIN_TOPUP_TON_AMOUNT);
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_creating_ton_invoice') }).catch(() => {});
+        await startTonTopup(chatId, finalAmount);
+      } else if (method === 'binance') {
+        if (!BINANCE_API_KEY || !BINANCE_PAY_ID) {
+          return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'topup_binance_not_configured').replace(/[`*_]/g, ''), show_alert: true });
+        }
+        const finalAmount = Math.max(amountUsd, MIN_TOPUP_BINANCE_AMOUNT);
+        await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'toast_creating_binance_invoice') }).catch(() => {});
+        await startBinanceTopup(chatId, finalAmount);
+      } else {
+        return bot.answerCallbackQuery(query.id).catch(() => {});
+      }
+      return;
+    }
+
+    else if (data === 'menu:history') {
+      db.clearPendingAction(chatId);
+      const orders = db.getOrdersByUser(chatId);
+      if (orders.length === 0) {
+        await bot.editMessageText(lang.t(chatId, 'orders_empty', { emoji_orders: teksEmoji('orders_empty', '🧾') }), {
+          chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back')]] }
+        });
+      } else {
+        const blocks = orders.slice(0, 5).map(o => {
+          const p = db.findProduct(o.productId);
+          const v = p ? p.variants.find(x => x.id === o.variantId) : null;
+          const name = p ? `${productEmojiHtml(p)} ${escapeHtml(p.name)}${v && v.label ? ' ' + escapeHtml(v.label) : ''}` : escapeHtml(o.productId);
+          const statusLabel = o.status === 'paid' ? 'success' : escapeHtml(o.status);
+          return (
+            `<b>${lang.t(chatId, 'order_id_label')}:</b> <code>${escapeHtml(o.id)}</code>\n` +
+            `<b>${lang.t(chatId, 'order_product_label')}:</b> ${name} (x${o.qty})\n` +
+            `<b>${lang.t(chatId, 'order_status_label')}:</b> ${statusLabel}`
+          );
+        }).join('\n\n');
+        await bot.editMessageText(`${lang.t(chatId, 'orders_title')}\n\n${blocks}`, {
+          chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_recover'), callback_data: 'orders:recover' }, 'recover'), 'primary')],
+              [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel'), callback_data: 'menu:main' }, 'cancel_recover'), 'danger')]
+            ]
+          }
+        });
+      }
+    }
+
+    else if (data === 'orders:recover') {
+      db.setPendingAction(chatId, { type: 'recover_order_id' });
+      await bot.editMessageText(
+        lang.t(chatId, 'recover_title'),
+        {
+          chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:history' }, 'back')]] }
+        }
+      );
+    }
+
+    else if (data === 'menu:profile') {
+      db.clearPendingAction(chatId);
+      await bot.editMessageText(profileText(chatId, query.from), {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: profileKeyboard(chatId)
+      });
+    }
+
+    else if (data === 'menu:howtouse') {
+      db.clearPendingAction(chatId);
+      await bot.editMessageText(
+        lang.t(chatId, 'howto_title', { emoji_howto: teksEmoji('howto_title', '❗️') }),
+        { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: howToListKeyboard(chatId) }
+      );
+    }
+
+    else if (data === 'howtouse:close') {
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (err) {
+        // pesan mungkin sudah kehapus, aman diabaikan
+      }
+      return bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    else if (data === 'menu:support') {
+      db.clearPendingAction(chatId);
+      const ownerId = ADMIN_IDS && ADMIN_IDS[0];
+      const supportVars = { emoji_support: teksEmoji('support_title', '📞') };
+      const text = ownerId ? lang.t(chatId, 'support_title', supportVars) : lang.t(chatId, 'support_title_noadmin', supportVars);
+      await bot.editMessageText(text, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: supportKeyboard(chatId)
+      });
+    }
+
+    else if (data === 'menu:referral') {
+      db.clearPendingAction(chatId);
+      await bot.editMessageText(referralText(chatId), {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: referralKeyboard(chatId)
+      });
+    }
+    else if (data === 'referral:copy') {
+      // Cabang ini SEKARANG cuma kepencet kalau BOT_USERNAME belum diisi
+      // (lihat referralKeyboard) - link referral belum valid untuk dibuat.
+      return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'referral_username_missing'), show_alert: true });
+    }
+
+    // ---- Product description page ----
+    else if (data.startsWith('desc:')) {
+      db.clearPendingAction(chatId);
+      const [, ref] = data.split(':');
+      const resolved = resolveProductRef(ref);
+      const product = resolved && db.findProduct(resolved.productId);
+      const variant = resolved && db.findVariant(resolved.productId, resolved.variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_not_found') });
+      const { productId, variantId } = resolved;
+
+      // Live-check stok Canboso di sini (sama pola seperti productListKeyboard()
+      // dan handler 'variant:') supaya warna tombol "Buy Now" di halaman ini
+      // juga segar, bukan cuma andalkan cache lama - getLiveStock() sendiri
+      // sudah di-cache 20 detik di supplierCanboso.js jadi aman dipanggil sini.
+      if (variant.canbosoProductId) {
+        try {
+          const live = await canboso.getLiveStock(variant.canbosoProductId);
+          if (live && !isNaN(live.stock)) {
+            db.setVariantStock(productId, variantId, live.stock);
+            variant.liveStock = live.stock;
+          }
+        } catch (err) {
+          console.error(`Canboso getLiveStock (desc) gagal (product_id=${variant.canbosoProductId}):`, err.message);
+        }
+      }
+
+      const header = `${productEmojiHtml(product)} <b>${escapeHtml(product.name)} - ${escapeHtml(variant.label)}</b>\n\n`;
+      const localizedDesc = await getLocalizedDescription(chatId, productId, variant);
+      const body = localizedDesc
+        ? `<blockquote>${renderDescription(localizedDesc)}</blockquote>`
+        : `<blockquote>${lang.t(chatId, 'desc_fallback', { price: usd(db.getBasePrice(variant), chatId), stock: stockLabel(variant) })}</blockquote>`;
+
+      await bot.editMessageText(header + body, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: descKeyboard(productId, variantId, chatId, product, variant)
+      });
+      // Catat halaman ini supaya scheduleProductListRepaint() ikut
+      // menyegarkan warna tombol "Buy Now"-nya juga selama buyer masih
+      // melihat halaman detail ini (lihat openProductDescMsg di atas).
+      openProductDescMsg.set(chatId, { messageId, productId, variantId });
+    }
+
+    // ---- How to use page, dipanggil dari pesan "ORDER BERHASIL" (cuma
+    // bawa orderId, lihat catatan di successKeyboard() soal kenapa) ----
+    else if (data.startsWith('howtoorder:')) {
+      db.clearPendingAction(chatId);
+      const orderId = data.slice('howtoorder:'.length);
+      const order = db.getOrderById(orderId);
+      // Sama seperti "backtoorder:" - order ini WAJIB milik chatId yang
+      // mencet, supaya orang lain tidak bisa baca how-to-use pakai orderId
+      // hasil tebak/curi dari user lain.
+      if (!order || order.chatId !== chatId) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'order_not_found') });
+      const product = db.findProduct(order.productId);
+      const variant = db.findVariant(order.productId, order.variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_not_found') });
+
+      const text = variant.howToUse
+        ? `${lang.t(chatId, 'howto_page_title', { product: `${productEmojiHtml(product)} ${escapeHtml(product.name)} ${escapeHtml(variant.label)}` })}\n\n${renderDescription(variant.howToUse)}`
+        : lang.t(chatId, 'howto_not_available');
+
+      await bot.editMessageText(text, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: howToKeyboard(order.productId, order.variantId, orderId, chatId)
+      });
+    }
+
+    // ---- How to use page ----
+    else if (data.startsWith('howto:')) {
+      db.clearPendingAction(chatId);
+      const [, ref, context] = data.split(':');
+      const resolved = resolveProductRef(ref);
+      const product = resolved && db.findProduct(resolved.productId);
+      const variant = resolved && db.findVariant(resolved.productId, resolved.variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_not_found') });
+      const { productId, variantId } = resolved;
+
+      const text = variant.howToUse
+        ? `${lang.t(chatId, 'howto_page_title', { product: `${productEmojiHtml(product)} ${escapeHtml(product.name)} ${escapeHtml(variant.label)}` })}\n\n${renderDescription(variant.howToUse)}`
+        : lang.t(chatId, 'howto_not_available');
+
+      await bot.editMessageText(text, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: howToKeyboard(productId, variantId, context, chatId)
+      });
+    }
+
+    // ---- Back dari "How to Use" ke pesan "ORDER BERHASIL" asal (bukan ke
+    // halaman deskripsi produk) - rebuild teksnya dari data order tersimpan.
+    else if (data.startsWith('backtoorder:')) {
+      const [, orderId] = data.split(':');
+      const order = db.getOrderById(orderId);
+      // PENTING - fix IDOR: order INI WAJIB milik chatId yang lagi mencet
+      // tombol, sama seperti pengecekan yang sudah ada di refresh2fa: dan
+      // refresh2fa:recover: di bawah. Tanpa cek ini, siapa pun yang bisa
+      // mengirim callback_query dengan data "backtoorder:<orderId>" milik
+      // order ID ORANG LAIN (mis. lewat client Telegram custom/modifikasi -
+      // callback_data TIDAK terikat kriptografis ke tombol aslinya, jadi
+      // tidak bisa dipercaya begitu saja) akan bisa membaca ulang detail
+      // akun/2FA hasil auto-delivery milik user lain lewat buildSuccessText().
+      if (!order || order.chatId !== chatId) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'order_not_found') });
+      const product = db.findProduct(order.productId);
+      const variant = db.findVariant(order.productId, order.variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_not_found') });
+
+      const successText = buildSuccessText(product, variant, order.qty, order.total, order.id, order.deliveredItems, chatId);
+      await bot.editMessageText(successText, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: successKeyboard(order.productId, order.variantId, order.id, order.deliveredItems, chatId)
+      });
+    }
+
+    // ---- Refresh kode 2FA (TOTP live) - dipakai di pesan "ORDER BERHASIL"
+    // (refresh2fa:<orderId>) maupun di pesan "Recover Product"
+    // (refresh2fa:recover:<orderId>). Kode TOTP berubah tiap 30 detik, jadi
+    // tombol ini cuma render ulang pesan yang sama - buildSuccessText /
+    // formatStockItem menghitung kode TOTP fresh tiap kali dipanggil.
+    else if (data.startsWith('refresh2fa:recover:')) {
+      const orderId = data.slice('refresh2fa:recover:'.length);
+      const order = db.getOrderById(orderId);
+      if (!order || order.chatId !== chatId) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'order_not_found') });
+      if (!order.delivered || !order.deliveredItems || !order.deliveredItems.length) {
+        return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'recover_item_not_recoverable') });
+      }
+      const product = db.findProduct(order.productId);
+      const variant = product ? product.variants.find(v => v.id === order.variantId) : null;
+      const label = product ? `${product.name}${variant && variant.label ? ' - ' + variant.label : ''}` : order.productId;
+      const text =
+        `🏅 <b>${lang.t(chatId, 'recover_result_title')}</b>\n\n📦 ${escapeHtml(label)} (x${order.qty})\n\n` +
+        order.deliveredItems.map((item, i) => formatStockItem(item, i, chatId)).join('\n\n');
+      await bot.editMessageText(text, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: hasLiveTotpSecret(order.deliveredItems)
+          ? { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_refresh_2fa'), callback_data: `refresh2fa:recover:${orderId}` }, 'refresh_2fa')]] }
+          : undefined
+      }).catch(() => {});
+      return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'totp_refreshed') }).catch(() => {});
+    }
+
+    else if (data.startsWith('refresh2fa:')) {
+      const [, orderId] = data.split(':');
+      const order = db.getOrderById(orderId);
+      if (!order || order.chatId !== chatId) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'order_not_found') });
+      const product = db.findProduct(order.productId);
+      const variant = db.findVariant(order.productId, order.variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_not_found') });
+
+      const successText = buildSuccessText(product, variant, order.qty, order.total, order.id, order.deliveredItems, chatId);
+      await bot.editMessageText(successText, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: successKeyboard(order.productId, order.variantId, order.id, order.deliveredItems, chatId)
+      }).catch(() => {});
+      return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'totp_refreshed') }).catch(() => {});
+    }
+
+    // ---- Variant detail -> pilih jumlah ----
+    else if (data.startsWith('variant:')) {
+      const [, ref] = data.split(':');
+      const resolved = resolveProductRef(ref);
+      const product = resolved && db.findProduct(resolved.productId);
+      const variant = resolved && db.findVariant(resolved.productId, resolved.variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'variant_not_found') });
+      const { productId, variantId } = resolved;
+      // Sekarang berlaku juga untuk varian Supplier API - variant.stock-nya
+      // sudah disinkron otomatis dari stok live Supplier (lihat
+      // refreshSupplierData()), jadi aman dipakai buat cek awal ini juga.
+      // (placeOrder() di handler 'confirm:' tetap jadi validasi FINAL.)
+      // ===== LIVE STOCK CHECK khusus varian Canboso API =====
+      // Berbeda dari Supplier API (auto-sync terjadwal), varian Canboso
+      // dicek LANGSUNG ke API tiap buyer buka halaman ini (di-cache 20
+      // detik di supplierCanboso.js supaya tidak spam API kalau banyak
+      // buyer buka produk yang sama nyaris bersamaan) - sekalian
+      // menyimpan angkanya ke variant.stock lokal supaya tampilan stok
+      // (stockLabel di bawah) & menu admin ikut ter-update. Kalau fetch-nya
+      // GAGAL (network/API down) atau produk sudah tidak ada di Canboso
+      // (getLiveStock return null), JANGAN block buyer di sini - biarkan
+      // canboso.purchase() di handler 'confirm:' jadi validasi FINAL,
+      // supaya gangguan sesaat ke API Canboso tidak bikin toko kelihatan
+      // "habis" padahal cuma gagal cek.
+      // ===== BUG FIX: variant.stock DIPAKAI BERSAMA oleh stok manual
+      // (stockItems.length, lihat db.addStockItems) DAN stok live remote
+      // (Supplier/Canboso, lewat db.setVariantStock dari sync terjadwal) -
+      // dua sumber ini saling timpa field yang SAMA. Kalau varian ini
+      // PERNAH dihubungkan ke Supplier/Canboso API tapi admin JUGA sudah
+      // isi stok manual, sync live berikutnya bisa nimpa variant.stock jadi
+      // 0/kosong (kalau saldo/stok di sisi API luar habis) padahal stok
+      // manual lokal masih ada dan siap kirim - buyer jadi salah kena
+      // "habis stok" walau sebenarnya bisa dilayani dari stok manual.
+      // Cek stok manual DULU di sini supaya itu tidak pernah memblokir
+      // buyer selama stok manual masih tersedia (lihat prioritas yang sama
+      // di handler 'confirm:' - localStockAvailable).
+      // ===== PATCH: variant.liveStock (bukan lagi variant.stock) yang
+      // dipakai buat simpan angka live Supplier/Canboso - lihat
+      // db.setVariantStock() untuk kronologi kenapa dipisah.
+      const localCountForGate = db.getStockItemCount(productId, variantId);
+      if (variant.canbosoProductId) {
+        try {
+          const live = await canboso.getLiveStock(variant.canbosoProductId);
+          if (live && !isNaN(live.stock)) {
+            db.setVariantStock(productId, variantId, live.stock);
+            variant.liveStock = live.stock;
+            if (live.stock <= 0 && localCountForGate <= 0) {
+              return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'out_of_stock'), show_alert: true });
+            }
+          } else if (live) {
+            // Produk ketemu tapi field stok-nya gagal diparse (NaN) - beda
+            // dari "tidak ketemu sama sekali" di bawah, ini kasus paling
+            // sering bikin stok lokal basi/salah, alert admin.
+            alertCanbosoStockIssue(variant, `product ditemukan tapi field stok tidak dikenali (field tersedia: ${describeRawFields(live.raw)})`);
+          } else {
+            alertCanbosoStockIssue(variant, 'product_id sudah tidak ditemukan di daftar produk Canboso');
+          }
+        } catch (err) {
+          console.error(`Canboso getLiveStock gagal (product_id=${variant.canbosoProductId}):`, err.message);
+          alertCanbosoStockIssue(variant, `gagal fetch dari API Canboso: ${err.message}`);
+        }
+      } else if (db.getTotalStock(variant) <= 0) {
+        return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'out_of_stock'), show_alert: true });
+      }
+      db.clearPendingAction(chatId);
+      await bot.editMessageText(
+        lang.t(chatId, 'enter_qty_title', {
+          product: `${productEmojiHtml(product)} <b>${escapeHtml(product.name)} - ${escapeHtml(variant.label)}</b>`,
+          tiers: tiersText(variant, chatId),
+          stock: stockLabel(variant),
+          emoji_warning: teksEmoji('qty_warning', '⚠️'),
+          emoji_stock: teksEmoji('qty_stock', '📦')
+        }),
+        { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: quantityKeyboard(productId, variantId, chatId) }
+      );
+    }
+
+    // ---- Quick quantity picked ----
+    else if (data.startsWith('qtycustom:')) {
+      const [, ref] = data.split(':');
+      const resolved = resolveProductRef(ref);
+      if (!resolved) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'variant_not_found') });
+      const { productId, variantId } = resolved;
+      db.setPendingAction(chatId, { type: 'custom_qty', data: { productId, variantId } });
+      await bot.sendMessage(chatId, lang.t(chatId, 'ask_custom_qty'));
+      return bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    else if (data.startsWith('qty:')) {
+      const [, ref, qtyStr] = data.split(':');
+      const resolved = resolveProductRef(ref);
+      if (!resolved) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'variant_not_found') });
+      await showOrderConfirmation(chatId, messageId, resolved.productId, resolved.variantId, parseInt(qtyStr, 10));
+    }
+
+    // ---- Confirm purchase (Place Order) ----
+    else if (data.startsWith('confirm:')) {
+      // Cegah double-tap/duplikat callback memicu 2 order berjalan
+      // bersamaan buat chatId yang sama - lihat catatan di deklarasi
+      // pendingOrderConfirms di atas.
+      if (pendingOrderConfirms.has(chatId)) {
+        return bot.answerCallbackQuery(query.id, { text: '⏳ Order sebelumnya masih diproses, tunggu sebentar...', show_alert: true }).catch(() => {});
+      }
+      pendingOrderConfirms.add(chatId);
+      try {
+      const [, ref, qtyStr] = data.split(':');
+      const qty = parseInt(qtyStr, 10);
+      // ===== BUG FIX (SECURITY): validasi qty WAJIB integer positif =====
+      // callback_data TIDAK bisa dipercaya mentah-mentah (sama seperti catatan
+      // IDOR di "backtoorder:"/"refresh2fa:" di atas) - client Telegram custom
+      // / userbot bisa memicu callback_query dengan data APAPUN, termasuk
+      // "confirm:<ref>:-5". Tanpa guard ini, qty negatif lolos cek
+      // "qty > variant.stock" (selalu false untuk angka negatif), bikin
+      // `total` ikut negatif, bikin cek "user.balance < total" ikut lolos
+      // walau saldo $0, lalu db.updateBalance(chatId, -total) JUSTRU
+      // MENAMBAH saldo user tanpa bayar sepeser pun (exploit saldo gratis).
+      // qty juga tidak boleh 0 (order kosong, $0, tapi tetap tercatat sukses).
+      if (!Number.isInteger(qty) || qty <= 0) {
+        return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'invalid_qty'), show_alert: true });
+      }
+      const resolved = resolveProductRef(ref);
+      const product = resolved && db.findProduct(resolved.productId);
+      const variant = resolved && db.findVariant(resolved.productId, resolved.variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_variant_not_found') });
+      const { productId, variantId } = resolved;
+
+      // Varian Supplier API sekarang IKUT dicek terhadap variant.stock lokal
+      // juga - dulu dilewati sama sekali dengan alasan "ketersediaan asli
+      // dicek live lewat placeOrder() di bawah", TAPI sejak variant.stock
+      // varian Supplier API disinkron otomatis (saat link pertama kali &
+      // tiap SUPPLIER_SYNC_INTERVAL_MINUTES, lihat refreshSupplierData()),
+      // angka ini sudah cukup akurat untuk dipakai cek awal. Manfaatnya:
+      // buyer langsung dapat pesan "stok tidak cukup" TANPA perlu nunggu
+      // panggilan API ke Supplier dulu (yang baru gagal setelah beberapa
+      // detik). Catatan: kalau auto-sync mati (SUPPLIER_SYNC_INTERVAL_MINUTES=0)
+      // dan admin lama tidak klik refresh manual, angka ini bisa basi -
+      // placeOrder() di Supplier tetap jadi sumber kebenaran FINAL, cek ini
+      // cuma penyaring awal supaya UX lebih cepat, bukan pengganti validasi itu.
+      // KHUSUS varian Canboso API: cek stok LIVE ulang di sini (bukan cuma
+      // andalkan snapshot dari saat buyer buka halaman 'variant:' - bisa
+      // saja beda buyer lain sudah menghabiskan stok di antara waktu itu).
+      // Pakai cache 20 detik yang sama (lihat getProductsCached() di
+      // supplierCanboso.js) jadi tidak nambah beban API dibanding cek di
+      // 'variant:' kalau buyer confirm dalam <20 detik. Kalau fetch GAGAL,
+      // `liveStockChecked` tetap false - qty TIDAK divalidasi terhadap
+      // variant.stock lokal (yang bisa saja basi/0 dari sync sebelumnya),
+      // dan canboso.purchase() di bawah jadi validasi FINAL satu-satunya.
+      let liveStockChecked = false;
+      if (variant.canbosoProductId) {
+        try {
+          const live = await canboso.getLiveStock(variant.canbosoProductId);
+          if (live && !isNaN(live.stock)) {
+            db.setVariantStock(productId, variantId, live.stock);
+            variant.liveStock = live.stock;
+            liveStockChecked = true;
+          }
+        } catch (err) {
+          console.error(`Canboso getLiveStock (confirm) gagal (product_id=${variant.canbosoProductId}):`, err.message);
+        }
+      }
+      // ===== BUG FIX: sama seperti di handler 'variant:' - jangan pernah
+      // block pakai angka live doang selama stok manual lokal (stockItems)
+      // masih cukup untuk qty ini.
+      // ===== PATCH: variant.liveStock & variant.stock (manual) sekarang
+      // field terpisah dan DIJUMLAH lewat db.getTotalStock() - bukan lagi
+      // Math.max(variant.stock, localCountForConfirmGate) yang cuma ambil
+      // salah satu angka terbesar (padahal keduanya idealnya bisa dipakai
+      // barengan untuk menutupi qty yang sama).
+      const totalAvailable = db.getTotalStock(variant);
+      const shouldCheckStock = !variant.canbosoProductId || liveStockChecked;
+      if (shouldCheckStock && qty > totalAvailable) {
+        return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'not_enough_stock', { stock: totalAvailable }), show_alert: true });
+      }
+
+      const unitPrice = db.getUnitPriceForQty(variant, qty);
+      // ===== BUG FIX: bulatkan total ke 2 desimal =====
+      // unitPrice * qty rawan floating-point drift (mis. 0.52 * 11 =
+      // 5.720000000000001). usd() cuma membulatkan untuk TAMPILAN, tapi
+      // db.updateBalance()/createOrder() menyimpan angka mentahnya - lama-
+      // lama saldo user "meleset" dari yang ditampilkan, bisa bikin
+      // pembelian ditolak ("saldo tidak cukup") padahal secara tampilan
+      // saldonya pas cukup.
+      const total = Math.round(unitPrice * qty * 100) / 100;
+      const user = db.getUser(chatId, query.from.username);
+      if (user.balance < total) {
+        // Selain toast alert singkat, kirim juga pesan actionable dengan
+        // tombol quick-topup (QRIS/USDT/TON) sejumlah PERSIS kekurangan
+        // saldonya - user bisa langsung bayar tanpa keluar dulu ke menu
+        // Wallet lalu balik lagi cari produknya.
+        const shortfall = total - user.balance;
+        bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'insufficient_balance'), show_alert: true }).catch(() => {});
+        return bot.sendMessage(chatId,
+          `${teksEmoji('insufficient_balance_warn', '⚠️')} ${lang.t(chatId, 'insufficient_balance')}\n\n${teksEmoji('insufficient_balance_shortfall', '💰')} ${lang.t(chatId, 'insufficient_balance_shortfall_label')}: <b>${usd(shortfall, chatId)}</b>\n\n${lang.t(chatId, 'insufficient_balance_cta')}`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: quickTopupButtonsRow(shortfall) } }
+        );
+      }
+
+      let deliveredItems = null;
+      let supplierMeta = null;
+      let deliverySource = 'manual'; // 'manual' | 'local_auto' | 'supplier_api'
+      // Simpan response MENTAH dari Canboso (kalau lewat jalur itu) - dipakai
+      // KHUSUS untuk ditempelkan ke notifikasi admin kalau ekstraksi
+      // items/orderId di purchase() ternyata meleset (lihat adminNote di
+      // bawah). Tanpa ini, admin cuma dikasih tahu "GAGAL mengekstrak" tanpa
+      // ada petunjuk field APA yang sebenarnya dipakai Canboso, jadi tidak
+      // ada yang bisa dicek untuk perbaiki pemetaan field di
+      // supplierCanboso.js - harus nebak terus tiap kali beda kasus.
+      let canbosoRawResult = null;
+
+      // ===== BUG FIX: prioritaskan stok manual lokal (yang diisi admin lewat
+      // "➕ Tambah Stock") DI ATAS Supplier API / Canboso API, kalau stoknya
+      // sudah cukup untuk qty ini. Sebelum fix ini, varian yang PERNAH
+      // dihubungkan ke Supplier API (`variant.supplierServiceId` /
+      // `variant.canbosoProductId` masih terisi) SELALU coba order ke API
+      // luar dulu - walau admin sudah menambahkan link/kode manual ke
+      // stockItems lokal - dan kalau API luar itu gagal (mis. saldo wallet
+      // toko di sisi Supplier habis), order langsung dibatalkan otomatis
+      // walau sebenarnya ada stok manual yang siap dikirim. Sekarang: kalau
+      // stok lokal cukup, pakai itu (deliverySource = 'local_auto') dan
+      // SAMA SEKALI tidak memanggil API luar untuk order ini.
+      const localStockAvailable = db.getStockItemCount(productId, variantId);
+      const useLocalStock = localStockAvailable >= qty;
+
+      if (useLocalStock) {
+        db.updateBalance(chatId, -total);
+        try {
+          deliveredItems = db.popStockItems(productId, variantId, qty);
+        } catch (e) {
+          logError('popStockItems', e);
+          deliveredItems = null;
+        }
+        if (deliveredItems) {
+          deliverySource = 'local_auto';
+        } else {
+          db.decrementStock(productId, variantId, qty);
+        }
+      } else if (variant.supplierServiceId || variant.canbosoProductId) {
+        // ===== PATCH: partial fulfillment gabungan lokal + Supplier/Canboso.
+        // Dulu begitu stok lokal < qty, sistem full ke API luar untuk SELURUH
+        // qty (all-or-nothing) - walau sebagian qty-nya sebenarnya bisa
+        // dipenuhi dari stockItems lokal. Sekarang: ambil dulu SEMUA yang ada
+        // di lokal (localStockAvailable, walau kurang dari qty), baru sisanya
+        // (remainderQty) yang dipesan otomatis ke API luar untuk menutupi
+        // kekurangannya - bukan qty penuh lagi.
+        let localPortion = [];
+        if (localStockAvailable > 0) {
+          try {
+            localPortion = db.popStockItems(productId, variantId, localStockAvailable) || [];
+          } catch (e) {
+            logError('popStockItems_partial', e);
+            localPortion = [];
+          }
+        }
+        const remainderQty = qty - localPortion.length;
+        const hasLocalPortion = localPortion.length > 0;
+
+        if (variant.supplierServiceId) {
+          // Panggil Supplier API DULU, SEBELUM saldo lokal dipotong - kalau
+          // order API gagal (network/timeout, saldo toko di Supplier habis,
+          // atau stok remote-nya kosong), saldo user WAJIB tetap utuh dan
+          // TIDAK ada order "hantu" yang tercatat tanpa produk beneran
+          // terkirim. Kalau tadi sempat ambil localPortion, KEMBALIKAN dulu
+          // ke stockItems (db.restoreStockItems) sebelum return - supaya
+          // item lokal itu tidak hilang percuma walau order-nya dibatalkan.
+          try {
+            const result = await supplier.placeOrder(variant.supplierServiceId, remainderQty);
+            const supplierItems = Array.isArray(result.products) ? result.products : [];
+            deliveredItems = [...localPortion, ...supplierItems];
+            supplierMeta = { supplierServiceId: variant.supplierServiceId, supplierOrderId: result.order_id || null };
+            deliverySource = hasLocalPortion ? 'mixed_supplier' : 'supplier_api';
+          } catch (err) {
+            if (hasLocalPortion) db.restoreStockItems(productId, variantId, localPortion);
+            console.error(`Supplier API order gagal (service_id=${variant.supplierServiceId}, qty=${remainderQty}):`, err.message);
+            const buyerMsgKey = isSupplierBalanceError(err.message) ? 'supplier_balance_empty' : 'supplier_order_failed';
+            bot.answerCallbackQuery(query.id, { text: lang.t(chatId, buyerMsgKey), show_alert: true }).catch(() => {});
+            notifyAdmins(
+              `⚠️ <b>Order via Supplier API gagal</b>\n\n` +
+              `User: ${query.from.username ? '@' + escapeHtml(query.from.username) : `ID ${chatId}`} (${chatId})\n` +
+              `Produk: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
+              `Jumlah: ${qty}${hasLocalPortion ? ` (${localPortion.length} dari stok lokal, sisa ${remainderQty} coba dipesan ke Supplier)` : ''}\n` +
+              `Service ID: <code>${escapeHtml(variant.supplierServiceId)}</code>\n` +
+              `Error: ${escapeHtml(err.message)}\n\n` +
+              `ℹ️ Saldo user BELUM dipotong (order dibatalkan otomatis, stok lokal yang sempat dipakai sudah dikembalikan).`
+            );
+            return;
+          }
+          db.updateBalance(chatId, -total);
+        } else {
+          // canbosoProductId - sama seperti blok Supplier API (AIVerse Hub)
+          // di atas: panggil API Canboso DULU, SEBELUM saldo lokal user
+          // dipotong, dan kembalikan localPortion kalau gagal.
+          try {
+            const result = await canboso.purchase(variant.canbosoProductId, remainderQty);
+            const supplierItems = result.items.length ? result.items : [];
+            deliveredItems = [...localPortion, ...supplierItems];
+            supplierMeta = { supplierServiceId: `canboso:${variant.canbosoProductId}`, supplierOrderId: result.orderId };
+            canbosoRawResult = result.raw;
+            // Simpan potongan raw response ke supplierMeta (ikut tersimpan
+            // permanen di data/db.json lewat db.createOrder di bawah) KHUSUS
+            // kalau ekstraksi item gagal - supaya raw response tidak hilang
+            // kalau notifikasi Telegram ke admin kebetulan gagal terkirim/
+            // terlewat; masih bisa dicek belakangan lewat "🔍 Cek Order ID".
+            if (supplierItems.length === 0) {
+              supplierMeta.rawDebug = JSON.stringify(result.raw).slice(0, 1000);
+            }
+            deliverySource = hasLocalPortion ? 'mixed_canboso' : 'canboso_api';
+          } catch (err) {
+            if (hasLocalPortion) db.restoreStockItems(productId, variantId, localPortion);
+            console.error(`Canboso API order gagal (product_id=${variant.canbosoProductId}, qty=${remainderQty}):`, err.message);
+            const buyerMsgKey = isSupplierBalanceError(err.message) ? 'supplier_balance_empty' : 'supplier_order_failed';
+            bot.answerCallbackQuery(query.id, { text: lang.t(chatId, buyerMsgKey), show_alert: true }).catch(() => {});
+            notifyAdmins(
+              `⚠️ <b>Order via Canboso API gagal</b>\n\n` +
+              `User: ${query.from.username ? '@' + escapeHtml(query.from.username) : `ID ${chatId}`} (${chatId})\n` +
+              `Produk: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
+              `Jumlah: ${qty}${hasLocalPortion ? ` (${localPortion.length} dari stok lokal, sisa ${remainderQty} coba dipesan ke Canboso)` : ''}\n` +
+              `Product ID: <code>${escapeHtml(String(variant.canbosoProductId))}</code>\n` +
+              `Error: ${escapeHtml(err.message)}\n\n` +
+              `ℹ️ Saldo user BELUM dipotong (order dibatalkan otomatis, stok lokal yang sempat dipakai sudah dikembalikan).`
+            );
+            return;
+          }
+          db.updateBalance(chatId, -total);
+        }
+      } else {
+        // Tidak ada stok manual lokal yang cukup, dan varian ini juga tidak
+        // terhubung ke Supplier API / Canboso API - fallback ke alur manual
+        // lama (admin kirim akun/detail sendiri ke buyer).
+        db.updateBalance(chatId, -total);
+        db.decrementStock(productId, variantId, qty);
+      }
+
+      const orderId = db.createOrder(chatId, productId, variantId, qty, unitPrice, total, deliveredItems, query.from.username, supplierMeta);
+      const successText = buildSuccessText(product, variant, qty, total, orderId, deliveredItems, chatId);
+
+      // Notifikasi Channel Otomatis: "🎉 New Purchase!" (kalau fitur aktif -
+      // lihat sendChannelNotif()). Dipanggil di sini (bukan nunggu editMessageText
+      // di bawah) supaya tetap terkirim ke channel meski edit/send ke buyer gagal.
+      sendChannelNotif('purchase', buildChannelPurchaseText(chatId, product, variant, qty, total), product);
+
+      await bot.editMessageText(successText, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+        reply_markup: successKeyboard(productId, variantId, orderId, deliveredItems, chatId)
+      }).catch(async (e) => {
+        logError('editMessageText_success', e);
+        // Fallback kalau edit gagal (mis. pesan asal sudah terlalu lama) - tetap kirim, jangan sampai user tidak dapat produknya.
+        await bot.sendMessage(chatId, successText, { parse_mode: 'HTML', reply_markup: successKeyboard(productId, variantId, orderId, deliveredItems, chatId) }).catch(() => {});
+      });
+
+      // Notify all admins
+      // PENTING: pakai HTML + escapeHtml() di sini, BUKAN Markdown mentah -
+      // username Telegram bebas mengandung underscore ("_") dan nama produk/
+      // varian bebas diketik admin (bisa mengandung *, _, `, [ dsb). Kalau
+      // dikirim mentah ke parse_mode 'Markdown', 1 underscore/simbol yang
+      // tidak berpasangan bikin Telegram menolak pesan ("can't parse
+      // entities") - dan karena ada .catch(() => {}) di bawah, kegagalan itu
+      // DIAM-DIAM tidak kelihatan, admin jadi tidak pernah tahu ada order
+      // baru masuk (fatal khusus untuk produk non-auto-delivery yang butuh
+      // admin kirim manual). Pola escapeHtml() ini sudah dipakai konsisten
+      // di formatDeliveryLogEntry()/buildSuccessText() - disamakan di sini.
+      const username = query.from.username ? '@' + escapeHtml(query.from.username) : `ID ${chatId}`;
+      // ===== BUG FIX: adminNote SEBELUMNYA cuma ngecek `deliverySource`
+      // (nama sumbernya), BUKAN apakah `deliveredItems` beneran ada isinya.
+      // Kasus nyata yang kena: canboso.purchase()/supplier.placeOrder()
+      // SUKSES (tidak throw, artinya saldo/stok di sisi API luar SUDAH
+      // kepotong), tapi hasil ekstraksi item-nya kosong (mis. nama field
+      // respons API buat "kode/link/akun" ternyata beda dari yang ditebak
+      // di purchase() - persis pola bug field-stok yang sudah diperbaiki
+      // sebelumnya, tapi ini versi untuk KONTEN produknya, jauh lebih fatal).
+      // Sebelum fix ini: buyer sudah bayar & lihat pesan "akan dikirim
+      // manual" (lihat buildSuccessText di atas, itu sudah benar), TAPI
+      // admin malah dikasih tahu "Tidak perlu tindakan lagi" - jadi TIDAK
+      // ADA YANG SADAR order ini nyangkut, buyer bisa nunggu selamanya
+      // tanpa produk padahal saldo mereka & saldo API luar sudah sama-sama
+      // terpotong. Sekarang dicek isi aktualnya, bukan cuma nama sumbernya,
+      // dan untuk kasus API luar yang kosong dikasih flag KHUSUS (⚠️ high
+      // priority + Order ID di sisi API luar) supaya admin bisa cek manual
+      // & kirim produknya sendiri.
+      const gotAutoItems = deliveredItems && deliveredItems.length > 0;
+      // ===== BUG FIX: deteksi hasil PARSIAL dari API luar (Supplier/Canboso)
+      // - beda dari kasus "kosong total" di atas. Ini kejadian kalau API
+      // luar sukses tapi cuma balikin SEBAGIAN item dari qty yang diminta
+      // (mis. buyer beli 5, API cuma sanggup kirim 3 - entah karena stok
+      // remote-nya sebenarnya kurang dari yang ditampilkan atau alasan lain
+      // di sisi mereka). Buyer TETAP dicharge `total` penuh (dihitung dari
+      // qty yang diminta, bukan qty yang benar-benar terkirim - lihat
+      // perhitungan `total` di atas SEBELUM API dipanggil), padahal cuma
+      // dapat sebagian barang. Sebelum fix ini, admin tidak pernah diberi
+      // tahu ada selisih ini sama sekali (dianggap "Tidak perlu tindakan
+      // lagi" selama array items TIDAK kosong).
+      const isPartialFulfillment = gotAutoItems
+        && (deliverySource === 'supplier_api' || deliverySource === 'canboso_api' || deliverySource === 'mixed_supplier' || deliverySource === 'mixed_canboso')
+        && deliveredItems.length < qty;
+      let adminNote;
+      if (deliverySource === 'mixed_supplier' || deliverySource === 'mixed_canboso') {
+        // ===== PATCH: partial fulfillment gabungan - sebagian qty dari stok
+        // manual lokal (stockItems), sisanya baru dipesan otomatis ke
+        // Supplier/Canboso. Beda dari isPartialFulfillment di bawah (yang
+        // artinya API-nya sendiri cuma balikin sebagian dari yang DIMINTA
+        // ke mereka) - di sini totalnya BISA SAJA pas qty, cuma sumbernya
+        // campuran, jadi tetap perlu diberi tahu ke admin untuk transparansi
+        // (mis. kalau butuh cek dua tempat berbeda untuk audit/komplain).
+        const apiLabel = deliverySource === 'mixed_supplier' ? 'Supplier' : 'Canboso';
+        adminNote = isPartialFulfillment
+          ? `⚠️ <b>PERLU TINDAKAN (parsial)</b>: buyer beli ${qty}, dipenuhi dari stok lokal + ${apiLabel} tapi total yang terkirim cuma ${deliveredItems.length} (buyer tetap dicharge penuh sesuai ${qty}). Order ID ${apiLabel}: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek & lengkapi kekurangannya manual, atau refund selisihnya ke buyer.`
+          : `✅ Auto-delivered (campuran: sebagian dari stok lokal, sisanya via ${apiLabel} API). Tidak perlu tindakan lagi.`;
+      } else if (deliverySource === 'supplier_api') {
+        adminNote = !gotAutoItems
+          ? `⚠️ <b>PERLU TINDAKAN</b>: order Supplier API SUKSES (saldo toko di Supplier sudah terpotong) tapi bot GAGAL mengekstrak produk yang dikirim balik (kemungkinan skema respons API berubah). Order ID Supplier: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek dashboard Supplier lalu kirim manual ke buyer.`
+          : isPartialFulfillment
+          ? `⚠️ <b>PERLU TINDAKAN (parsial)</b>: buyer beli ${qty}, API Supplier cuma balikin ${deliveredItems.length} item (buyer tetap dicharge penuh sesuai ${qty}). Order ID Supplier: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek & lengkapi kekurangannya manual, atau refund selisihnya ke buyer.`
+          : `Auto-delivered via Supplier API (service_id: <code>${escapeHtml(variant.supplierServiceId)}</code>). Tidak perlu tindakan lagi.`;
+      } else if (deliverySource === 'canboso_api') {
+        // ===== BUG FIX (lanjutan): kalau ekstraksi gagal (!gotAutoItems),
+        // tempelkan potongan raw JSON response Canboso langsung di notifikasi
+        // ini (bukan cuma "kemungkinan skema respons berbeda") - supaya admin
+        // (atau developer yang diteruskan pesan ini) bisa LANGSUNG lihat nama
+        // field asli yang dipakai Canboso untuk order_id/items, tanpa perlu
+        // buka dashboard atau tools debug terpisah. Dibatasi ~600 karakter
+        // biar tidak kepanjangan di notifikasi Telegram, dan di-escape HTML
+        // karena isinya JSON mentah dari luar (bisa mengandung < > &).
+        const rawPreview = canbosoRawResult
+          ? escapeHtml(JSON.stringify(canbosoRawResult).slice(0, 600))
+          : '(tidak ada data raw)';
+        adminNote = !gotAutoItems
+          ? `⚠️ <b>PERLU TINDAKAN</b>: order Canboso API SUKSES (saldo wallet Canboso sudah terpotong) tapi bot GAGAL mengekstrak produk yang dikirim balik (kemungkinan skema respons API berbeda dari dugaan). Order ID Canboso: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek dashboard supplier lalu kirim manual ke buyer.\n\n🐞 <b>Raw response Canboso</b> (kirim ini ke developer supaya field mapping-nya bisa diperbaiki):\n<code>${rawPreview}</code>`
+          : isPartialFulfillment
+          ? `⚠️ <b>PERLU TINDAKAN (parsial)</b>: buyer beli ${qty}, API Canboso cuma balikin ${deliveredItems.length} item (buyer tetap dicharge penuh sesuai ${qty}). Order ID Canboso: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek & lengkapi kekurangannya manual, atau refund selisihnya ke buyer.`
+          : `Auto-delivered via Canboso API (product_id: <code>${escapeHtml(String(variant.canbosoProductId))}</code>). Tidak perlu tindakan lagi.`;
+      } else if (deliverySource === 'local_auto') {
+        adminNote = `✅ Auto-delivered (${deliveredItems.length} item terkirim otomatis). Tidak perlu tindakan lagi.`;
+      } else {
+        adminNote = `📦 Silakan kirim akun/detail ke user secara manual.`;
+      }
+      notifyAdmins(
+        `🛎️ <b>Order Baru</b>\n\nUser: ${username} (${chatId})\nProduk: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\nJumlah: ${qty}\nTotal: ${usd(total)}\nOrder ID: <code>${escapeHtml(orderId)}</code>\n\n${adminNote}`
+      );
+      } finally {
+        pendingOrderConfirms.delete(chatId);
+      }
+    }
+
+    bot.answerCallbackQuery(query.id).catch(() => {});
+  } catch (err) {
+    logError('callback_query', err);
+    bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'generic_error') }).catch(() => {});
+  }
+});
+
+// ================= TEXT MESSAGES (pending actions) =================
+
+// Daftar SEMUA pending-action type yang cuma boleh dieksekusi ADMIN (dientri
+// lewat alur /admin, yang sudah digerbangi isAdmin() di satu titik di
+// bot.on('callback_query', ...) - lihat guard `data.startsWith('admin:')`).
+// Handler bot.on('message', ...) di bawah SEHARUSNYA memang cuma menerima
+// pending tipe ini kalau chatId-nya admin (karena cuma kode admin-gated yang
+// pernah manggil db.setPendingAction() dengan tipe-tipe ini). Tapi guard di
+// bawah ini sengaja ditambah sebagai LAPIS PERTAHANAN REDUNDAN, supaya kalau
+// suatu saat ada bug/typo di kode admin (fitur baru, refactor, dll) yang
+// lupa naruh setPendingAction() di dalam blok admin-gated, tetap ada 1
+// penghalang terakhir sebelum step sensitif (ubah saldo user, broadcast ke
+// semua user, ubah produk/setting toko, dll) sempat dieksekusi oleh chatId
+// yang BUKAN admin - tidak cuma mengandalkan asumsi "tipe ini pasti aman".
+const ADMIN_ONLY_PENDING_TYPES = new Set([
+  'set_emoji_id',
+  'forcejoin_add_link', 'forcejoin_add_ref',
+  'channelnotif_setchannel',
+  'addproduct_name', 'addproduct_price', 'addproduct_desc',
+  'addvariant_label', 'addvariant_price', 'addvariant_stock', 'addvariant_desc',
+  'setprice_amount', 'setdesc_text', 'sethowto_text', 'setlogo_url', 'setemoji_capture', 'addstock_items', 'addstock_manual_qty',
+  'set_tier_markup',
+  'supplier_orderid_lookup',
+  'checkorder_id',
+  'addbalance_user', 'addbalance_amount',
+  'backup_interval', 'backup_groupid',
+  'broadcast_content',
+  'maintenance_message',
+  'listusers_search_id'
+]);
+
+// Helper bersama: validasi username/ID Telegram tujuan SEBELUM lanjut ke
+// halaman konfirmasi - dipakai fitur Buy Stars, Buy Gift, Confess Gift, DAN
+// Jual Gift Koleksi (semuanya kirim ke username/ID Telegram, jadi 1 fungsi
+// aja, tidak diduplikasi per fitur). Kirim pesan "🔎 Mengecek..." dulu (nanti
+// dihapus lagi), lalu cek ke Telegram lewat checkTargetExists() (userbot.js).
+//
+// Return targetInfo { id, username, firstName, lastName, isBot } kalau
+// target ketemu & valid (bukan bot). Return null kalau tidak ketemu / target
+// ternyata akun bot - dalam kasus ini fungsi ini SUDAH otomatis kirim pesan
+// error yang sesuai ke user, jadi caller tinggal `if (!targetInfo) return;`
+// tanpa perlu kirim pesan tambahan lagi.
+async function verifyTelegramTarget(chatId, target) {
+  const checkingMsg = await bot.sendMessage(
+    chatId, `🔎 Mengecek <code>${escapeHtml(target)}</code> di Telegram...`, { parse_mode: 'HTML' }
+  );
+  let targetInfo;
+  try {
+    targetInfo = await userbot.checkTargetExists(target);
+  } catch (err) {
+    await bot.deleteMessage(chatId, checkingMsg.message_id).catch(() => {});
+    logError('verifyTelegramTarget', err);
+    await bot.sendMessage(chatId,
+      `❌ Username/ID <code>${escapeHtml(target)}</code> tidak ditemukan di Telegram.\n\n` +
+      `Kemungkinan: salah ketik, akun tidak ada/private, atau (khusus input angka ID) target belum pernah berinteraksi dengan userbot toko ini.\n\n` +
+      `Kirim ulang username/ID yang benar (tanpa @), atau /cancel untuk batal.`,
+      { parse_mode: 'HTML' }
+    );
+    return null;
+  }
+  await bot.deleteMessage(chatId, checkingMsg.message_id).catch(() => {});
+
+  if (targetInfo.isBot) {
+    await bot.sendMessage(chatId,
+      `⚠️ <code>${escapeHtml(target)}</code> terdeteksi sebagai akun BOT, bukan user biasa. Gift/Stars tidak bisa dikirim ke akun bot.\n\n` +
+      `Kirim ulang username/ID user yang benar, atau /cancel untuk batal.`,
+      { parse_mode: 'HTML' }
+    );
+    return null;
+  }
+
+  const displayName = targetInfo.username
+    ? `@${targetInfo.username}`
+    : ([targetInfo.firstName, targetInfo.lastName].filter(Boolean).join(' ') || target);
+  await bot.sendMessage(chatId, `✅ Ditemukan: <b>${escapeHtml(displayName)}</b>`, { parse_mode: 'HTML' });
+  return targetInfo;
+}
+
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  if (msg.text && msg.text.startsWith('/')) return;
+
+  const pending = db.getPendingAction(chatId);
+  if (!pending) return;
+
+  // Lapis pertahanan tambahan (lihat komentar ADMIN_ONLY_PENDING_TYPES di
+  // atas): kalau pending action-nya termasuk tipe khusus admin TAPI chatId
+  // ini bukan admin, bersihkan diam-diam & hentikan di sini - JANGAN lanjut
+  // ke step manapun di bawah.
+  if (ADMIN_ONLY_PENDING_TYPES.has(pending.type) && !isAdmin(chatId)) {
+    db.clearPendingAction(chatId);
+    return;
+  }
+
+  // Gerbang Mode Maintenance: kalau fitur aktif, user non-admin yang lagi
+  // di TENGAH pending action (mis. lagi ngetik jumlah beli custom / nominal
+  // topup) langsung dihentikan di sini - pending action-nya dibatalkan biar
+  // tidak nyangkut, lalu dikasih lihat pesan maintenance saja.
+  if (!isAdmin(chatId) && db.getMaintenanceSettings().enabled) {
+    db.clearPendingAction(chatId);
+    return bot.sendMessage(chatId, buildMaintenanceText(chatId), { parse_mode: 'HTML' });
+  }
+
+  // Broadcast nerima FOTO (+caption opsional) ATAU teks aja - beda dari
+  // semua pending action lain di bawah yang cuma nerima teks - jadi
+  // ditangani terpisah SEBELUM guard "harus ada msg.text" di bawah.
+  if (pending.type === 'broadcast_content') {
+    return handleBroadcastContent(msg, chatId);
+  }
+
+  if (!msg.text) return;
+
+  if (pending.type === 'custom_qty') {
+    const qty = parseInt(msg.text.replace(/\D/g, ''), 10);
+    const { productId, variantId } = pending.data;
+    if (!qty || qty <= 0) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'invalid_qty_number'));
+    }
+    db.clearPendingAction(chatId);
+    showOrderConfirmation(chatId, null, productId, variantId, qty);
+  }
+
+  else if (pending.type === 'topup_qris_amount') {
+    const amount = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
+    const minUsd = await getMinQrisUsd();
+    if (!amount || amount < minUsd) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_min_amount', { min: usd(minUsd, chatId) }));
+    }
+    if (amount > MAX_TOPUP_AMOUNT) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_max_amount', { max: usd(MAX_TOPUP_AMOUNT, chatId) }));
+    }
+    db.clearPendingAction(chatId);
+    startQrisTopup(chatId, amount);
+  }
+
+  else if (pending.type === 'topup_usdt_amount') {
+    const amount = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
+    if (!amount || amount < MIN_TOPUP_USDT_AMOUNT) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_min_amount_generic', { min: usd(MIN_TOPUP_USDT_AMOUNT, chatId) }));
+    }
+    if (amount > MAX_TOPUP_AMOUNT) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_max_amount', { max: usd(MAX_TOPUP_AMOUNT, chatId) }));
+    }
+    db.clearPendingAction(chatId);
+    startUsdtTopup(chatId, amount);
+  }
+
+  else if (pending.type === 'topup_ton_amount') {
+    const amount = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
+    if (!amount || amount < MIN_TOPUP_TON_AMOUNT) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_min_amount_generic', { min: usd(MIN_TOPUP_TON_AMOUNT, chatId) }));
+    }
+    if (amount > MAX_TOPUP_AMOUNT) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_max_amount', { max: usd(MAX_TOPUP_AMOUNT, chatId) }));
+    }
+    db.clearPendingAction(chatId);
+    startTonTopup(chatId, amount);
+  }
+
+  else if (pending.type === 'topup_binance_amount') {
+    const amount = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
+    if (!amount || amount < MIN_TOPUP_BINANCE_AMOUNT) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_min_amount_generic', { min: usd(MIN_TOPUP_BINANCE_AMOUNT, chatId) }));
+    }
+    if (amount > MAX_TOPUP_AMOUNT) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'pending_max_amount', { max: usd(MAX_TOPUP_AMOUNT, chatId) }));
+    }
+    db.clearPendingAction(chatId);
+    startBinanceTopup(chatId, amount);
+  }
+
+  else if (pending.type === 'gift_target') {
+    const target = msg.text.trim().replace(/^@/, '');
+    if (!target || target.length < 3) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'gift_invalid_target'), { parse_mode: 'HTML' });
+    }
+    const targetInfo = await verifyTelegramTarget(chatId, target);
+    if (!targetInfo) return;
+    const { mode, giftId, stars } = pending.data;
+    if (mode === 'confess') {
+      db.setPendingAction(chatId, { type: 'gift_message', data: { mode, giftId, stars, target } });
+      return bot.sendMessage(chatId, lang.t(chatId, 'gift_ask_message'));
+    }
+    return showGiftConfirmation(chatId, { mode, giftId, stars, target, message: null });
+  }
+
+  else if (pending.type === 'gift_message') {
+    const message = msg.text.trim().slice(0, 250);
+    const { mode, giftId, stars, target } = pending.data;
+    return showGiftConfirmation(chatId, { mode, giftId, stars, target, message });
+  }
+
+  else if (pending.type === 'recover_order_id') {
+    const orderId = msg.text.trim();
+    db.clearPendingAction(chatId);
+    const order = db.getOrderById(orderId);
+    if (!order || order.chatId !== chatId) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'recover_order_not_found', { orderId: escapeHtml(orderId) }), { parse_mode: 'Markdown' });
+    }
+    if (!order.delivered || !order.deliveredItems || !order.deliveredItems.length) {
+      return bot.sendMessage(chatId, lang.t(chatId, 'recover_no_items', { orderId: escapeHtml(orderId) }), { parse_mode: 'Markdown' });
+    }
+    const product = db.findProduct(order.productId);
+    const variant = product ? product.variants.find(v => v.id === order.variantId) : null;
+    const label = product ? `${product.name}${variant && variant.label ? ' - ' + variant.label : ''}` : order.productId;
+    bot.sendMessage(
+      chatId,
+      `🏅 <b>${lang.t(chatId, 'recover_result_title')}</b>\n\n📦 ${escapeHtml(label)} (x${order.qty})\n\n` +
+      order.deliveredItems.map((item, i) => formatStockItem(item, i, chatId)).join('\n\n'),
+      {
+        parse_mode: 'HTML',
+        reply_markup: hasLiveTotpSecret(order.deliveredItems)
+          ? { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_refresh_2fa'), callback_data: `refresh2fa:recover:${orderId}` }, 'refresh_2fa')]] }
+          : undefined
+      }
+    );
+  }
+
+  else if (pending.type === 'set_emoji_id') {
+    const entities = msg.entities || msg.caption_entities || [];
+    const found = entities.find(e => e.type === 'custom_emoji' && e.custom_emoji_id);
+    if (!found) {
+      return bot.sendMessage(chatId, '⚠️ Belum ketemu custom emoji di pesan itu. Pastikan kirim/forward pesan yang beneran mengandung *emoji premium* (dipilih dari panel emoji Telegram Premium kamu), bukan cuma emoji unicode biasa. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    const { scope, key } = pending.data;
+    db.setEmojiId(`${scope}:${key}`, found.custom_emoji_id);
+    db.clearPendingAction(chatId);
+    // Preview langsung pakai tag HTML <tg-emoji> (bukan cuma nunjukin ID
+    // mentahnya) supaya admin langsung lihat hasilnya tanpa perlu buka
+    // menu lain dulu.
+    const preview = `<tg-emoji emoji-id="${found.custom_emoji_id}">🎁</tg-emoji>`;
+    bot.sendMessage(
+      chatId,
+      `✅ Emoji ID berhasil dipasang!\n\n` +
+      `${preview} Preview\n` +
+      `🆔 ID: <code>${found.custom_emoji_id}</code>\n\n` +
+      `Coba cek langsung di menu terkait buat lihat hasilnya.`,
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  else if (pending.type === 'forcejoin_add_link') {
+    const link = msg.text.trim();
+    if (!/^https?:\/\/t\.me\//i.test(link)) {
+      return bot.sendMessage(chatId, '⚠️ Link tidak valid. Pastikan diawali `https://t.me/...`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    db.setPendingAction(chatId, { type: 'forcejoin_add_ref', data: { link } });
+    await bot.sendMessage(
+      chatId,
+      '➕ *Tambah Channel/Grup Wajib Join*\n\n*Langkah 2/2* - Kirim *Username channel/grup* (contoh: `@namachannel`) ATAU *Chat ID* (contoh: `-1001234567890`).\n\n' +
+      '💡 Untuk channel/grup *private* (tidak punya username publik), WAJIB pakai Chat ID numerik, dan bot harus sudah jadi *admin* di channel/grup tersebut supaya bisa cek status join member. Cara dapat Chat ID: forward pesan apapun dari channel/grup itu ke @userinfobot / @RawDataBot.\n\nKetik /cancel untuk batal.',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  else if (pending.type === 'forcejoin_add_ref') {
+    let ref = msg.text.trim();
+    if (!ref) return bot.sendMessage(chatId, '⚠️ Input kosong. Ketik /cancel untuk batal.');
+    // Normalisasi: numerik (boleh minus di depan) -> Number, selain itu pastikan
+    // diawali "@" (username channel).
+    if (/^-?\d+$/.test(ref)) {
+      ref = Number(ref);
+    } else {
+      ref = ref.replace(/^@?/, '@');
+    }
+    const { link } = pending.data;
+    db.clearPendingAction(chatId);
+
+    // Auto-deteksi judul channel-nya langsung dari Telegram (kalau bisa) -
+    // jadi admin tidak perlu ngetik ulang nama channel-nya secara manual.
+    let title = String(ref);
+    try {
+      const chat = await bot.getChat(ref);
+      if (chat && chat.title) title = chat.title;
+    } catch (err) {
+      // Bot mungkin belum jadi admin/member di channel itu - tetap lanjut
+      // simpan pakai chatRef sebagai title, admin bisa cek lagi manual nanti.
+    }
+
+    const channel = db.addForceJoinChannel({ title, link, chatRef: ref });
+    await bot.sendMessage(
+      chatId,
+      `✅ *Channel/Grup berhasil ditambahkan!*\n\n📢 *${channel.title}*\n🔗 ${channel.link}\n🆔 \`${channel.chatRef}\`\n\n` +
+      `⚠️ Pastikan bot sudah jadi *admin* di channel/grup ini supaya deteksi join-nya akurat. Aktifkan fitur "Wajib Join" lewat /admin -> 🔐 Wajib Join Channel/Grup kalau belum aktif.`,
+      { parse_mode: 'Markdown', reply_markup: adminForceJoinKeyboard() }
+    );
+  }
+
+  else if (pending.type === 'channelnotif_setchannel') {
+    let ref = msg.text.trim();
+    if (!ref) return bot.sendMessage(chatId, '⚠️ Input kosong. Ketik /cancel untuk batal.');
+    // Normalisasi: numerik (boleh minus di depan) -> Number, selain itu pastikan
+    // diawali "@" (username channel/group) - sama seperti forcejoin_add_ref.
+    if (/^-?\d+$/.test(ref)) {
+      ref = Number(ref);
+    } else {
+      ref = ref.replace(/^@?/, '@');
+    }
+    db.clearPendingAction(chatId);
+
+    // Auto-deteksi judul channel-nya langsung dari Telegram (kalau bisa) -
+    // jadi admin tidak perlu ngetik ulang nama channel-nya secara manual.
+    let title = String(ref);
+    try {
+      const chat = await bot.getChat(ref);
+      if (chat && chat.title) title = chat.title;
+    } catch (err) {
+      // Bot mungkin belum jadi admin/member di channel itu - tetap lanjut
+      // simpan pakai chatRef sebagai title, admin bisa cek lagi manual nanti.
+    }
+
+    const settings = db.setChannelNotifSettings({ chatRef: ref, title });
+    await bot.sendMessage(
+      chatId,
+      `✅ *Channel tujuan notifikasi berhasil diatur!*\n\n📢 *${title}*\n🆔 \`${ref}\`\n\n` +
+      `⚠️ Pastikan bot sudah jadi *admin* di channel/group ini, kalau belum pengiriman notifikasi akan gagal. Aktifkan fitur ini lewat /admin -> 📣 Set Notifikasi Channel -> 🟢 Aktifkan Notifikasi kalau belum aktif.`,
+      { parse_mode: 'Markdown', reply_markup: adminChannelNotifKeyboard() }
+    );
+  }
+
+  else if (pending.type === 'addproduct_name') {
+    const raw = msg.text || '';
+    // Cari emoji premium yang owner pilih dari panel Telegram Premium-nya
+    // (custom_emoji entity) di pesan nama produk ini. Ambil yang PERTAMA saja
+    // sebagai ikon produk, lalu buang dari teks supaya nama produk bersih.
+    const customEntities = (msg.entities || [])
+      .filter(e => e.type === 'custom_emoji')
+      .sort((a, b) => a.offset - b.offset);
+    let emoji = null;
+    let emojiId = null;
+    let nameText = raw;
+    if (customEntities.length) {
+      const ent = customEntities[0];
+      const start = ent.offset;
+      const end = ent.offset + ent.length;
+      emoji = raw.slice(start, end);
+      emojiId = ent.custom_emoji_id;
+      nameText = raw.slice(0, start) + raw.slice(end);
+    }
+    const name = nameText.trim();
+    if (!name) return bot.sendMessage(chatId, '⚠️ Nama produk tidak boleh kosong.');
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || ('produk-' + Date.now());
+    db.setPendingAction(chatId, { type: 'addproduct_price', data: { name, id, emoji, emojiId } });
+    const emojiNote = emojiId
+      ? '\n\n✅ Emoji premium terdeteksi & akan dipakai sebagai ikon produk ini.'
+      : '\n\n⚠️ Tidak ada emoji premium terdeteksi, produk akan pakai ikon default 📦.';
+    bot.sendMessage(chatId, `Harga produk *"${name}"* dalam USD? (angka saja, boleh desimal, contoh: \`6\` atau \`5.99\`)${emojiNote}`, { parse_mode: 'Markdown' });
+  }
+  else if (pending.type === 'addproduct_price') {
+    const price = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
+    if (!price) return bot.sendMessage(chatId, '⚠️ Masukkan harga yang valid dalam USD (angka saja, boleh desimal), contoh: 5.99');
+    db.setPendingAction(chatId, { type: 'addproduct_desc', data: { ...pending.data, price } });
+    bot.sendMessage(chatId,
+      'Deskripsi produk? (bebas, boleh banyak baris, boleh pakai tag HTML `<b>...</b>` untuk bold. Kalau kamu pilih emoji premium langsung dari panel Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga)\n\n' +
+      'Contoh:\n`Akun Gemini AI Pro asli\nAktif langsung di Gmail kamu\nGaransi 24 jam setelah link diterima`\n\n' +
+      'Ketik `-` kalau mau lewati dulu (bisa diisi belakangan di data/db.json).',
+      { parse_mode: 'Markdown' }
+    );
+  }
+  else if (pending.type === 'addproduct_desc') {
+    const { name, id, price, emoji, emojiId } = pending.data;
+    const typed = embedOwnerCustomEmoji(msg);
+    const description = typed === '-' ? '' : typed;
+    const result = db.addSimpleProduct(id, name, price, description, emoji, emojiId);
+    db.clearPendingAction(chatId);
+    if (!result) {
+      return bot.sendMessage(chatId, `⚠️ Produk dengan id "${id}" sudah ada (kemungkinan nama serupa sudah dipakai). Coba ➕ Tambah Produk lagi dengan nama lain.`);
+    }
+    const iconHtml = emojiId ? `<tg-emoji emoji-id="${emojiId}">${emoji || '📦'}</tg-emoji>` : (emoji || '📦');
+    bot.sendMessage(chatId,
+      `✅ <b>Produk ${iconHtml} ${escapeHtml(name)} berhasil dibuat!</b>\n\n` +
+      `💰 Harga: ${usd(price)}\n` +
+      `📦 Stok saat ini: 0\n\n` +
+      `Selanjutnya isi stok lewat /admin → 📥 Tambah Stock, supaya bisa langsung dikirim otomatis begitu ada yang beli.`,
+      { parse_mode: 'HTML' }
+    );
+  }
+  else if (pending.type === 'addvariant_label') {
+    const label = msg.text.trim();
+    db.setPendingAction(chatId, { type: 'addvariant_price', data: { ...pending.data, label } });
+    bot.sendMessage(chatId, `Harga varian dalam USD? (angka saja, boleh desimal, contoh: 15 atau 14.99)`);
+  }
+  else if (pending.type === 'addvariant_price') {
+    const price = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
+    if (!price) return bot.sendMessage(chatId, '⚠️ Masukkan harga yang valid dalam USD (boleh desimal).');
+    db.setPendingAction(chatId, { type: 'addvariant_stock', data: { ...pending.data, price } });
+    bot.sendMessage(chatId, 'Jumlah stok tersedia? (angka saja, contoh: 500)');
+  }
+  else if (pending.type === 'addvariant_stock') {
+    const stock = parseInt(msg.text.replace(/\D/g, ''), 10) || 0;
+    db.setPendingAction(chatId, { type: 'addvariant_desc', data: { ...pending.data, stock } });
+    bot.sendMessage(chatId, 'Deskripsi produk untuk varian ini? (boleh banyak baris, ketik `-` kalau mau dikosongkan dulu)', { parse_mode: 'Markdown' });
+  }
+  // BUG FIX: sebelumnya alur "Tambah Varian" berhenti di addvariant_stock dan
+  // langsung panggil db.addVariant() tanpa pernah nanya deskripsi sama sekali
+  // - beda dengan "Tambah Produk" (addproduct_desc) yang selalu nanya. Akibatnya
+  // varian ke-2/ke-3 dst di produk multi-varian SELALU tampil tanpa deskripsi
+  // di halaman produk (fallback ke teks harga/stok generik), padahal admin
+  // sudah mengira sudah mengisi deskripsi lewat "Tambah Produk" di awal (yang
+  // cuma kesimpan di varian default, bukan ke varian baru). Sekarang alur ini
+  // ikut nanya deskripsi juga, sama seperti Tambah Produk.
+  else if (pending.type === 'addvariant_desc') {
+    const typed = embedOwnerCustomEmoji(msg);
+    const description = typed === '-' ? '' : typed;
+    const { productId, label, price, stock } = pending.data;
+    const variantId = productId + '-' + label.toLowerCase().replace(/\s+/g, '-');
+    const ok = db.addVariant(productId, variantId, label, price, stock, description);
+    db.clearPendingAction(chatId);
+    if (!ok) {
+      return bot.sendMessage(chatId, `⚠️ Varian dengan label "${label}" sepertinya sudah ada di produk ini (id "${variantId}" sudah dipakai). Coba ulangi dengan label yang beda.`);
+    }
+    bot.sendMessage(chatId, `✅ Varian "${label}" (${usd(price)}/pcs, stok ${stock}) ditambahkan ke produk "${productId}".\n\nMau atur diskon grosir bertingkat? Edit langsung di data/db.json pada bagian "tiers".`);
+  }
+
+  else if (pending.type === 'setprice_amount') {
+    const price = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
+    if (!price) return bot.sendMessage(chatId, '⚠️ Masukkan harga yang valid dalam USD (angka saja, boleh desimal), contoh: 5.99');
+    const { productId, variantId } = pending.data;
+    const product = db.findProduct(productId);
+    const variant = product && product.variants.find(v => v.id === variantId);
+    db.clearPendingAction(chatId);
+    if (!variant) {
+      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+    }
+    db.setVariantPrice(productId, variantId, price);
+    const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
+    // Kalau varian ini terhubung Supplier API, tampilkan juga margin
+    // terbaru (modal Supplier vs harga jual baru) supaya admin langsung
+    // tahu untung/rugi tanpa harus buka menu Supplier API lagi.
+    const marginLine = variant.supplierServiceId ? `\n\n${marginText(variant.supplierCost, price)}` : '';
+    bot.sendMessage(chatId, `✅ Harga *${label}* berhasil diubah jadi ${usd(price)}/pcs.${marginLine}`, { parse_mode: 'Markdown' });
+  }
+
+  // Input "10,7,5" -> markup% tier 1-49 / 50-499 / 500+ KHUSUS 1 varian
+  // (override DEFAULT_SUPPLIER_TIER_MARKUP global) - lihat handler callback
+  // 'suppliertiermarkup' di atas untuk konteksnya.
+  else if (pending.type === 'set_tier_markup') {
+    const { productId, variantId } = pending.data;
+    const product = db.findProduct(productId);
+    const variant = product && product.variants.find(v => v.id === variantId);
+    if (!product || !variant) {
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+    }
+    const parts = msg.text.split(',').map(s => s.trim());
+    if (parts.length !== 3 || parts.some(p => p === '' || isNaN(Number(p)))) {
+      return bot.sendMessage(chatId, '⚠️ Format salah. Ketik 3 angka persen dipisah koma, contoh: `10,7,5`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    const [p1, p2, p3] = parts.map(Number);
+    if ([p1, p2, p3].some(p => p < 0)) {
+      return bot.sendMessage(chatId, '⚠️ Persen markup tidak boleh negatif. Ketik ulang, contoh: `10,7,5`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    db.clearPendingAction(chatId);
+    const newMarkup = [
+      { min: 1, max: 49, markupPct: p1 },
+      { min: 50, max: 499, markupPct: p2 },
+      { min: 500, max: null, markupPct: p3 }
+    ];
+    db.setVariantTierMarkup(productId, variantId, newMarkup);
+    const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
+    const cost = variant.supplierCost;
+    if (typeof cost !== 'number' || isNaN(cost) || cost <= 0) {
+      // Markup-nya sudah tersimpan dan bakal kepakai di sync berikutnya,
+      // tapi belum bisa dihitung SEKARANG karena modal live belum diketahui
+      // (mis. varian belum pernah sync sama sekali).
+      return bot.sendMessage(chatId,
+        `✅ Markup 3-tier *${label}* disimpan: ${p1}% / ${p2}% / ${p3}%.\n\n⚠️ Modal Supplier belum diketahui, jadi tier BELUM dihitung sekarang - akan otomatis terisi begitu sync berikutnya jalan (atau klik "🔄 Refresh Modal & Stok").`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+    // Langsung hitung ulang tier dari modal SAAT INI + markup baru, supaya
+    // buyer langsung lihat harga baru tanpa perlu nunggu jadwal auto-sync.
+    const newTiers = computeTiersFromCost(cost, newMarkup);
+    db.setVariantTiers(productId, variantId, newTiers);
+    bot.sendMessage(chatId,
+      `✅ Markup 3-tier *${label}* disimpan & langsung diterapkan!\n\n` +
+      `Modal: ${usd(cost)}\nMarkup: ${p1}% / ${p2}% / ${p3}%\nHarga baru: ${tierPricesSummary(newTiers)}\n\n` +
+      `Markup ini akan tetap dipakai di setiap sync berikutnya (menghitung ulang dari modal live tiap saat itu).`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  // Input angka persen markup gift ("💲 Atur Harga Gift" -> "📈 Ubah Markup %")
+  // - lihat giftPriceUsd() di atas untuk gimana ini dipakai (Buy Gift/Confess
+  // Gift DAN Jual Gift Koleksi, dua-duanya).
+  else if (pending.type === 'set_gift_markup') {
+    const value = Number(msg.text.trim().replace(',', '.'));
+    if (isNaN(value) || value < 0) {
+      return bot.sendMessage(chatId, '⚠️ Markup harus angka ≥ 0. Ketik ulang, contoh: `30`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    db.clearPendingAction(chatId);
+    db.setGiftPricingSettings({ markupPct: value });
+    bot.sendMessage(chatId, `✅ Markup gift diubah jadi *${value}%*.`, { parse_mode: 'Markdown' });
+  }
+
+  // Input angka kurs Stars->USD gift ("💲 Atur Harga Gift" -> "💱 Ubah Kurs
+  // Stars→USD") - dipakai buat hitung modal (stars x kurs) sebelum ditambah
+  // markup%, lihat giftPriceUsd().
+  else if (pending.type === 'set_gift_stars_rate') {
+    const value = Number(msg.text.trim().replace(',', '.'));
+    if (isNaN(value) || value <= 0) {
+      return bot.sendMessage(chatId, '⚠️ Kurs harus angka lebih besar dari 0. Ketik ulang, contoh: `0.015`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    db.clearPendingAction(chatId);
+    db.setGiftPricingSettings({ starsToUsdRate: value });
+    bot.sendMessage(chatId, `✅ Kurs Stars→USD gift diubah jadi *${value}* (1⭐ = $${value}).`, { parse_mode: 'Markdown' });
+  }
+
+  // Input "0.65,0.69,0.65" -> harga JUAL langsung (bukan %) tier 1-49 /
+  // 50-499 / 500+ untuk 1 varian - lihat askSetTierPrice() untuk konteksnya.
+  else if (pending.type === 'set_tier_price') {
+    const { productId, variantId } = pending.data;
+    const product = db.findProduct(productId);
+    const variant = product && product.variants.find(v => v.id === variantId);
+    if (!product || !variant) {
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+    }
+    const parts = msg.text.split(',').map(s => s.trim());
+    if (parts.length !== 3 || parts.some(p => p === '' || isNaN(Number(p)))) {
+      return bot.sendMessage(chatId, '⚠️ Format salah. Ketik 3 angka harga USD dipisah koma, contoh: `0.65,0.69,0.65`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    const [p1, p2, p3] = parts.map(Number);
+    if ([p1, p2, p3].some(p => p <= 0)) {
+      return bot.sendMessage(chatId, '⚠️ Harga tidak boleh 0 atau negatif. Ketik ulang, contoh: `0.65,0.69,0.65`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    db.clearPendingAction(chatId);
+    const newTiers = [
+      { min: 1, max: 49, price: p1 },
+      { min: 50, max: 499, price: p2 },
+      { min: 500, max: null, price: p3 }
+    ];
+    db.setVariantTiers(productId, variantId, newTiers);
+    const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
+    const supplierNote = variant.supplierServiceId
+      ? (variant.priceLocked
+          ? '\n\n🔒 Harga ini terkunci, jadi AMAN - sync Supplier berikutnya tidak akan menimpanya (modal & stok tetap ikut update seperti biasa).'
+          : '\n\n⚠️ Ingat: tier ini akan tertimpa lagi begitu sync Supplier berikutnya jalan. Buka menu ini lagi buat "🔒 Kunci Harga Manual" kalau tidak mau ketimpa.')
+      : '';
+    bot.sendMessage(chatId,
+      `✅ Tier diskon grosir *${label}* berhasil diubah!\n\nTier baru: ${tierPricesSummary(newTiers)}${supplierNote}`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  else if (pending.type === 'supplier_orderid_lookup') {
+    const orderId = msg.text.trim();
+    if (!orderId) return bot.sendMessage(chatId, '⚠️ Order ID tidak boleh kosong. Ketik /cancel untuk batal.');
+    db.clearPendingAction(chatId);
+    if (!AIVERSEHUB_API_KEY) {
+      return bot.sendMessage(chatId, '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`.', { parse_mode: 'Markdown' });
+    }
+    let order;
+    try {
+      order = await supplier.getOrderById(orderId);
+    } catch (err) {
+      return bot.sendMessage(chatId, `⚠️ Gagal ambil order dari Supplier:\n_${err.message}_`, { parse_mode: 'Markdown' });
+    }
+    if (!order) {
+      return bot.sendMessage(chatId, `🔍 Order ID \`${escapeHtml(orderId)}\` tidak ditemukan di Supplier.`, { parse_mode: 'HTML' });
+    }
+    const delivered = Array.isArray(order.delivered_products) && order.delivered_products.length
+      ? order.delivered_products.map(p => `<code>${escapeHtml(String(p))}</code>`).join('\n')
+      : '_(tidak ada, atau belum terkirim)_';
+    bot.sendMessage(chatId,
+      `🔍 <b>Detail Order Supplier</b>\n\n` +
+      `Order ID: <code>${escapeHtml(order.order_id)}</code>\n` +
+      `Service: ${escapeHtml(order.service || '-')}\n` +
+      `Jumlah: ${order.quantity}\n` +
+      `Nominal: ${usd(order.amount || 0)}\n` +
+      `Status: ${escapeHtml(order.status || '-')}\n\n` +
+      `📦 Produk terkirim:\n${delivered}`,
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  else if (pending.type === 'sethowto_text') {
+    const text = embedOwnerCustomEmoji(msg);
+    const { productId, variantId } = pending.data;
+    const ok = db.setHowToUse(productId, variantId, text);
+    db.clearPendingAction(chatId);
+    if (!ok) {
+      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+    }
+    const product = db.findProduct(productId);
+    const variant = product && product.variants.find(v => v.id === variantId);
+    bot.sendMessage(chatId,
+      `✅ Teks *How to Use* untuk *${product ? product.name : productId}${variant && variant.label ? ' - ' + variant.label : ''}* berhasil disimpan.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  else if (pending.type === 'setdesc_text') {
+    const typed = embedOwnerCustomEmoji(msg);
+    const text = typed === '-' ? '' : typed;
+    const { productId, variantId, lang: descLang } = pending.data;
+    const ok = db.setDescription(productId, variantId, text, descLang);
+    db.clearPendingAction(chatId);
+    if (!ok) {
+      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+    }
+    const product = db.findProduct(productId);
+    const variant = product && product.variants.find(v => v.id === variantId);
+    bot.sendMessage(chatId,
+      `✅ Deskripsi (${descLang === 'en' ? 'EN' : 'ID'}) untuk *${product ? product.name : productId}${variant && variant.label ? ' - ' + variant.label : ''}* berhasil disimpan.` +
+      (text ? `\n\nℹ️ Versi bahasa satunya bakal otomatis di-generate (auto-translate) begitu ada buyer yang /setlanguage beda buka deskripsi ini.` : ''),
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  else if (pending.type === 'setlogo_url') {
+    const { productId } = pending.data;
+    const typed = (msg.text || '').trim();
+    const product = db.findProduct(productId);
+    if (!product) {
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, '⚠️ Produk tidak ditemukan, dibatalkan.');
+    }
+    if (typed === '-') {
+      db.setProductLogo(productId, null);
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, `✅ Logo untuk *${product.name}* dihapus, balik pakai emoji biasa.`, { parse_mode: 'Markdown' });
+    }
+    if (!/^https?:\/\//i.test(typed)) {
+      return bot.sendMessage(chatId, '⚠️ URL tidak valid - harus diawali `http://` atau `https://`. Coba lagi, atau /cancel untuk batal.', { parse_mode: 'Markdown' });
+    }
+    db.setProductLogo(productId, typed);
+    db.clearPendingAction(chatId);
+    bot.sendMessage(chatId,
+      `✅ Logo untuk *${product.name}* berhasil disimpan. Mulai sekarang notifikasi channel "🎉 New Purchase!" untuk produk ini tampil pakai logo ini.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  else if (pending.type === 'setemoji_capture') {
+    const { productId } = pending.data;
+    const product = db.findProduct(productId);
+    if (!product) {
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, '⚠️ Produk tidak ditemukan, dibatalkan.');
+    }
+    const typed = (msg.text || '').trim();
+    if (typed === '-') {
+      db.setProductEmoji(productId, '📦', null);
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, `✅ Ikon untuk *${product.name}* dibalikin ke emoji unicode biasa (📦, tanpa premium).`, { parse_mode: 'Markdown' });
+    }
+    // Cari entity custom_emoji PERTAMA di pesan ini (boleh dari forward) -
+    // sama seperti mekanisme capture di "🎨 Kelola Emoji ID" (lihat
+    // pending.type === 'emoji_capture'). Kalau tidak ketemu, minta ulang -
+    // JANGAN diam-diam terima unicode biasa supaya admin tidak salah kira
+    // sudah premium padahal cuma nempel karakter biasa.
+    const found = (msg.entities || []).find(e => e.type === 'custom_emoji');
+    if (!found) {
+      return bot.sendMessage(chatId,
+        '⚠️ Belum ketemu custom emoji di pesan itu. Pastikan kirim/forward pesan yang beneran mengandung *emoji premium* (dipilih dari panel emoji Telegram Premium kamu), bukan cuma emoji unicode biasa. Ketik `-` untuk pakai unicode biasa, atau /cancel untuk batal.',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    const fallbackChar = msg.text.slice(found.offset, found.offset + found.length);
+    db.setProductEmoji(productId, fallbackChar, found.custom_emoji_id);
+    db.clearPendingAction(chatId);
+    bot.sendMessage(chatId,
+      `✅ Emoji untuk *${product.name}* berhasil diganti!\n\n🆔 ID: \`${found.custom_emoji_id}\`\n\nCek langsung di halaman deskripsi produk / notifikasi channel buat lihat hasilnya.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  else if (pending.type === 'addstock_items') {
+    const { productId, variantId } = pending.data;
+    const lines = msg.text.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!lines.length) {
+      return bot.sendMessage(chatId, '⚠️ Tidak ada link/kode yang terbaca. Kirim minimal 1 baris, atau /cancel untuk batal.');
+    }
+    const result = db.addStockItems(productId, variantId, lines);
+    if (!result) {
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+    }
+    const product = db.findProduct(productId);
+    const variant = product && product.variants.find(v => v.id === variantId);
+    // Pending action SENGAJA tidak di-clear, supaya admin bisa lanjut kirim
+    // link/kode berikutnya tanpa perlu buka menu lagi. Selesai = /cancel.
+    bot.sendMessage(chatId,
+      `✅ *${result.added} link/kode* berhasil ditambahkan ke *${product ? product.name : productId} - ${variant ? variant.label : variantId}*.\n\n` +
+      `📦 Total stok siap auto-kirim sekarang: *${result.total}*\n\n` +
+      `🔔 Notifikasi "Stok Baru Tersedia!" sedang dikirim ke semua user...\n\n` +
+      `Kirim lagi kalau mau tambah lebih banyak, atau /cancel untuk selesai.`,
+      { parse_mode: 'Markdown' }
+    );
+    // Fire-and-forget - lihat komentar lengkap di broadcastStockAlert().
+    if (product && variant) {
+      broadcastStockAlert(product, variant, result.added, chatId).catch(err => console.error('broadcastStockAlert error:', err.message));
+    }
+  }
+
+  else if (pending.type === 'addstock_manual_qty') {
+    const { productId, variantId } = pending.data;
+    const qty = parseInt(msg.text.trim(), 10);
+    if (!qty || isNaN(qty) || qty <= 0) {
+      return bot.sendMessage(chatId, '⚠️ Ketik angka yang valid (lebih dari 0), atau /cancel untuk batal.');
+    }
+    const result = db.addManualStock(productId, variantId, qty);
+    if (!result) {
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+    }
+    const product = db.findProduct(productId);
+    const variant = product && product.variants.find(v => v.id === variantId);
+    // Pending action SENGAJA tidak di-clear juga, sama seperti addstock_items -
+    // admin bisa langsung ketik angka lagi kalau mau nambah lebih banyak lagi.
+    bot.sendMessage(chatId,
+      `✅ *${result.added} stok* berhasil ditambahkan (manual) ke *${product ? product.name : productId} - ${variant ? variant.label : variantId}*.\n\n` +
+      `📦 Total stok sekarang: *${result.total}*\n\n` +
+      `🔔 Notifikasi "Stok Baru Tersedia!" sedang dikirim ke semua user...\n\n` +
+      `Ketik angka lagi kalau mau tambah lebih banyak, atau /cancel untuk selesai.`,
+      { parse_mode: 'Markdown' }
+    );
+    if (product && variant) {
+      broadcastStockAlert(product, variant, result.added, chatId).catch(err => console.error('broadcastStockAlert error:', err.message));
+    }
+  }
+
+  else if (pending.type === 'checkorder_id') {
+    const orderId = msg.text.trim();
+    const order = db.getOrderById(orderId);
+    db.clearPendingAction(chatId);
+    if (!order) {
+      return bot.sendMessage(chatId, `⚠️ Order dengan ID \`${orderId}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
+    }
+    bot.sendMessage(chatId, formatDeliveryLogEntry(order), { parse_mode: 'HTML' });
+  }
+
+  else if (pending.type === 'listusers_search_id') {
+    // Deteksi otomatis: kalau input mengandung huruf -> cari by USERNAME
+    // (contains, case-insensitive, boleh pakai "@" di depan atau tidak).
+    // Kalau input cuma angka -> tetap cari by Chat ID seperti sebelumnya
+    // (contains, biar admin bebas ketik sebagian angka saja).
+    const rawInput = msg.text.trim();
+    const usernameQuery = rawInput.replace(/^@/, '').toLowerCase();
+    const isUsernameSearch = /[a-zA-Z]/.test(rawInput);
+
+    db.clearPendingAction(chatId);
+
+    if (isUsernameSearch) {
+      if (!usernameQuery) {
+        return bot.sendMessage(chatId, '⚠️ Ketik username yang valid. Coba lagi lewat /admin -> 📋 List User -> 🔍 Cari User (ID/Username).');
+      }
+      const matches = db.getUsersList().filter(u => u.username && u.username.toLowerCase().includes(usernameQuery));
+      return bot.sendMessage(chatId, usersSearchResultText(matches, rawInput), { parse_mode: 'HTML', reply_markup: usersSearchResultKeyboard() });
+    }
+
+    const query = rawInput.replace(/\D/g, '');
+    if (!query) {
+      return bot.sendMessage(chatId, '⚠️ Ketik Chat ID atau username yang valid. Coba lagi lewat /admin -> 📋 List User -> 🔍 Cari User (ID/Username).');
+    }
+    const matches = db.getUsersList().filter(u => u.chatId.includes(query));
+    bot.sendMessage(chatId, usersSearchResultText(matches, query), { parse_mode: 'HTML', reply_markup: usersSearchResultKeyboard() });
+  }
+
+  else if (pending.type === 'addbalance_user') {
+    const targetId = msg.text.trim();
+    db.setPendingAction(chatId, { type: 'addbalance_amount', data: { targetId } });
+    bot.sendMessage(chatId, 'Nominal saldo (USD) yang ingin ditambahkan? (angka saja, boleh desimal, bisa minus untuk kurangi)');
+  }
+  else if (pending.type === 'addbalance_amount') {
+    const amount = parseFloat(msg.text.replace(/[^0-9.-]/g, ''));
+    const { targetId } = pending.data;
+    // Semua handler input angka lain (addproduct_price, topup_*, custom_qty,
+    // dst) selalu validasi hasil parse sebelum dipakai - handler ini kelewatan
+    // sebelumnya. Tanpa validasi ini, admin salah ketik (mis. cuma spasi,
+    // atau teks tanpa angka sama sekali) bikin parseFloat balikin NaN, lalu
+    // db.updateBalance() nyimpen NaN ke saldo user -> saldo user itu RUSAK
+    // PERMANEN (NaN + apapun = NaN terus, tidak bisa dikoreksi lagi lewat
+    // topup/pembelian normal, cuma bisa diperbaiki manual edit db.json).
+    if (isNaN(amount)) {
+      db.clearPendingAction(chatId);
+      return bot.sendMessage(chatId, '⚠️ Nominal tidak valid (bukan angka). Dibatalkan - ulangi lagi lewat /admin → 💰 Atur Saldo User.');
+    }
+    const newBalance = db.updateBalance(targetId, amount);
+    db.clearPendingAction(chatId);
+    bot.sendMessage(chatId, `✅ Saldo user ${targetId} sekarang: ${usd(newBalance)}`);
+    bot.sendMessage(targetId, `ℹ️ Saldo kamu telah disesuaikan admin. Saldo sekarang: *${usd(newBalance)}*`, { parse_mode: 'Markdown' }).catch(() => {});
+  }
+
+  else if (pending.type === 'backup_interval') {
+    const minutes = parseInt(msg.text.replace(/\D/g, ''), 10);
+    db.clearPendingAction(chatId);
+    if (!minutes || minutes < 1) {
+      return bot.sendMessage(chatId, '⚠️ Interval tidak valid. Ketik angka menit saja, misal `60`. Coba lagi lewat /admin -> 💾 Auto Backup -> ⏱️ Atur Interval.', { parse_mode: 'Markdown' });
+    }
+    const settings = db.setBackupSettings({ intervalMinutes: minutes });
+    scheduleBackup();
+    bot.sendMessage(chatId, `✅ Interval backup diatur ke *${minutes} menit*.`, { parse_mode: 'Markdown', reply_markup: backupMenuKeyboard(settings) });
+  }
+
+  else if (pending.type === 'backup_groupid') {
+    const groupId = msg.text.trim();
+    db.clearPendingAction(chatId);
+    if (!/^-?\d+$/.test(groupId)) {
+      return bot.sendMessage(chatId, '⚠️ Group ID harus berupa angka (boleh diawali minus). Contoh: `-1001234567890`. Coba lagi lewat /admin -> 💾 Auto Backup -> 🆔 Atur Group ID.', { parse_mode: 'Markdown' });
+    }
+    const settings = db.setBackupSettings({ groupId });
+    scheduleBackup();
+    bot.sendMessage(chatId, `✅ Group ID tujuan backup diatur ke \`${groupId}\`.\n\n⚠️ Pastikan bot ini sudah jadi member di group tersebut, kalau belum pengiriman backup akan gagal.`, { parse_mode: 'Markdown', reply_markup: backupMenuKeyboard(settings) });
+  }
+
+  else if (pending.type === 'maintenance_message') {
+    const text = embedOwnerCustomEmoji(msg);
+    db.clearPendingAction(chatId);
+    const settings = db.setMaintenanceSettings({ message: text });
+    bot.sendMessage(chatId, `✅ Pesan custom Mode Maintenance disimpan. Preview:`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, text, { parse_mode: 'HTML' }).catch(err => {
+      bot.sendMessage(chatId, `⚠️ Preview gagal ditampilkan (biasanya karena tag HTML tidak valid/tidak ketutup): ${err.message}\n\nPesan tetap tersimpan, tapi sebaiknya diperbaiki lagi lewat /admin -> 🛠️ Maintenance Bot -> ✏️ Set Pesan Custom.`);
+    });
+    bot.sendMessage(chatId, maintenanceMenuText(settings), { parse_mode: 'Markdown', reply_markup: maintenanceMenuKeyboard(settings) });
+  }
+});
+
+// ================= AUTO BACKUP (zip source code -> kirim ke group) =================
+// Fitur: /admin -> 💾 Auto Backup. Bikin file .zip berisi FULL source code
+// project (kecuali node_modules & .npm - lihat backup.js) lalu kirim
+// otomatis ke sebuah group Telegram tiap interval menit/jam yang diatur
+// admin. Bisa juga dipicu manual lewat tombol "📤 Backup Sekarang".
+
+let backupTimer = null;
+
+// (Re)start timer sesuai settings terbaru di db.json. Dipanggil tiap kali
+// settings berubah (toggle on/off, ganti interval, ganti group id) dan
+// sekali lagi saat bot pertama kali start.
+function scheduleBackup() {
+  if (backupTimer) {
+    clearInterval(backupTimer);
+    backupTimer = null;
+  }
+  const settings = db.getBackupSettings();
+  if (settings.enabled && settings.groupId && settings.intervalMinutes > 0) {
+    backupTimer = setInterval(() => {
+      runBackupJob('scheduled').catch(() => {});
+    }, settings.intervalMinutes * 60 * 1000);
+  }
+}
+
+// Bikin zip lalu kirim ke group id yang diatur di settings. source: 'scheduled' | 'manual'.
+// Return { ok: true, sizeKb, fileName } atau { ok: false, error }.
+async function runBackupJob(source) {
+  const settings = db.getBackupSettings();
+  if (!settings.groupId) {
+    return { ok: false, error: 'Group ID belum diatur.' };
+  }
+  let zipPath;
+  try {
+    const result = await backup.createBackupZip();
+    zipPath = result.zipPath;
+    const sizeKb = (result.sizeBytes / 1024).toFixed(1);
+    const caption =
+      `💾 <b>Auto Backup Source Code</b>\n` +
+      `📅 ${new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' })}\n` +
+      `📦 Ukuran: ${sizeKb} KB\n` +
+      `🔖 Dipicu: ${source === 'scheduled' ? 'Otomatis (terjadwal)' : 'Manual oleh admin'}`;
+    await bot.sendDocument(settings.groupId, zipPath, { caption, parse_mode: 'HTML' }, { filename: result.fileName, contentType: 'application/zip' });
+    backup.cleanupBackupFile(zipPath);
+    return { ok: true, sizeKb, fileName: result.fileName };
+  } catch (err) {
+    console.error('Auto backup gagal:', err.message);
+    if (zipPath) backup.cleanupBackupFile(zipPath);
+    // Kabari semua admin kalau backup terjadwal gagal (mis. bot belum jadi
+    // member group, atau Group ID salah), supaya tidak diam-diam berhenti.
+    ADMIN_IDS.forEach(id => {
+      bot.sendMessage(id, `⚠️ Auto backup gagal dikirim ke group \`${settings.groupId}\`:\n${err.message}\n\nPastikan bot sudah jadi member (dan idealnya admin) di group tersebut, dan Group ID-nya benar.`, { parse_mode: 'Markdown' }).catch(() => {});
+    });
+    return { ok: false, error: err.message };
+  }
+}
+
+function backupMenuText(settings) {
+  const statusText = settings.enabled ? '🟢 Aktif' : '🔴 Nonaktif';
+  const interval = settings.intervalMinutes || 60;
+  const intervalText = (interval >= 60 && interval % 60 === 0) ? `${interval / 60} jam` : `${interval} menit`;
+  const groupText = settings.groupId ? `\`${settings.groupId}\`` : '⚠️ belum diisi';
+  return (
+    `💾 *Auto Backup*\n\n` +
+    `Status: ${statusText}\n` +
+    `Interval: setiap *${intervalText}*\n` +
+    `Kirim ke Group ID: ${groupText}\n\n` +
+    `Backup berisi *full source code project* (kecuali \`node_modules\` & \`.npm\`) dalam 1 file \`.zip\`, dikirim otomatis ke group di atas. Pastikan bot sudah ditambahkan sebagai member di group tujuan.`
+  );
+}
+
+function backupMenuKeyboard(settings) {
+  return {
+    inline_keyboard: [
+      [{ text: settings.enabled ? '⏸️ Nonaktifkan' : '▶️ Aktifkan', callback_data: 'admin:backup:toggle' }],
+      [{ text: '⏱️ Atur Interval', callback_data: 'admin:backup:setinterval' }],
+      [{ text: '🆔 Atur Group ID', callback_data: 'admin:backup:setgroup' }],
+      [{ text: '📤 Backup Sekarang', callback_data: 'admin:backup:now' }],
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')],
+      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+    ]
+  };
+}
+
+// ================= MODE MAINTENANCE BOT =================
+// Dipicu dari /admin -> 🛠️ Maintenance Bot. Kalau diaktifkan, SEMUA user
+// non-admin diblokir dari seluruh interaksi bot (lihat gerbang maintenance
+// di /start, bot.on('callback_query', ...) utama, dan bot.on('message', ...))
+// dan cuma dikasih lihat 1 pesan maintenance - admin selalu tetap bisa akses
+// normal. Pesannya default-nya sudah "keren" & full emoji Premium (dipinjam
+// dari emoji yang SUDAH ADA di file lain, lihat buildMaintenanceText() &
+// emoji-id-teks.js), atau admin boleh tulis pesan sendiri lewat "✏️ Set
+// Pesan Custom".
+function maintenanceMenuText(settings) {
+  const statusText = settings.enabled ? '🟢 Aktif (user non-admin diblokir)' : '🔴 Nonaktif';
+  const msgText = settings.message ? '✏️ Custom (dari admin)' : '✨ Default (auto-emoji Premium)';
+  return (
+    `🛠️ *Maintenance Bot*\n\n` +
+    `Status: ${statusText}\n` +
+    `Pesan: ${msgText}\n\n` +
+    `Kalau aktif, semua user (kecuali admin) tidak bisa pakai fitur apapun di bot - cuma dikasih lihat 1 pesan maintenance di bawah ini. Preview pesannya bisa dilihat lewat tombol "👀 Preview Pesan".`
+  );
+}
+
+function maintenanceMenuKeyboard(settings) {
+  const rows = [
+    [{ text: settings.enabled ? '🔴 Nonaktifkan' : '🟢 Aktifkan', callback_data: 'admin:maintenance_toggle' }],
+    [{ text: '👀 Preview Pesan', callback_data: 'admin:maintenance_preview' }],
+    [{ text: '✏️ Set Pesan Custom', callback_data: 'admin:maintenance_setmsg' }]
+  ];
+  if (settings.message) {
+    rows.push([{ text: '↩️ Pakai Pesan Default Lagi', callback_data: 'admin:maintenance_resetmsg' }]);
+  }
+  rows.push([{ text: '🎨 Kelola Emoji Pesan Default', callback_data: 'admin:emojiteksgroup:maintenance' }]);
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// ================= LIST USER =================
+// Dipicu dari /admin -> 📋 List User. Ditampilkan paginated (10 user per
+// halaman) supaya tetap ringan & gampang dibaca walau usernya sudah ratusan/
+// ribuan - data diambil langsung dari db.getUsersList() (lihat db.js).
+const USERS_PAGE_SIZE = 10;
+
+function usersListText(page) {
+  const allUsers = db.getUsersList();
+  if (!allUsers.length) {
+    return { text: '📋 <b>List User</b>\n\n<i>Belum ada user yang pernah /start bot.</i>', totalPages: 1, page: 1, totalUsers: 0 };
+  }
+  const totalPages = Math.max(1, Math.ceil(allUsers.length / USERS_PAGE_SIZE));
+  const actualPage = Math.min(Math.max(1, page), totalPages);
+  const start = (actualPage - 1) * USERS_PAGE_SIZE;
+  const pageUsers = allUsers.slice(start, start + USERS_PAGE_SIZE);
+  // PENTING: pakai HTML (bukan Markdown) + escapeHtml() di username - username
+  // Telegram BEBAS isinya (boleh mengandung "_", "*", "`", "[", dll), dan
+  // kalau dikirim apa adanya lewat parse_mode Markdown, karakter-karakter itu
+  // dianggap Telegram sebagai penanda formatting yang "nyangkut" (mis. 1
+  // underscore tanpa pasangan penutup) -> bikin API balas error 400 "can't
+  // parse entities". HTML jauh lebih aman di sini karena cuma < & > & yang
+  // perlu di-escape (lihat escapeHtml()), jauh lebih kecil kemungkinan
+  // konflik dengan karakter yang wajar ada di username asli.
+  const lines = pageUsers.map(u => {
+    const usernameText = u.username ? `@${escapeHtml(u.username)}` : '<i>(tanpa username)</i>';
+    return (
+      `👤 <code>${escapeHtml(u.chatId)}</code> - ${usernameText}\n` +
+      `   💰 ${usd(u.balance)} • 🧾 ${u.orderCount} order • 🎁 ${u.referralCount} referral`
+    );
+  }).join('\n\n');
+  return {
+    text: `📋 <b>List User</b> (hal. ${actualPage}/${totalPages}, total ${allUsers.length} user)\n\n${lines}`,
+    totalPages,
+    page: actualPage,
+    totalUsers: allUsers.length
+  };
+}
+
+function usersListKeyboard(page, totalPages) {
+  const navRow = [];
+  if (page > 1) navRow.push({ text: '‹ Sebelumnya', callback_data: `admin:listusers:${page - 1}` });
+  if (page < totalPages) navRow.push({ text: 'Berikutnya ›', callback_data: `admin:listusers:${page + 1}` });
+  const rows = [];
+  if (navRow.length) rows.push(navRow);
+  rows.push([{ text: '🔍 Cari User (ID/Username)', callback_data: 'admin:listusers_search' }]);
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_users' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// Hasil pencarian /admin -> 📋 List User -> 🔍 Cari User (ID). Cocokkan
+// dengan CONTAINS (bukan cuma exact match) di Chat ID - admin sering cuma
+// inget SEBAGIAN angkanya (mis. dari notifikasi order baru yang chat id-nya
+// sensor sebagian), jadi lebih berguna daripada exact match doang. Dibatasi
+// tampilkan maksimal 20 hasil per pencarian supaya pesannya tidak kepanjangan
+// kalau query-nya ketik terlalu pendek/umum (mis. cuma "1").
+const USERS_SEARCH_RESULT_LIMIT = 20;
+
+function usersSearchResultText(matches, query) {
+  const safeQuery = escapeHtml(query);
+  if (!matches.length) {
+    return `🔍 <b>Cari User</b>\n\nTidak ada user dengan Chat ID yang mengandung <code>${safeQuery}</code>.`;
+  }
+  const capped = matches.slice(0, USERS_SEARCH_RESULT_LIMIT);
+  const lines = capped.map(u => {
+    const usernameText = u.username ? `@${escapeHtml(u.username)}` : '<i>(tanpa username)</i>';
+    return (
+      `👤 <code>${escapeHtml(u.chatId)}</code> - ${usernameText}\n` +
+      `   💰 ${usd(u.balance)} • 🧾 ${u.orderCount} order • 🎁 ${u.referralCount} referral`
+    );
+  }).join('\n\n');
+  const moreNote = matches.length > capped.length
+    ? `\n\n<i>…dan ${matches.length - capped.length} user lainnya - coba ketik ID yang lebih lengkap/spesifik.</i>`
+    : '';
+  return `🔍 <b>Hasil Cari User</b> (mengandung <code>${safeQuery}</code>, ${matches.length} ditemukan)\n\n${lines}${moreNote}`;
+}
+
+function usersSearchResultKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🔍 Cari Lagi', callback_data: 'admin:listusers_search' }],
+      [{ text: '‹ Kembali ke List User', callback_data: 'admin:listusers:1' }]
+    ]
+  };
+}
+
+// ================= BROADCAST (teks / foto+caption ke semua user) =================
+// Dipicu dari /admin -> 📢 Broadcast. Owner kirim 1 pesan (teks ATAU foto
+// dengan/tanpa caption) -> bot simpan sementara + tampilkan PREVIEW persis
+// seperti yang bakal diterima user -> owner konfirmasi lewat tombol -> baru
+// dikirim ke semua chat ID yang ada di database.
+async function handleBroadcastContent(msg, chatId) {
+  let content;
+  if (msg.photo && msg.photo.length) {
+    const largest = msg.photo[msg.photo.length - 1]; // resolusi terbesar ada di elemen terakhir
+    const caption = msg.caption ? embedOwnerCustomEmojiFrom(msg.caption, msg.caption_entities) : '';
+    content = { kind: 'photo', fileId: largest.file_id, caption };
+  } else if (msg.text) {
+    content = { kind: 'text', text: embedOwnerCustomEmoji(msg) };
+  } else {
+    return bot.sendMessage(chatId, '⚠️ Kirim teks, atau foto (boleh dengan/tanpa caption). Ketik /cancel untuk batal.');
+  }
+
+  db.setPendingAction(chatId, { type: 'broadcast_confirm', data: { content } });
+  const totalUsers = Object.keys(db.readDb().users).length;
+
+  await bot.sendMessage(chatId, `📢 *Preview Broadcast* (akan dikirim ke *${totalUsers}* user) - tampilan di bawah ini persis seperti yang diterima user:`, { parse_mode: 'Markdown' });
+
+  try {
+    if (content.kind === 'photo') {
+      await bot.sendPhoto(chatId, content.fileId, { caption: content.caption, parse_mode: 'HTML' });
+    } else {
+      await bot.sendMessage(chatId, content.text, { parse_mode: 'HTML' });
+    }
+  } catch (err) {
+    db.clearPendingAction(chatId);
+    return bot.sendMessage(chatId, `⚠️ Preview gagal ditampilkan (biasanya karena tag HTML tidak valid/tidak ketutup): ${err.message}\n\nCoba /admin -> 📢 Broadcast lagi dengan teks yang diperbaiki.`);
+  }
+
+  await bot.sendMessage(chatId, `Kirim ke semua *${totalUsers}* user sekarang?`, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: [
+      [{ text: `✅ Ya, Kirim Sekarang`, callback_data: 'admin:broadcast:send' }],
+      [{ text: '❌ Batal', callback_data: 'admin:broadcast:cancel' }]
+    ] }
+  });
+}
+
+// ================= ADMIN PANEL (FULL INLINE) =================
+
+// ===== Menu utama /admin — DIKELOMPOKKAN jadi 4 kategori =====
+// Sebelumnya 22 tombol admin ditumpuk jadi 1 daftar flat (20 baris) di menu
+// utama - kebanyakan scroll & susah nyari tombol tertentu begitu fitur admin
+// makin banyak. Sekarang menu utama cuma tampilkan 4 kategori; tiap kategori
+// buka submenu-nya sendiri (lihat adminProductsKeyboard() dst di bawah).
+// PENTING: callback_data tiap tombol AKSI (mis. 'admin:listproducts') TIDAK
+// diubah sama sekali - cuma dipindah pengelompokannya di UI - jadi semua
+// handler 'admin:xxx' yang sudah ada tetap jalan tanpa perlu diubah.
+function adminMainKeyboard() {
+  return {
+    inline_keyboard: [
+      [withStyle(withButtonIcon({ text: '📦 Produk & Stok', callback_data: 'admin:cat_products' }, 'admin_cat_products'), 'primary')],
+      [withStyle(withButtonIcon({ text: '💰 User & Saldo', callback_data: 'admin:cat_users' }, 'admin_cat_users'), 'primary')],
+      [withStyle(withButtonIcon({ text: '📊 Laporan & Statistik', callback_data: 'admin:cat_reports' }, 'admin_cat_reports'), 'primary')],
+      [withStyle(withButtonIcon({ text: '🎁 Gift (Userbot)', callback_data: 'admin:cat_gift' }, 'admin_cat_gift'), 'primary')],
+      [withStyle(withButtonIcon({ text: '⚙️ Pengaturan Toko', callback_data: 'admin:cat_settings' }, 'admin_cat_settings'), 'primary')]
+    ]
+  };
+}
+
+// ---- Kategori 1: Produk & Stok (11 tombol aksi, sama persis seperti sebelumnya) ----
+function adminProductsKeyboard() {
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: '📦 Daftar Produk', callback_data: 'admin:listproducts' }, 'admin_daftar_produk')],
+      [
+        withButtonIcon({ text: '➕ Tambah Produk', callback_data: 'admin:addproduct' }, 'admin_tambah_produk'),
+        withButtonIcon({ text: '🗑️ Hapus Produk', callback_data: 'admin:removeproduct' }, 'admin_hapus_produk')
+      ],
+      [withButtonIcon({ text: '➕ Tambah Varian (produk multi-varian)', callback_data: 'admin:addvariant' }, 'admin_tambah_varian')],
+      [withButtonIcon({ text: '📥 Tambah Stock', callback_data: 'admin:addstock' }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '🔌 Supplier API', callback_data: 'admin:supplier' }, 'admin_supplier_api')],
+      [withButtonIcon({ text: '🔌 Canboso API', callback_data: 'admin:canboso' }, 'admin_supplier_api')],
+      [
+        withButtonIcon({ text: '💲 Set Harga', callback_data: 'admin:setprice' }, 'admin_set_harga'),
+        withButtonIcon({ text: '📝 Set Deskripsi', callback_data: 'admin:setdesc' }, 'admin_set_deskripsi')
+      ],
+      [withButtonIcon({ text: '🎁 Set Tier Diskon Grosir', callback_data: 'admin:settierprice' }, 'admin_set_tier_diskon')],
+      [
+        withButtonIcon({ text: '✏️ Set How to Use', callback_data: 'admin:sethowto' }, 'admin_set_howto'),
+        withButtonIcon({ text: '🖼️ Set Logo', callback_data: 'admin:setlogo' }, 'admin_set_logo')
+      ],
+      [withButtonIcon({ text: '😀 Ganti Emoji Produk', callback_data: 'admin:setemoji' }, 'admin_set_emoji')],
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+    ]
+  };
+}
+
+// ---- Kategori 2: User & Saldo ----
+function adminUsersKeyboard() {
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: '💰 Atur Saldo User', callback_data: 'admin:addbalance' }, 'admin_atur_saldo')],
+      [withButtonIcon({ text: '📋 List User', callback_data: 'admin:listusers:1' }, 'admin_list_user')],
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+    ]
+  };
+}
+
+// ---- Kategori 3: Laporan & Statistik ----
+function adminReportsKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        withButtonIcon({ text: '📜 Log Pengiriman', callback_data: 'admin:deliverylog' }, 'admin_log_pengiriman'),
+        withButtonIcon({ text: '🔍 Cek Order ID', callback_data: 'admin:checkorder' }, 'admin_cek_order')
+      ],
+      [withButtonIcon({ text: '📊 Statistik', callback_data: 'admin:stats' }, 'admin_statistik')],
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+    ]
+  };
+}
+
+// ---- Kategori 4: Pengaturan Toko ----
+function adminSettingsKeyboard() {
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: '🛠️ Maintenance Bot', callback_data: 'admin:maintenance' }, 'admin_maintenance')],
+      [withButtonIcon({ text: '🎨 Kelola Emoji ID', callback_data: 'admin:emojiids' }, 'admin_kelola_emoji')],
+      [withButtonIcon({ text: '💾 Auto Backup', callback_data: 'admin:backup' }, 'admin_auto_backup')],
+      [withButtonIcon({ text: '📢 Broadcast', callback_data: 'admin:broadcast' }, 'admin_broadcast')],
+      [withButtonIcon({ text: '🔐 Wajib Join Channel/Grup', callback_data: 'admin:forcejoin' }, 'admin_forcejoin')],
+      [withButtonIcon({ text: '📣 Set Notifikasi Channel', callback_data: 'admin:channelnotif' }, 'admin_channel_notif')],
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+    ]
+  };
+}
+
+// ---- Kategori 5: Gift (Userbot) ----
+function adminGiftKeyboard() {
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: '🌟 Cek Saldo Stars', callback_data: 'admin:gift_balance' }, 'admin_gift_balance')],
+      [withButtonIcon({ text: '📜 Riwayat Gift Order', callback_data: 'admin:gift_history' }, 'admin_gift_history')],
+      [withButtonIcon({ text: '🎁 Kelola Emoji Gift', callback_data: 'admin:giftemoji' }, 'admin_gift_emoji')],
+      [withButtonIcon({ text: '💲 Atur Harga Gift', callback_data: 'admin:giftpricing' }, 'admin_gift_pricing')],
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+    ]
+  };
+}
+
+// ===== Fitur "💲 Atur Harga Gift" =====
+// Override live (tanpa restart) untuk GIFT_MARKUP_PCT & STARS_TO_USD_RATE
+// dari .env - dipakai giftPriceUsd() di fitur Buy Gift/Confess Gift.
+// Disimpan di db.settings.giftPricing (lihat db.js) - null berarti
+// masih pakai default .env, jadi kalau admin belum pernah sentuh menu ini
+// harga tetap sama persis kayak sebelumnya.
+function adminGiftPricingText() {
+  const pricing = db.getGiftPricingSettings();
+  const effectiveMarkup = pricing.markupPct != null ? pricing.markupPct : GIFT_MARKUP_PCT;
+  const effectiveRate = pricing.starsToUsdRate != null ? pricing.starsToUsdRate : STARS_TO_USD_RATE;
+  const sampleStars = 50;
+  const samplePrice = usd((sampleStars * effectiveRate) * (1 + effectiveMarkup / 100));
+  return (
+    `💲 <b>Atur Harga Gift</b>\n\n` +
+    `Berlaku untuk 🎁 Buy Gift/Confess Gift.\n\n` +
+    `📈 Markup: <b>${effectiveMarkup}%</b>${pricing.markupPct == null ? ' <i>(default .env)</i>' : ' <i>(custom)</i>'}\n` +
+    `💱 Kurs Stars→USD: <b>${effectiveRate}</b>${pricing.starsToUsdRate == null ? ' <i>(default .env)</i>' : ' <i>(custom)</i>'}\n\n` +
+    `Contoh: gift ${sampleStars}⭐ → harga jual ≈ <b>${samplePrice}</b>\n\n` +
+    `Pilih yang mau diubah:`
+  );
+}
+
+function adminGiftPricingKeyboard() {
+  const pricing = db.getGiftPricingSettings();
+  return {
+    inline_keyboard: [
+      [{ text: '📈 Ubah Markup %', callback_data: 'admin:giftpricingmarkup' }],
+      [{ text: '💱 Ubah Kurs Stars→USD', callback_data: 'admin:giftpricingrate' }],
+      ...(pricing.markupPct != null || pricing.starsToUsdRate != null
+        ? [[withStyle({ text: '↩️ Reset ke Default .env', callback_data: 'admin:giftpricingreset' }, 'danger')]]
+        : []),
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_gift' }, 'back')],
+      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+    ]
+  };
+}
+
+// Beda dari "🎨 Kelola Emoji ID" biasa (yang daftar key-nya STATIS di
+// EMOJI_CATEGORIES) - daftar di sini DINAMIS, diambil live dari katalog gift
+// Telegram (userbot.getGiftCatalog()), soalnya katalog gift bisa berubah
+// (item limited baru muncul / sold out). Tetap PAKAI ALUR CAPTURE yang SAMA
+// (pending.type 'set_emoji_id', lihat handler-nya) - cuma scope-nya "gift"
+// dan key-nya giftId (bukan stars), supaya 2 gift beda yang harganya
+// kebetulan sama tetap bisa dikasih ikon beda-beda.
+function isGiftEmojiFilled(giftId) {
+  return !!db.getEmojiId(`gift:${giftId}`);
+}
+
+async function adminGiftEmojiListKeyboard() {
+  const rows = [];
+  try {
+    const catalog = await userbot.getGiftCatalog();
+    catalog.slice(0, 30).forEach(g => {
+      const filled = isGiftEmojiFilled(g.id) ? '✅' : '⚪';
+      rows.push([{ text: `${filled} 🎁 ${g.stars}⭐ (id: ${g.id})`, callback_data: `admin:emojiset:gift:${g.id}` }]);
+    });
+  } catch (err) {
+    logError('adminGiftEmojiListKeyboard', err);
+  }
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_gift' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+function adminGiftEmojiListText() {
+  return (
+    `🎁 <b>Kelola Emoji Gift</b>\n\n` +
+    `Daftar gift Telegram Stars yang lagi aktif di katalog (🎁 Buy Gift / 💌 Confess Gift). Tap salah satu buat pasang/ganti ikon custom emoji-nya.\n\n` +
+    `✅ = sudah ada ID custom (override manual)\n` +
+    `⚪ = masih pakai ikon dari Telegram (kalau ada) / fallback default\n\n` +
+    `<i>Catatan: kalau katalog gift Telegram berubah (item baru muncul / limited habis), daftar di bawah ikut berubah otomatis - gift lama yang sudah di-set ikonnya tidak hilang dari database, cuma tidak muncul lagi di daftar ini kalau sudah tidak dijual.</i>`
+  );
+}
+
+// ===== Data buat fitur "🎨 Kelola Emoji ID" (tangkap custom_emoji_id otomatis) =====
+// Dikelompokkan sama persis dengan komentar section di emoji-id-menu-inline.js,
+// supaya gampang dicocokkan kalau admin lebih suka edit manual di file itu.
+const EMOJI_CATEGORIES = [
+  { id: 'main', label: '🎯 Menu Utama', keys: ['buy_produk', 'profile', 'saldo_saya', 'topup', 'riwayat_pembelian', 'how_to_use', 'referral', 'support'] },
+  { id: 'nav', label: '🧭 Navigasi Umum', keys: ['back', 'go_back'] },
+  { id: 'desc', label: '📄 Halaman Deskripsi Produk', keys: ['how_to_use', 'buy_now'] },
+  { id: 'qty', label: '🛒 Jumlah & Konfirmasi', keys: ['jumlah_custom', 'place_order', 'cancel_order'] },
+  { id: 'wallet', label: '💳 Menu Wallet / Topup', keys: [
+    'topup_qris', 'topup_usdt', 'topup_ton', 'topup_binance', 'batal',
+    'nominal_cepat', 'nominal_custom', 'batalkan_qris',
+    'copy_address_usdt', 'batalkan_usdt',
+    'copy_address_ton', 'batalkan_ton',
+    'copy_id_binance', 'batalkan_binance'
+  ] },
+  { id: 'admin', label: '🔧 Admin Panel', keys: [
+    // 4 tombol kategori di menu utama /admin (lihat adminMainKeyboard())
+    'admin_cat_products', 'admin_cat_users', 'admin_cat_reports', 'admin_cat_gift', 'admin_cat_settings',
+    // Tombol shortcut "🏠 Menu Utama" di semua submenu/halaman admin
+    'admin_menu_utama',
+    'admin_daftar_produk', 'admin_tambah_produk', 'admin_hapus_produk', 'admin_tambah_stock', 'admin_supplier_api',
+    'admin_tambah_varian', 'admin_set_harga', 'admin_set_howto', 'admin_set_deskripsi', 'admin_set_logo', 'admin_set_emoji', 'admin_atur_saldo', 'admin_topup_pending',
+    'admin_log_pengiriman', 'admin_cek_order', 'admin_statistik', 'admin_list_user', 'admin_maintenance', 'admin_kelola_emoji', 'admin_auto_backup', 'admin_broadcast', 'admin_forcejoin', 'admin_channel_notif',
+    'admin_gift_balance', 'admin_gift_history', 'admin_gift_emoji', 'admin_gift_pricing'
+  ] },
+  { id: 'referral_btn', label: '🎁 Tombol Halaman Refer & Earn', keys: ['share_referral', 'copy_referral'] },
+  { id: 'forcejoin_btn', label: '🔐 Tombol Wajib Join Channel/Grup', keys: ['join_channel', 'checkjoin'] },
+  { id: 'misc_buttons', label: '🔘 Tombol Halaman Lainnya', keys: [
+    'contact_support', 'close_menu', 'recover', 'cancel_recover', 'refresh_2fa'
+  ] },
+  { id: 'gift_btn', label: '🎁 Tombol Pilihan Gift (Buy Gift/Confess Gift)', keys: ['gift'] }
+];
+const EMOJI_KEY_LABELS = {
+  buy_produk: 'Buy Produk', profile: 'Profile', saldo_saya: 'Saldo Saya', topup: 'Wallet / Topup',
+  riwayat_pembelian: 'My Orders', referral: 'Refer & Earn', support: 'Support',
+  back: 'Tombol Kembali', go_back: 'Tombol Go Back',
+  how_to_use: 'How to Use', buy_now: 'Buy Now',
+  jumlah_custom: 'Jumlah Custom', place_order: 'Place Order', cancel_order: 'Cancel Order',
+  topup_qris: 'Tombol QRIS (Otomatis)', topup_usdt: 'Tombol USDT - BEP20 (Otomatis)', topup_ton: 'Tombol TON / Gram (Otomatis)', topup_binance: 'Tombol Binance Pay (Otomatis)',
+  batal: 'Tombol "⬅️ Batal" (nav singkat)',
+  nominal_cepat: 'Tombol Nominal Cepat QRIS ($1/$5/dst)', nominal_custom: 'Tombol Nominal Kustom QRIS',
+  batalkan_qris: 'Tombol Batalkan Pembayaran QRIS',
+  copy_address_usdt: 'Tombol Copy Address USDT', batalkan_usdt: 'Tombol Batalkan Topup USDT',
+  copy_address_ton: 'Tombol Copy Address TON', batalkan_ton: 'Tombol Batalkan Topup TON',
+  copy_id_binance: 'Tombol Copy Binance ID', batalkan_binance: 'Tombol Batalkan Topup Binance Pay',
+  admin_cat_products: 'Kategori: Produk & Stok', admin_cat_users: 'Kategori: User & Saldo',
+  admin_cat_reports: 'Kategori: Laporan & Statistik', admin_cat_gift: 'Kategori: Gift (Userbot)', admin_cat_settings: 'Kategori: Pengaturan Toko',
+  admin_menu_utama: 'Tombol Shortcut "🏠 Menu Utama" (semua submenu admin)',
+  admin_daftar_produk: 'Daftar Produk', admin_tambah_produk: 'Tambah Produk', admin_hapus_produk: 'Hapus Produk',
+  admin_tambah_stock: 'Tambah Stock', admin_supplier_api: 'Supplier API', admin_tambah_varian: 'Tambah Varian', admin_set_harga: 'Set Harga Produk', admin_set_howto: 'Set How to Use',
+  admin_set_deskripsi: 'Set Deskripsi', admin_set_logo: 'Set Logo Produk', admin_set_emoji: 'Ganti Emoji Produk', admin_atur_saldo: 'Atur Saldo User', admin_topup_pending: 'Topup Pending', admin_log_pengiriman: 'Log Pengiriman',
+  admin_cek_order: 'Cek Order ID', admin_statistik: 'Statistik', admin_list_user: 'List User', admin_maintenance: 'Maintenance Bot', admin_kelola_emoji: 'Kelola Emoji ID',
+  admin_auto_backup: 'Auto Backup', admin_broadcast: 'Broadcast', admin_forcejoin: 'Wajib Join Channel/Grup',
+  admin_channel_notif: 'Set Notifikasi Channel',
+  admin_gift_balance: 'Cek Saldo Stars Userbot', admin_gift_history: 'Riwayat Gift Order', admin_gift_emoji: 'Kelola Emoji Gift', admin_gift_pricing: 'Atur Harga Gift',
+  join_channel: 'Tombol "📢 Join Channel" (tiap channel wajib join)',
+  checkjoin: 'Tombol "✅ Saya Sudah Join" (Wajib Join Channel/Grup)',
+  share_referral: 'Bagikan Link Referral', copy_referral: 'Copy Refer Link',
+  contact_support: 'Contact Support (Halaman Support)',
+  close_menu: 'Tutup Menu (How to Use)', recover: 'Recover Product (My Orders)',
+  cancel_recover: 'Batal (My Orders)', refresh_2fa: 'Refresh Kode 2FA (Detail Order)',
+  gift: 'Ikon Fallback Tombol Pilihan Gift (dipakai kalau gift itu tidak punya sticker custom dari Telegram sendiri)'
+};
+const EMOJI_TEKS_SLOTS = [
+  { key: 'product_desc', label: 'Bullet "{e}" di Deskripsi Produk & How-to-Use' },
+  { key: 'menu_notif', label: 'Teks Menu / Notifikasi (welcome, order berhasil, dll)' }
+];
+
+// Emoji di teks pesan lainnya (BUKAN placeholder "⚡" bolt di atas), dikelompokkan
+// per halaman supaya gampang dicari admin. Setiap item = 1 baris/ikon spesifik
+// di 1 halaman, masing-masing punya slot ID sendiri (key-nya dipakai sebagai
+// argumen ke-1 teksEmoji() di kode).
+const TEKS_GROUPS = [
+  { id: 'bolt', label: '⚡ Bolt Umum (dipakai di banyak pesan)', items: EMOJI_TEKS_SLOTS },
+  { id: 'welcome', label: '👋 Pesan Welcome (/start)', items: [
+    { key: 'welcome_wave', label: 'Ikon Sapaan' },
+    { key: 'welcome_cart', label: 'Ikon Baris "Beli Akun Premium"' },
+    { key: 'welcome_wallet', label: 'Ikon Baris "Topup Otomatis"' },
+    { key: 'welcome_bolt', label: 'Ikon Baris "Auto-delivery"' },
+    { key: 'welcome_gift', label: 'Ikon Baris "Refer & Earn"' },
+    { key: 'welcome_arrow', label: 'Ikon Baris "Pilih Menu"' }
+  ] },
+  { id: 'profile', label: '👤 Halaman Profile', items: [
+    { key: 'profile_title', label: 'Judul "Profile"' },
+    { key: 'profile_nama', label: 'Baris Nama' },
+    { key: 'profile_username', label: 'Baris Username' },
+    { key: 'profile_chatid', label: 'Baris Chat ID' },
+    { key: 'profile_saldo', label: 'Baris Saldo Wallet' },
+    { key: 'profile_order', label: 'Baris Total Order' },
+    { key: 'profile_referral', label: 'Baris Total Referral' }
+  ] },
+  { id: 'balance', label: '💰 Halaman Saldo Wallet', items: [
+    { key: 'balance_line', label: 'Baris Saldo' }
+  ] },
+  { id: 'wallet', label: '💳 Halaman Wallet - Pilih Metode Topup', items: [
+    { key: 'wallet_title', label: 'Ikon Judul "Wallet - Topup Saldo"' }
+  ] },
+  { id: 'orders', label: '🧾 Halaman My Orders', items: [
+    { key: 'orders_empty', label: 'Ikon "Belum Punya Riwayat Pembelian"' }
+  ] },
+  { id: 'howto', label: '❗️ Halaman How to Use', items: [
+    { key: 'howto_title', label: 'Ikon Judul "How it works"' }
+  ] },
+  { id: 'support', label: '📞 Halaman Support Center', items: [
+    { key: 'support_title', label: 'Ikon Judul "Support Center"' }
+  ] },
+  { id: 'referral', label: '🎁 Halaman Refer & Earn', items: [
+    { key: 'referral_title', label: 'Judul Halaman' },
+    { key: 'referral_reward', label: 'Reward per Referral' },
+    { key: 'referral_link', label: 'Link Referral Kamu' },
+    { key: 'referral_howitworks', label: 'Ikon "How It Works"' },
+    { key: 'referral_total', label: 'Total Referral' },
+    { key: 'referral_earnings', label: 'Total Penghasilan Referral' }
+  ] },
+  { id: 'forcejoin', label: '🔐 Layar Wajib Join Channel/Grup', items: [
+    { key: 'forcejoin_lock', label: 'Ikon Gembok (Judul)' },
+    { key: 'forcejoin_sparkle', label: 'Ikon Sparkle (Pembuka Deskripsi)' },
+    { key: 'forcejoin_bolt', label: 'Ikon Petir (Penutup Kalimat Pertama)' },
+    { key: 'forcejoin_arrow', label: 'Ikon Panah (Instruksi Join)' },
+    { key: 'forcejoin_check', label: 'Ikon Centang (dalam kutipan nama tombol)' },
+    { key: 'forcejoin_status_joined', label: 'Ikon Status "Sudah Join" (per channel)' },
+    { key: 'forcejoin_status_pending', label: 'Ikon Status "Belum Join" (per channel)' }
+  ] },
+  { id: 'success', label: '🎉 Pesan Order Berhasil', items: [
+    { key: 'success_border', label: 'Ikon Border ✨ (atas & bawah judul)' },
+    { key: 'success_title', label: 'Judul "ORDER BERHASIL"' },
+    { key: 'success_delivered', label: 'Header Produk Sudah Terkirim' },
+    { key: 'success_link', label: 'Link Aktivasi / Redeem' },
+    { key: 'success_manual', label: 'Info Kirim Manual Admin' },
+    { key: 'success_thanks', label: 'Ucapan Terima Kasih' }
+  ] },
+  { id: 'qris', label: '🧾 Tagihan QRIS (Topup)', items: [
+    { key: 'qris_title', label: 'Judul "TAGIHAN QRIS SUDAH SIAP"' },
+    { key: 'qris_rocket', label: 'Ikon Roket (ajakan saldo penuh)' },
+    { key: 'qris_orderid', label: 'Baris Order ID' },
+    { key: 'qris_saldo', label: 'Baris Saldo yang Didapat' },
+    { key: 'qris_total', label: 'Baris Total Bayar via QRIS' },
+    { key: 'qris_expire', label: 'Baris Berlaku Selama' },
+    { key: 'qris_carabayar', label: 'Judul "Cara Bayar"' },
+    { key: 'qris_step1', label: 'Langkah 1 (buka e-wallet)' },
+    { key: 'qris_step2', label: 'Langkah 2 (pilih Scan QR)' },
+    { key: 'qris_step3', label: 'Langkah 3 (scan & bayar)' },
+    { key: 'qris_auto', label: 'Ikon Saldo Masuk Otomatis' },
+    { key: 'qris_tip', label: 'Ikon Tip Batalkan Pembayaran' },
+    { key: 'qris_creating', label: 'Ikon Loading "Sedang Membuat QRIS"' },
+    { key: 'qris_choose_amount_title', label: 'Ikon Judul "Pilih Nominal Deposit"' }
+  ] },
+  { id: 'usdt', label: '🪙 Deposit USDT (BEP20)', items: [
+    { key: 'usdt_title', label: 'Judul "Deposit via USDT"' },
+    { key: 'usdt_min', label: 'Baris Min Deposit' },
+    { key: 'usdt_max', label: 'Baris Max Deposit' },
+    { key: 'usdt_address_label', label: 'Ikon Label Address' },
+    { key: 'usdt_auto', label: 'Ikon Automatic Deposit' },
+    { key: 'usdt_prompt', label: 'Ikon Prompt "Ketik Nominal Topup"' }
+  ] },
+  { id: 'ton', label: '💎 Deposit TON', items: [
+    { key: 'ton_title', label: 'Judul "Deposit via TON"' },
+    { key: 'ton_min', label: 'Baris Min Deposit' },
+    { key: 'ton_max', label: 'Baris Max Deposit' },
+    { key: 'ton_address_label', label: 'Ikon Label Address' },
+    { key: 'ton_auto', label: 'Ikon Automatic Deposit' },
+    { key: 'ton_prompt', label: 'Ikon Prompt "Ketik Nominal Topup"' }
+  ] },
+  { id: 'qty', label: '🛒 Halaman Jumlah Beli', items: [
+    { key: 'qty_warning', label: 'Ikon Peringatan "Masukkan Jumlah"' },
+    { key: 'qty_stock', label: 'Ikon "Stok Tersedia"' },
+    { key: 'bulk_title', label: 'Ikon Judul "Diskon Grosir" (🎉)' },
+    { key: 'bulk_check', label: 'Ikon Centang Tiap Baris Diskon (✅)' }
+  ] },
+  { id: 'confirm', label: '✅ Order Confirmation & Saldo Kurang', items: [
+    { key: 'order_confirm_title', label: 'Ikon Judul "Order Confirmation"' },
+    { key: 'order_confirm_balance', label: 'Baris Saldo Wallet' },
+    { key: 'order_confirm_stock', label: 'Baris Stok Tersedia' },
+    { key: 'insufficient_balance_warn', label: 'Ikon Peringatan "Saldo Tidak Cukup"' },
+    { key: 'insufficient_balance_shortfall', label: 'Baris Nominal Kekurangan' }
+  ] },
+  { id: 'channelnotif', label: '📢 Notifikasi Channel (New Purchase / Top-Up)', items: [
+    { key: 'channelnotif_border', label: 'Ikon Border ✨ (atas & bawah judul)' },
+    { key: 'channelnotif_purchase_title', label: 'Judul "NEW PURCHASE!"' },
+    { key: 'channelnotif_id', label: 'Baris ID (tersamar)' },
+    { key: 'channelnotif_product', label: 'Baris Product' },
+    { key: 'channelnotif_qty', label: 'Baris Quantity' },
+    { key: 'channelnotif_total', label: 'Baris Total' },
+    { key: 'channelnotif_time', label: 'Baris Time' },
+    { key: 'channelnotif_topup_title', label: 'Judul "NEW WALLET TOP-UP!"' },
+    { key: 'channelnotif_network', label: 'Baris Network' },
+    { key: 'channelnotif_amount', label: 'Baris Amount' },
+    { key: 'channelnotif_referral_title', label: 'Judul "NEW REFERRAL SUCCESS!"' },
+    { key: 'channelnotif_referral_user', label: 'Baris User (tersamar)' },
+    { key: 'channelnotif_referral_referredby', label: 'Baris Referred By (tersamar)' },
+    { key: 'channelnotif_referral_reward', label: 'Baris Reward' },
+    { key: 'channelnotif_footer', label: 'Ikon Footer 🔥 (baris "Fast & Trusted")' },
+    { key: 'channelnotif_maintenance_start_title', label: 'Judul "MAINTENANCE DIMULAI!"' },
+    { key: 'channelnotif_maintenance_start_status', label: 'Ikon Status (Maintenance Dimulai)' },
+    { key: 'channelnotif_maintenance_finish_title', label: 'Judul "MAINTENANCE SELESAI!"' },
+    { key: 'channelnotif_maintenance_finish_status', label: 'Ikon Status (Maintenance Selesai)' }
+  ] },
+  { id: 'stockalert', label: '🔔 Notifikasi Live Stock (ke Semua User)', items: [
+    { key: 'stockalert_bell', label: 'Ikon Lonceng (Judul)' },
+    { key: 'stockalert_product', label: 'Baris Produk' },
+    { key: 'stockalert_added', label: 'Baris Jumlah Ditambahkan' },
+    { key: 'stockalert_total', label: 'Baris Total Stok Sekarang' },
+    { key: 'stockalert_price', label: 'Baris Harga' },
+    { key: 'stockalert_footer', label: 'Ikon Footer (Ajakan Buy Now)' }
+  ] },
+  { id: 'maintenance', label: '🛠️ Mode Maintenance', items: [
+    { key: 'maintenance_wrench', label: 'Ikon Kunci Inggris (Judul, kiri-kanan)' },
+    { key: 'maintenance_sparkle', label: 'Ikon Sparkle (Pembuka Kalimat)' },
+    { key: 'maintenance_bolt', label: 'Ikon Petir (Penutup Kalimat Pertama)' },
+    { key: 'maintenance_clock', label: 'Ikon Jam (Baris Mohon Bersabar)' },
+    { key: 'maintenance_heart', label: 'Ikon Hati (Baris Ucapan Terima Kasih)' },
+    { key: 'maintenance_finished_rocket', label: '🚀 [Broadcast Selesai] Ikon Roket (Judul, kiri-kanan)' },
+    { key: 'maintenance_finished_sparkle', label: '🚀 [Broadcast Selesai] Ikon Sparkle (Pembuka Kalimat)' },
+    { key: 'maintenance_finished_check', label: '🚀 [Broadcast Selesai] Ikon Centang (Kata "SELESAI")' },
+    { key: 'maintenance_finished_bolt', label: '🚀 [Broadcast Selesai] Ikon Petir (Penutup Kalimat Pertama)' },
+    { key: 'maintenance_finished_gift', label: '🚀 [Broadcast Selesai] Ikon Gift (Baris Ajakan Order)' },
+    { key: 'maintenance_finished_heart', label: '🚀 [Broadcast Selesai] Ikon Hati (Baris Ucapan Terima Kasih)' }
+  ] }
+];
+function findTeksItemLabel(key) {
+  for (const g of TEKS_GROUPS) {
+    const item = g.items.find(i => i.key === key);
+    if (item) return item.label;
+  }
+  return key;
+}
+
+function adminEmojiCategoryKeyboard() {
+  const rows = EMOJI_CATEGORIES.map(cat => ([{ text: cat.label, callback_data: `admin:emojicat:${cat.id}` }]));
+  rows.push([{ text: '✍️ Emoji di Teks Pesan', callback_data: 'admin:emojiteks' }]);
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+function adminEmojiTeksGroupKeyboard() {
+  const rows = TEKS_GROUPS.map(g => ([{ text: g.label, callback_data: `admin:emojiteksgroup:${g.id}` }]));
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:emojiids' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// Cek apakah 1 key emoji "terisi" - baik lewat hasil tangkap otomatis di
+// database (prioritas 1, lihat teksEmoji()/iconFor()) MAUPUN lewat default
+// yang sudah ditempel langsung di kode (EMOJI_ID_TEKS_BACKUP / EMOJI_IDS).
+// Tanpa cek kode ini, checklist admin bisa nampilin ⚪ (belum diisi) padahal
+// emoji-nya SUDAH tampil premium di pesan asli - bikin admin salah sangka
+// kirain belum ke-set padahal sebenarnya sudah aktif dari kode.
+function isTeksEmojiFilled(key) {
+  return !!(db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEKS_BACKUP[key]);
+}
+function isMenuEmojiFilled(key) {
+  return !!(db.getEmojiId(`menu:${key}`) || EMOJI_IDS[key]);
+}
+
+function adminEmojiTeksItemKeyboard(groupId) {
+  const group = TEKS_GROUPS.find(g => g.id === groupId);
+  const rows = (group ? group.items : []).map(item => {
+    const filled = isTeksEmojiFilled(item.key) ? '✅' : '⚪';
+    return [{ text: `${filled} ${item.label}`, callback_data: `admin:emojiset:teks:${item.key}` }];
+  });
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:emojiteks' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+function adminEmojiKeyListKeyboard(catId) {
+  const rows = [];
+  const cat = EMOJI_CATEGORIES.find(c => c.id === catId);
+  (cat ? cat.keys : []).forEach(key => {
+    const filled = isMenuEmojiFilled(key) ? '✅' : '⚪';
+    rows.push([{ text: `${filled} ${EMOJI_KEY_LABELS[key] || key}`, callback_data: `admin:emojiset:menu:${key}` }]);
+  });
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:emojiids' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+function adminProductPickKeyboard(action, productsOverride) {
+  const products = productsOverride || db.getAllProducts();
+  const rows = products.map(p => ([
+    withProductIcon({
+      text: `${p.emojiId ? '' : (p.emoji ? p.emoji + ' ' : '📦 ')}${p.name}`,
+      callback_data: `admin:${action}:${p.id}`
+    }, p)
+  ]));
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_products' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// parentTarget: callback_data tujuan tombol "‹ Kembali" - default 'admin:menu'
+// (menu utama) kalau tidak diisi. Kalau parentTarget BUKAN menu utama, ikut
+// ditambahkan 1 tombol lagi "🏠 Menu Utama" di bawahnya supaya admin tetap
+// bisa lompat langsung ke menu utama tanpa harus mundur selangkah-selangkah.
+function adminBackKeyboard(parentTarget) {
+  const target = parentTarget || 'admin:menu';
+  const rows = [[withButtonIcon({ text: '‹ Kembali', callback_data: target }, 'back')]];
+  if (target !== 'admin:menu') {
+    rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  }
+  return { inline_keyboard: rows };
+}
+
+// ===== Data buat fitur "🔐 Wajib Join Channel/Grup" =====
+// Daftar "channels" di bawah ini boleh dicampur bebas: entri channel ATAU
+// entri group/supergroup, dua-duanya dicek dengan mekanisme yang SAMA persis
+// (isUserMemberOfChannel() cuma pakai getChatMember, tidak peduli tipe chat-
+// nya) - jadi 1 user bisa diwajibkan join beberapa channel SEKALIGUS beberapa
+// group cukup dengan menambahkan semuanya lewat "➕ Tambah Channel/Grup" di
+// bawah, tanpa perlu menu/kode terpisah untuk group.
+function adminForceJoinText() {
+  const { enabled, channels } = db.getForceJoinSettings();
+  const statusLine = enabled ? '🟢 *AKTIF* - user wajib join semua channel/grup di bawah sebelum bisa pakai bot.' : '🔴 *NONAKTIF* - user bebas pakai bot tanpa perlu join channel/grup apapun.';
+  const list = channels.length
+    ? channels.map((c, i) => `${i + 1}. *${c.title}*\n   🔗 ${c.link}\n   🆔 \`${c.chatRef}\``).join('\n\n')
+    : '_Belum ada channel/grup yang ditambahkan._';
+  return `🔐 *Wajib Join Channel/Grup*\n\nStatus: ${statusLine}\n\n📋 *Daftar Channel/Grup:*\n${list}`;
+}
+
+function adminForceJoinKeyboard() {
+  const { enabled, channels } = db.getForceJoinSettings();
+  const rows = [];
+  rows.push([withButtonIcon(
+    { text: enabled ? '🔴 Nonaktifkan Wajib Join' : '🟢 Aktifkan Wajib Join', callback_data: 'admin:forcejoin_toggle' },
+    'admin_forcejoin'
+  )]);
+  rows.push([withButtonIcon({ text: '➕ Tambah Channel/Grup', callback_data: 'admin:forcejoin_add' }, 'admin_tambah_produk')]);
+  channels.forEach(c => {
+    rows.push([{ text: `🗑️ Hapus: ${c.title}`, callback_data: `admin:forcejoin_remove:${c.id}` }]);
+  });
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// ===== Admin: 📣 Set Notifikasi Channel (New Purchase / New Wallet Top-Up) =====
+function adminChannelNotifText() {
+  const { enabled, chatRef, title, notifyPurchase, notifyTopup, notifyReferral, notifyMaintenance } = db.getChannelNotifSettings();
+  const statusLine = enabled
+    ? '🟢 *AKTIF* - tiap ada pembelian/topup/referral sukses, bot otomatis kirim notifikasi ke channel tujuan.'
+    : '🔴 *NONAKTIF* - belum ada notifikasi yang dikirim ke channel manapun.';
+  const targetLine = chatRef
+    ? `📢 *${title || chatRef}*\n🆔 \`${chatRef}\``
+    : '_Belum diatur - klik "🆔 Set Channel Tujuan" di bawah._';
+  return (
+    `📣 *Set Notifikasi Channel*\n\n` +
+    `Status: ${statusLine}\n\n` +
+    `*Channel Tujuan:*\n${targetLine}\n\n` +
+    `*Jenis notifikasi:*\n` +
+    `${notifyPurchase ? '🟢' : '🔴'} 🎉 New Purchase (pembelian produk)\n` +
+    `${notifyTopup ? '🟢' : '🔴'} 💳 New Wallet Top-Up (topup QRIS/USDT/TON)\n` +
+    `${notifyReferral ? '🟢' : '🔴'} 🎁 New Referral Success (referral baru masuk)\n` +
+    `${notifyMaintenance ? '🟢' : '🔴'} 🛠️ Maintenance Dimulai/Selesai (aktif/nonaktifkan Mode Maintenance)\n\n` +
+    `_Tiap ikon di pesan notifikasi bisa diganti lewat "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "📢 Notifikasi Channel"._`
+  );
+}
+
+function adminChannelNotifKeyboard() {
+  const { enabled, chatRef, notifyPurchase, notifyTopup, notifyReferral, notifyMaintenance } = db.getChannelNotifSettings();
+  const rows = [];
+  rows.push([withButtonIcon(
+    { text: enabled ? '🔴 Nonaktifkan Notifikasi' : '🟢 Aktifkan Notifikasi', callback_data: 'admin:channelnotif_toggle' },
+    'admin_channel_notif'
+  )]);
+  rows.push([{ text: '🆔 Set Channel Tujuan', callback_data: 'admin:channelnotif_setchannel' }]);
+  rows.push([
+    { text: `${notifyPurchase ? '🟢' : '🔴'} New Purchase`, callback_data: 'admin:channelnotif_toggle_purchase' },
+    { text: `${notifyTopup ? '🟢' : '🔴'} New Top-Up`, callback_data: 'admin:channelnotif_toggle_topup' }
+  ]);
+  rows.push([
+    { text: `${notifyReferral ? '🟢' : '🔴'} New Referral`, callback_data: 'admin:channelnotif_toggle_referral' },
+    { text: `${notifyMaintenance ? '🟢' : '🔴'} Maintenance`, callback_data: 'admin:channelnotif_toggle_maintenance' }
+  ]);
+  if (chatRef) {
+    rows.push([
+      { text: '🧪 Contoh Purchase', callback_data: 'admin:channelnotif_test' },
+      { text: '🧪 Contoh Referral', callback_data: 'admin:channelnotif_test_referral' }
+    ]);
+  }
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+function adminVariantPickKeyboard(product, action, backCallback) {
+  // Pakai index varian (bukan v.id) di callback_data - v.id biasanya sudah
+  // mengandung product.id sebagai prefix (mis. "gemini-pro-18-bulan-18"),
+  // jadi kalau ditulis lagi utuh di sini callback_data gampang lewat batas
+  // 64 byte Telegram dan bikin error "Bad Request: BUTTON_DATA_INVALID".
+  const rows = product.variants.map((v, i) => ([
+    { text: `${v.label} (stok saat ini: ${db.getTotalStock(v)})`, callback_data: `admin:${action}:${product.id}:${i}` }
+  ]));
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: backCallback || 'admin:addstock' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// Sama seperti adminVariantPickKeyboard() di atas, tapi HANYA tampilkan
+// varian yang sudah terhubung Supplier API (v.supplierServiceId terisi) -
+// dipakai oleh alur standalone "📊 Atur Markup 3-Tier" (lihat handler
+// 'suppliertiermarkuppick_pick') supaya admin tidak salah pilih varian
+// manual yang tidak punya modal Supplier untuk dihitung tier-nya. Index
+// callback_data tetap index ASLI ke product.variants (bukan index dalam
+// daftar yang sudah difilter), supaya handler tujuan tinggal langsung pakai
+// product.variants[i] tanpa perlu mapping ulang.
+function adminSupplierVariantPickKeyboard(product, action, backCallback) {
+  const rows = [];
+  product.variants.forEach((v, i) => {
+    if (!v.supplierServiceId) return;
+    const costLabel = typeof v.supplierCost === 'number' ? usd(v.supplierCost) : '?';
+    rows.push([{ text: `${v.label} (modal: ${costLabel})`, callback_data: `admin:${action}:${product.id}:${i}` }]);
+  });
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: backCallback || 'admin:supplier' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// ===== Helper untuk fitur "Supplier API" =====
+
+function supplierBackKeyboard() {
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:supplier' }, 'back')],
+      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+    ]
+  };
+}
+
+// Tampilan utama "Supplier API": status koneksi (saldo toko di AIVerse
+// Hub, kalau API key sudah diisi) + daftar varian yang sedang terhubung.
+async function supplierMenuText() {
+  let statusLine;
+  if (!AIVERSEHUB_API_KEY) {
+    statusLine = '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env` - fitur ini belum bisa dipakai.';
+  } else {
+    try {
+      const me = await supplier.getMe();
+      statusLine = `🟢 Terhubung - saldo toko di Supplier: *${usd(me.wallet_balance)}*`;
+    } catch (err) {
+      statusLine = `🔴 Gagal cek koneksi ke Supplier: _${err.message}_`;
+    }
+  }
+
+  const linked = db.getSupplierLinkedVariants();
+  const list = linked.length
+    ? linked.map(l => {
+        const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
+        const sell = db.getBasePrice(l.variant);
+        const cost = l.variant.supplierCost;
+        const marginTag = (typeof cost === 'number')
+          ? (sell <= cost ? ' ⚠️ RUGI/IMPAS' : ` (untung ${usd(sell - cost)}/pcs)`)
+          : '';
+        return `• *${label}* → \`${l.variant.supplierServiceId}\`\n   Modal: ${typeof cost === 'number' ? usd(cost) : '?'} • Jual: ${usd(sell)}${marginTag}`;
+      }).join('\n')
+    : '_Belum ada varian yang terhubung._';
+
+  return (
+    `*Supplier API*\n\n` +
+    `${statusLine}\n\n` +
+    `Varian produk yang dihubungkan ke sini akan dipesan & dipenuhi OTOMATIS lewat Supplier setiap ada buyer beli (bukan dari stok lokal lagi).\n\n` +
+    `🔄 Auto-sync modal & stok: ${(AIVERSEHUB_API_KEY && SUPPLIER_SYNC_INTERVAL_MINUTES > 0) ? `*aktif*, tiap *${SUPPLIER_SYNC_INTERVAL_MINUTES} menit*` : '*mati* (ubah `SUPPLIER_SYNC_INTERVAL_MINUTES` di .env untuk mengaktifkan, atau refresh manual di bawah)'}\n\n` +
+    `📋 *Varian Terhubung:*\n${list}`
+  );
+}
+
+function supplierMenuKeyboard() {
+  const linked = db.getSupplierLinkedVariants();
+  const rows = [];
+  rows.push([{ text: '➕ Hubungkan Produk', callback_data: 'admin:supplierlink' }]);
+  if (linked.length) {
+    rows.push([{ text: '📊 Atur Markup 3-Tier', callback_data: 'admin:suppliertiermarkuppick' }]);
+  }
+  rows.push([
+    { text: '🧾 Riwayat Order', callback_data: 'admin:supplierorders:1' },
+    { text: '📊 Statistik', callback_data: 'admin:supplierstats' }
+  ]);
+  rows.push([{ text: '🔍 Cek Order ID (API)', callback_data: 'admin:supplierorderid' }]);
+  if (linked.length) {
+    rows.push([{ text: '🔄 Refresh Modal & Stok', callback_data: 'admin:supplierrefresh' }]);
+  }
+  // PENTING: callback_data di sini pakai INDEX ke `linked` (bukan
+  // productId+variantId ditulis utuh) - gabungan keduanya gampang lewat
+  // batas 64 byte Telegram (sama seperti bug BUTTON_DATA_INVALID yang
+  // sudah diperbaiki di tempat lain). Index dihitung ulang dari
+  // db.getSupplierLinkedVariants() tiap handler dipanggil, jadi selama
+  // tidak ada perubahan link di tengah-tengah admin mengetuk tombol,
+  // urutannya konsisten.
+  linked.forEach((l, i) => {
+    const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
+    rows.push([
+      { text: `💲 Harga: ${label}`, callback_data: `admin:supplierharga:${i}` },
+      { text: '🗑️ Putus', callback_data: `admin:supplierunlinkconfirm:${i}` }
+    ]);
+  });
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_products' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// Ambil daftar service Supplier via API, lalu tampilkan sebagai keyboard
+// pilihan untuk dihubungkan ke productId/variantId lokal. Daftar service
+// mentah disimpan sementara di pendingAction (bukan di-encode ke
+// callback_data) karena service_id/nama dari API bisa mengandung karakter
+// apapun yang tidak aman dipakai langsung sebagai bagian callback_data.
+async function showSupplierServicePicker(chatId, messageId, productId, variantId) {
+  if (!AIVERSEHUB_API_KEY) {
+    return sendOrEditAdmin(chatId, messageId, '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`, tidak bisa ambil daftar produk Supplier.', supplierBackKeyboard());
+  }
+  let services;
+  try {
+    services = await supplier.getProducts();
+  } catch (err) {
+    return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil daftar produk dari Supplier:\n_${err.message}_`, supplierBackKeyboard());
+  }
+  if (!services.length) {
+    return sendOrEditAdmin(chatId, messageId, '⚠️ Supplier tidak mengembalikan produk apapun saat ini.', supplierBackKeyboard());
+  }
+  db.setPendingAction(chatId, { type: 'supplier_link_pick', data: { productId, variantId, services } });
+  const rows = services.map((s, i) => ([{
+    text: `${s.name || s.service_id} - Modal ${usd(s.price)} (stok: ${s.stock})`,
+    callback_data: `admin:supplierlink_set:${i}`
+  }]));
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:supplierlink' }, 'back')]);
+  await sendOrEditAdmin(chatId, messageId, 'Pilih produk Supplier yang mau dihubungkan:', { inline_keyboard: rows });
+}
+
+// Teks perbandingan modal (harga API Supplier) vs harga jual lokal saat
+// ini - dipakai begitu admin baru menghubungkan/mengubah harga varian.
+// Kalau harga jual <= modal, tampilkan peringatan jelas (bukan cuma angka)
+// supaya tidak kelewat tanpa sadar jual rugi/impas.
+// Sinkron modal & stok SEMUA varian yang terhubung ke Supplier API dalam 1
+// panggilan (dipakai baik oleh tombol manual "🔄 Refresh Modal & Stok" MAUPUN
+// oleh auto-sync terjadwal, lihat scheduleSupplierSync() - supaya logikanya
+// cuma ada di 1 tempat, tidak dobel/gampang beda perilaku). Return
+// { updated, missing, lines[] } - pemanggil tinggal pilih mau ditampilkan
+// Hitung ulang array tiers dari 1 angka modal + config markup% - dipakai
+// baik oleh refreshSupplierData() (auto-sync berkala) MAUPUN handler
+// 'supplierlink_set' (saat admin baru menghubungkan varian), supaya
+// rumusnya cuma ada di 1 tempat dan konsisten di kedua alur itu.
+function computeTiersFromCost(cost, markup) {
+  return markup.map(m => ({
+    min: m.min,
+    max: m.max,
+    price: Math.round(cost * (1 + (m.markupPct || 0) / 100) * 100) / 100
+  }));
+}
+
+// Minta admin ketik 3 harga jual (USD) buat tier 1-49 / 50-499 / 500+ satu
+// varian - dipakai oleh handler 'settierprice_pick'/'settierprice_variant'
+// di atas. Kalau varian belum punya tiers sama sekali (harusnya tidak
+// pernah terjadi karena addVariant/addSimpleProduct selalu isi 1 tier
+// default), tampilkan harga dasar saja sebagai gambaran "harga sekarang".
+function askSetTierPrice(chatId, messageId, product, variant) {
+  db.setPendingAction(chatId, { type: 'set_tier_price', data: { productId: product.id, variantId: variant.id } });
+  const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
+  const currentLine = (variant.tiers && variant.tiers.length > 1)
+    ? `Tier saat ini: ${tierPricesSummary(variant.tiers)}`
+    : `Harga saat ini: ${usd(db.getBasePrice(variant))} (belum ada tier bertingkat)`;
+  // Kalau varian.priceLocked true, tier manual AMAN dari auto-sync (lihat
+  // refreshSupplierData()) - beda pesan dari kondisi default (belum dikunci)
+  // supaya admin tahu status kunci saat ini tanpa perlu buka menu lain.
+  const supplierNote = variant.supplierServiceId
+    ? (variant.priceLocked
+        ? '\n\n🔒 Harga manual varian ini DIKUNCI - auto-sync Supplier tetap update modal & stok, tapi tier harga TIDAK akan ditimpa. Tekan tombol di bawah buat buka kunci lagi.'
+        : '\n\n⚠️ Varian ini terhubung Supplier API - tier manual ini akan TERTIMPA lagi begitu sync modal berikutnya jalan (otomatis atau lewat "🔄 Refresh Modal & Stok"). Tekan "🔒 Kunci Harga Manual" di bawah kalau tidak mau ketimpa, atau pakai "📊 Atur Markup 3-Tier" kalau memang mau harga selalu ikut modal.')
+    : '';
+  let keyboard = adminBackKeyboard('admin:cat_products');
+  if (variant.supplierServiceId) {
+    const variantIndex = product.variants.findIndex(v => v.id === variant.id);
+    const lockButton = variant.priceLocked
+      ? { text: '🔓 Buka Kunci Harga Manual', callback_data: `admin:pricelocktoggle:${product.id}:${variantIndex}` }
+      : { text: '🔒 Kunci Harga Manual', callback_data: `admin:pricelocktoggle:${product.id}:${variantIndex}` };
+    keyboard = {
+      inline_keyboard: [
+        [lockButton],
+        ...adminBackKeyboard('admin:cat_products').inline_keyboard
+      ]
+    };
+  }
+  return sendOrEditAdmin(chatId, messageId,
+    `🎁 *Set Tier Diskon Grosir - ${label}*\n\n${currentLine}\n\n` +
+    `Ketik 3 harga USD dipisah koma buat tier *1-49 / 50-499 / 500+* (boleh desimal, TANPA tanda $).\n` +
+    `Contoh: \`0.65,0.69,0.65\` artinya 1-49 pcs = $0.65, 50-499 pcs = $0.69, 500+ pcs = $0.65.\n\n` +
+    `Ketik /cancel untuk batal.${supplierNote}`,
+    keyboard
+  );
+}
+
+// Minta admin ketik 3 angka PERSEN markup (dari modal Supplier) buat tier
+// 1-49 / 50-499 / 500+ satu varian - versi "markup%" dari askSetTierPrice()
+// di atas, dipakai KHUSUS varian yang terhubung Supplier API (butuh modal
+// live buat dihitung). Dipanggil dari 2 alur (lihat handler 'suppliertiermarkup'
+// dan 'suppliertiermarkuppick_variant' di atas) supaya tampilan & pending
+// action-nya konsisten di keduanya.
+function askSetTierMarkup(chatId, messageId, product, variant) {
+  db.setPendingAction(chatId, { type: 'set_tier_markup', data: { productId: product.id, variantId: variant.id } });
+  const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
+  const cost = variant.supplierCost;
+  const currentMarkup = db.getVariantTierMarkup(variant, DEFAULT_SUPPLIER_TIER_MARKUP);
+  const previewNow = typeof cost === 'number' && !isNaN(cost)
+    ? tierPricesSummary(computeTiersFromCost(cost, currentMarkup))
+    : '?';
+  return sendOrEditAdmin(chatId, messageId,
+    `📊 *Atur Markup 3-Tier - ${label}*\n\n` +
+    `${typeof cost === 'number' ? `Modal Supplier saat ini: ${usd(cost)}\n` : ''}Markup dipakai sekarang: ${currentMarkup.map(m => `${m.markupPct}%`).join(' / ')}\n` +
+    `Harga sekarang (kalau dihitung dari markup itu): ${previewNow}\n\n` +
+    `Ketik 3 angka persen dipisah koma buat tier *1-49 / 50-499 / 500+* (boleh desimal, TANPA tanda %).\n` +
+    `Contoh: \`10,7,5\` artinya tier 1-49 = modal+10%, 50-499 = modal+7%, 500+ = modal+5%.\n\n` +
+    `Harga langsung dihitung ulang dari modal SAAT INI setelah kamu kirim. Ketik /cancel untuk batal.`,
+    supplierBackKeyboard()
+  );
+}
+
+function tierPricesSummary(tiers) {
+  return tiers.map(t => {
+    const range = t.max === null ? `${t.min}+` : `${t.min}-${t.max}`;
+    return `${range}: ${usd(t.price)}`;
+  }).join(' • ');
+}
+
+// sebagai pesan admin atau cuma dicek diam-diam (auto-sync).
+async function refreshSupplierData() {
+  const linked = db.getSupplierLinkedVariants();
+  if (!linked.length) return { updated: 0, missing: 0, priceAlerts: [], lines: [], linkedCount: 0 };
+
+  const services = await supplier.getProducts();
+  // 1 panggilan API buat SEMUA varian sekaligus (bukan per-varian) - hemat
+  // rate limit Supplier (3 req/detik) walau varian yang terhubung banyak.
+  const byServiceId = new Map(services.map(s => [String(s.service_id), s]));
+  let updated = 0, missing = 0, invalidPrice = 0;
+  const priceAlerts = []; // dipakai scheduleSupplierSync() buat kabari admin proaktif kalau ada lonjakan modal
+  const stockChanges = []; // dipakai scheduleSupplierSync() buat broadcast "🔔 Stok Diperbarui" ke semua user
+  const lines = linked.map(l => {
+    const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
+    const svc = byServiceId.get(String(l.variant.supplierServiceId));
+    if (!svc) {
+      missing++;
+      return `⚠️ *${label}* → service \`${l.variant.supplierServiceId}\` sudah tidak ada lagi di Supplier! Cek/putuskan link ini.`;
+    }
+    const newCost = typeof svc.price === 'number' ? svc.price : parseFloat(svc.price);
+    const oldCost = typeof l.variant.supplierCost === 'number' ? l.variant.supplierCost : null;
+
+    // ===== SAFETY: jangan pernah proses modal <= 0 / bukan angka =====
+    // Kalau API Supplier sempat balas price 0/null/rusak (bug sesaat di
+    // sisi mereka), JANGAN update apapun (cost, stok, tiers) untuk varian
+    // ini di siklus sync ini - daripada harga jual ikut ke-set $0 (rugi
+    // total/produk kejual gratis). Modal & harga lama tetap dipakai sampai
+    // sync berikutnya dapat angka yang valid.
+    if (isNaN(newCost) || newCost <= 0) {
+      invalidPrice++;
+      priceAlerts.push(`⚠️ *${label}*: modal dari Supplier tidak valid (${svc.price}) - harga/stok LAMA tetap dipakai, dilewati siklus ini. Cek manual!`);
+      return `⚠️ *${label}* → modal dari Supplier tidak valid (${svc.price}), DILEWATI - harga/stok lama tetap dipakai. Cek manual!`;
+    }
+
+    db.setVariantSupplier(l.productId, l.variant.id, l.variant.supplierServiceId, newCost);
+    // Sinkron juga stok LOKAL varian ini ke stok live Supplier - dulu
+    // cuma ditampilkan di teks laporan tapi tidak pernah ditulis ke
+    // variant.stock, jadi menu admin & daftar produk buyer selalu nampilin
+    // angka lama/manual yang basi.
+    const liveStock = Number(svc.stock);
+    if (!isNaN(liveStock)) {
+      // ===== FITUR BARU: deteksi perubahan TOTAL stok (live+manual) buat
+      // trigger broadcast "🔔 Stok Diperbarui" - dibandingkan SEBELUM
+      // db.setVariantStock() menimpa liveStock, supaya oldTotal beneran
+      // representasi angka SEBELUM sync ini (bukan sudah ke-update).
+      const oldTotal = db.getTotalStock(l.variant);
+      db.setVariantStock(l.productId, l.variant.id, liveStock);
+      const newTotal = (l.variant.stock || 0) + Math.max(0, Math.round(liveStock));
+      if (newTotal !== oldTotal) {
+        const product = db.findProduct(l.productId);
+        if (product) stockChanges.push({ product, variant: l.variant, oldTotal, newTotal });
+      }
+    }
+    // Hitung ULANG tier harga jual (1-49 / 50-499 / 500+, dst) dari modal
+    // live + markup% (lihat DEFAULT_SUPPLIER_TIER_MARKUP di config.js, atau
+    // variant.tierMarkup untuk override khusus produk ini) - supaya harga
+    // yang dilihat buyer otomatis ikut naik/turun sesuai modal terbaru
+    // Supplier, bukan angka manual yang gampang basi/rugi kalau modal naik.
+    // KECUALI kalau variant.priceLocked true ("🔒 Kunci Harga Manual" -
+    // lihat askSetTierPrice()) - admin sudah set harga manual lewat "🎁 Set
+    // Tier Diskon Grosir" dan tidak mau ketimpa lagi, jadi tier LAMA
+    // dipertahankan; modal & stok tetap ikut update seperti biasa di atas.
+    let newTiers = l.variant.tiers;
+    if (!l.variant.priceLocked) {
+      const markup = db.getVariantTierMarkup(l.variant, DEFAULT_SUPPLIER_TIER_MARKUP);
+      newTiers = computeTiersFromCost(newCost, markup);
+      db.setVariantTiers(l.productId, l.variant.id, newTiers);
+      l.variant.tiers = newTiers; // biar `sell`/laporan di bawah pakai tier baru, bukan yang lama di memori
+    }
+    updated++;
+
+    // ===== Deteksi lonjakan modal >20% dibanding sync sebelumnya =====
+    // Cuma dibandingkan kalau oldCost ada & valid (bukan link pertama kali).
+    // Dipakai scheduleSupplierSync() buat kabari admin PROAKTIF (bukan cuma
+    // kelihatan kalau admin buka menu Supplier API manual), soalnya harga
+    // jual buyer ikut berubah otomatis - admin perlu tahu kalau lonjakannya
+    // gede supaya bisa cek apakah masih masuk akal / perlu ubah markup.
+    if (oldCost !== null && oldCost > 0) {
+      const changePct = ((newCost - oldCost) / oldCost) * 100;
+      if (Math.abs(changePct) >= 20) {
+        const arrow = changePct > 0 ? '📈 naik' : '📉 turun';
+        // Kalau harganya dikunci, harga JUAL tidak ikut berubah otomatis
+        // (beda dari kondisi normal) - admin tetap perlu tahu modalnya
+        // melonjak supaya bisa cek manual apakah margin masih masuk akal.
+        const impactNote = l.variant.priceLocked
+          ? 'harga jual TIDAK berubah (dikunci) - cek margin manual!'
+          : 'harga jual ikut ter-update otomatis.';
+        priceAlerts.push(`⚠️ *${label}*: modal ${arrow} ${Math.abs(changePct).toFixed(0)}% (${usd(oldCost)} → ${usd(newCost)}) - ${impactNote}`);
+      }
+    }
+
+    const sell = db.getBasePrice(l.variant);
+    const marginTag = sell <= newCost ? ' ⚠️ RUGI/IMPAS' : ` (untung ${usd(sell - newCost)}/pcs)`;
+    const lockTag = l.variant.priceLocked ? ' 🔒' : '';
+    const stockNum = Number(svc.stock);
+    const stockTag = !isNaN(stockNum) && stockNum <= 5 ? ` • ⚠️ stok Supplier tersisa ${stockNum}` : ` • stok Supplier: ${svc.stock}`;
+    // Tampilkan SEMUA tier hasil hitung (bukan cuma 1 harga dasar) supaya
+    // admin langsung lihat harga di ketiga rentang qty tanpa buka db.json.
+    return `• *${label}*${lockTag}\n   Modal: ${usd(newCost)} • Jual dasar: ${usd(sell)}${marginTag}${stockTag}\n   Tiers: ${tierPricesSummary(newTiers)}`;
+  });
+  return { updated, missing, invalidPrice, priceAlerts, lines, linkedCount: linked.length, stockChanges };
+}
+
+let supplierSyncTimer = null;
+
+// Auto-sync modal & stok Supplier API secara berkala TANPA admin perlu klik
+// "🔄 Refresh Modal & Stok" manual - lihat SUPPLIER_SYNC_INTERVAL_MINUTES di
+// config.js/.env. Kalau ada link yang rusak (service_id sudah tidak ada lagi
+// di Supplier) ATAU modal Supplier melonjak/anjlok >=20% (harga jual ikut
+// ke-update otomatis), semua admin dikabari; kalau normal, jalan diam-diam
+// (tidak spam chat admin tiap N menit).
+function scheduleSupplierSync() {
+  if (supplierSyncTimer) {
+    clearInterval(supplierSyncTimer);
+    supplierSyncTimer = null;
+  }
+  if (!AIVERSEHUB_API_KEY || !SUPPLIER_SYNC_INTERVAL_MINUTES || SUPPLIER_SYNC_INTERVAL_MINUTES <= 0) return;
+  supplierSyncTimer = setInterval(async () => {
+    try {
+      const { updated, missing, priceAlerts, lines, linkedCount, stockChanges } = await refreshSupplierData();
+      if (!linkedCount) return;
+      if (stockChanges && stockChanges.length) {
+        broadcastStockSyncChanges(stockChanges).catch(err => console.error('broadcastStockSyncChanges (Supplier) error:', err.message));
+      }
+      if (priceAlerts.length > 0) {
+        ADMIN_IDS.forEach(id => {
+          bot.sendMessage(id,
+            `📊 *Auto-sync Supplier API*: ada perubahan modal signifikan pada ${priceAlerts.length} varian.\n\n${priceAlerts.join('\n')}`,
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+        });
+      }
+      if (missing > 0) {
+        const brokenLines = lines.filter(l => l.startsWith('⚠️') && l.includes('sudah tidak ada lagi di Supplier'));
+        ADMIN_IDS.forEach(id => {
+          bot.sendMessage(id,
+            `⚠️ *Auto-sync Supplier API*: ${missing} varian bermasalah saat sinkron otomatis (${updated} lainnya berhasil diperbarui).\n\n${brokenLines.join('\n')}`,
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+        });
+      }
+    } catch (err) {
+      console.error('Auto-sync Supplier API gagal:', err.message);
+    }
+  }, SUPPLIER_SYNC_INTERVAL_MINUTES * 60 * 1000);
+}
+
+const PRODUCT_LIST_REPAINT_INTERVAL_MS = 30 * 1000; // sapu ulang tiap 30 detik
+let productListRepaintTimer = null;
+
+// ===== Live-repaint warna tombol daftar produk (🟢/🔴 style) =====
+// productListKeyboard() sudah menghitung warna tombol (hijau/merah) SEGAR
+// tiap kali dipanggil - tapi itu cuma kepakai begitu buyer BARU buka menu
+// "🛒 Buy Product". Kalau buyer sudah punya menu itu KEBUKA di layarnya dari
+// beberapa menit lalu, lalu stok berubah (auto-sync Supplier/Canboso, admin
+// tambah stock, atau buyer LAIN menghabiskan stok lewat pembelian), tombol
+// yang sudah kebuka itu TIDAK ikut berubah warna sendiri - Telegram tidak
+// mendorong update apapun ke pesan yang sudah terkirim tanpa bot secara
+// eksplisit memanggil editMessageReplyMarkup lagi.
+//
+// Fungsi ini menyapu SEMUA pesan yang sedang ter-track (lihat
+// openProductListMsg di atas) tiap PRODUCT_LIST_REPAINT_INTERVAL_MS, dan
+// panggil editMessageReplyMarkup dengan keyboard yang baru dihitung ulang.
+// - Kalau isinya ternyata SAMA PERSIS (tidak ada stok yang berubah),
+//   Telegram balas error "message is not modified" - ini NORMAL & di-skip
+//   diam-diam (bukan tanda ada yang salah).
+// - Kalau gagal karena alasan LAIN (pesan sudah dihapus user, bot diblokir,
+//   chat tidak ditemukan, dst), entry itu dibuang dari tracking supaya
+//   tidak terus dicoba ulang tiap 30 detik selamanya.
+// - Jeda kecil antar user (sama seperti broadcast) supaya tidak memicu
+//   rate limit Telegram kalau jumlah user yang lagi buka menu ini banyak.
+function scheduleProductListRepaint() {
+  if (productListRepaintTimer) {
+    clearInterval(productListRepaintTimer);
+    productListRepaintTimer = null;
+  }
+  productListRepaintTimer = setInterval(async () => {
+    for (const [uid, msgId] of Array.from(openProductListMsg.entries())) {
+      try {
+        await bot.editMessageReplyMarkup(await productListKeyboard(uid), { chat_id: uid, message_id: msgId });
+      } catch (err) {
+        const msg = String(err.message || '');
+        if (!/message is not modified/i.test(msg)) {
+          openProductListMsg.delete(uid);
+        }
+      }
+      await new Promise(r => setTimeout(r, 40));
+    }
+    // ===== PATCH v4: repaint juga halaman DETAIL (tombol "Buy Now") yang
+    // lagi ter-track - live-check Canboso dulu kalau varian itu terhubung
+    // (sama pola seperti handler 'desc:'), baru bangun ulang descKeyboard()
+    // dan timpa reply_markup-nya. Kalau produk/varian sudah dihapus admin
+    // di antara waktu itu, entry-nya dibuang diam-diam dari tracking.
+    for (const [uid, entry] of Array.from(openProductDescMsg.entries())) {
+      const { messageId, productId, variantId } = entry;
+      const product = db.findProduct(productId);
+      const variant = product && db.findVariant(productId, variantId);
+      if (!product || !variant) {
+        openProductDescMsg.delete(uid);
+        continue;
+      }
+      if (variant.canbosoProductId) {
+        try {
+          const live = await canboso.getLiveStock(variant.canbosoProductId);
+          if (live && !isNaN(live.stock)) {
+            db.setVariantStock(productId, variantId, live.stock);
+            variant.liveStock = live.stock;
+          }
+        } catch (err) {
+          console.error(`Canboso getLiveStock (repaint desc) gagal (product_id=${variant.canbosoProductId}):`, err.message);
+        }
+      }
+      try {
+        await bot.editMessageReplyMarkup(descKeyboard(productId, variantId, uid, product, variant), { chat_id: uid, message_id: messageId });
+      } catch (err) {
+        const msg = String(err.message || '');
+        if (!/message is not modified/i.test(msg)) {
+          openProductDescMsg.delete(uid);
+        }
+      }
+      await new Promise(r => setTimeout(r, 40));
+    }
+  }, PRODUCT_LIST_REPAINT_INTERVAL_MS);
+}
+
+function marginText(cost, sellPrice) {
+  if (typeof cost !== 'number' || isNaN(cost)) {
+    return `💰 Harga jual saat ini: ${usd(sellPrice)} (harga modal Supplier tidak diketahui)`;
+  }
+  if (sellPrice <= cost) {
+    const rel = sellPrice === cost ? 'SAMA DENGAN' : 'LEBIH RENDAH DARI';
+    return (
+      `⚠️ *Peringatan margin:* harga jual saat ini (${usd(sellPrice)}) ${rel} harga modal Supplier (${usd(cost)}).\n` +
+      `Kalau dibiarkan, tiap produk ini laku kamu ${sellPrice === cost ? 'impas (tidak untung sama sekali)' : 'RUGI'}. Segera naikkan harga jual di bawah.`
+    );
+  }
+  const profit = sellPrice - cost;
+  const marginPct = (profit / cost) * 100;
+  return `💰 Modal: ${usd(cost)} • Jual: ${usd(sellPrice)} • Untung: *${usd(profit)}/pcs* (+${marginPct.toFixed(0)}%)`;
+}
+
+// Keyboard cepat buat atur harga jual persis setelah link/ganti modal -
+// markup dihitung dari harga MODAL (bukan harga jual lama), supaya hasilnya
+// konsisten walau harga jual lama sudah kadaluarsa/keliru.
+// PENTING: tombolnya TIDAK bawa productId+variantId di callback_data -
+// keduanya digabung gampang lewat 64 byte punya Telegram (sama seperti bug
+// di successKeyboard()/adminVariantPickKeyboard()) dan bikin Telegram tolak
+// kirim/edit pesan ini (BUTTON_DATA_INVALID). Konteksnya disimpan di
+// pendingAction (chatId sudah unik per admin) dan dibaca lagi di handler
+// 'supplierlinkmarkup'/'supplierlinkcustomprice'.
+function supplierLinkPriceKeyboard(chatId, productId, variantId) {
+  db.setPendingAction(chatId, { type: 'supplier_link_price_ctx', data: { productId, variantId } });
+  const markups = [10, 20, 30, 50];
+  return {
+    inline_keyboard: [
+      markups.map(pct => ({ text: `+${pct}%`, callback_data: `admin:supplierlinkmarkup:${pct}` })),
+      [{ text: '✏️ Harga Custom', callback_data: 'admin:supplierlinkcustomprice' }],
+      [{ text: '📊 Atur Markup 3-Tier', callback_data: 'admin:suppliertiermarkup' }],
+      [withButtonIcon({ text: '‹ Selesai, Kembali', callback_data: 'admin:supplier' }, 'back')]
+    ]
+  };
+}
+
+// ============================================================
+// ===== Helper untuk fitur "Canboso API" (supplier KEDUA) =====
+// ============================================================
+// Pola sama persis dengan "Supplier API" (AIVerse Hub) di atas, tapi lebih
+// sederhana karena API Canboso cuma expose 2 endpoint (lihat
+// supplierCanboso.js): tidak ada getMe() (saldo wallet), getOrderById(),
+// getOrders(), atau getStats() - jadi menu "Riwayat Order"/"Statistik"/
+// "Cek Order ID" dari Supplier API TIDAK ada versi Canboso-nya di sini.
+// "🔄 Refresh Harga & Stok" tetap ada (pakai getProducts() ulang untuk
+// sinkron modal & stok lokal), tapi TANPA kalkulasi 3-tier markup otomatis
+// seperti Supplier API - admin atur harga jual manual lewat markup cepat/
+// custom di bawah (sama seperti saat pertama link).
+
+function canbosoBackKeyboard() {
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:canboso' }, 'back')],
+      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+    ]
+  };
+}
+
+function canbosoMenuText() {
+  const statusLine = !CANBOSO_API_KEY
+    ? '⚠️ *CANBOSO_API_KEY* belum diisi di `.env` - fitur ini belum bisa dipakai.'
+    : '🟢 API key sudah diisi. (Canboso tidak expose endpoint cek saldo wallet - pastikan wallet sudah di-top-up langsung dari sisi Canboso.)';
+
+  // Sama seperti baris "Auto-sync" di panel Supplier API (AIVerse Hub) -
+  // supaya admin langsung tahu tanpa buka .env apakah auto-sync latar
+  // belakang aktif & tiap berapa detik, tanpa perlu klik refresh manual.
+  const effectiveSec = CANBOSO_SYNC_INTERVAL_SECONDS < 10 && CANBOSO_SYNC_INTERVAL_SECONDS > 0 ? 10 : CANBOSO_SYNC_INTERVAL_SECONDS;
+  const autoSyncLine = (CANBOSO_API_KEY && CANBOSO_SYNC_INTERVAL_SECONDS > 0)
+    ? `🔄 Auto-sync modal & stok: *aktif*, tiap *${effectiveSec} detik*`
+    : '🔄 Auto-sync modal & stok: *mati* (ubah `CANBOSO_SYNC_INTERVAL_SECONDS` di `.env` untuk mengaktifkan, atau refresh manual di bawah)';
+
+  const linked = db.getCanbosoLinkedVariants();
+  const list = linked.length
+    ? linked.map(l => {
+        const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
+        const sell = db.getBasePrice(l.variant);
+        const cost = l.variant.canbosoCost;
+        const marginTag = (typeof cost === 'number')
+          ? (sell <= cost ? ' ⚠️ RUGI/IMPAS' : ` (untung ${usd(sell - cost)}/pcs)`)
+          : '';
+        return `• *${label}* → \`${l.variant.canbosoProductId}\`\n   Modal: ${typeof cost === 'number' ? usd(cost) : '?'} • Jual: ${usd(sell)}${marginTag}`;
+      }).join('\n')
+    : '_Belum ada varian yang terhubung._';
+
+  return (
+    `*Canboso API*\n\n` +
+    `${statusLine}\n` +
+    `${autoSyncLine}\n\n` +
+    `Varian produk yang dihubungkan ke sini akan dipesan & dipenuhi OTOMATIS lewat Canboso (pakai saldo wallet akun Canboso ini) setiap ada buyer beli - bukan dari stok lokal lagi.\n\n` +
+    `📋 *Varian Terhubung:*\n${list}`
+  );
+}
+
+function canbosoMenuKeyboard() {
+  const linked = db.getCanbosoLinkedVariants();
+  const rows = [];
+  rows.push([{ text: '➕ Hubungkan Produk', callback_data: 'admin:canbosolink' }]);
+  if (linked.length) {
+    rows.push([{ text: '🔄 Refresh Harga & Stok', callback_data: 'admin:canbosorefresh' }]);
+  }
+  linked.forEach((l, i) => {
+    const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
+    rows.push([
+      { text: `💲 Harga: ${label}`, callback_data: `admin:canbosoharga:${i}` },
+      { text: '🗑️ Putus', callback_data: `admin:canbosounlinkconfirm:${i}` }
+    ]);
+  });
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_products' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  return { inline_keyboard: rows };
+}
+
+// Ambil daftar produk Canboso via API, lalu tampilkan sebagai keyboard
+// pilihan untuk dihubungkan ke productId/variantId lokal - pola sama
+// seperti showSupplierServicePicker() di atas. Daftar produk mentah
+// disimpan sementara di pendingAction (bukan di-encode ke callback_data)
+// karena id/nama dari API bisa mengandung karakter apapun.
+async function showCanbosoProductPicker(chatId, messageId, productId, variantId) {
+  if (!CANBOSO_API_KEY) {
+    return sendOrEditAdmin(chatId, messageId, '⚠️ *CANBOSO_API_KEY* belum diisi di `.env`, tidak bisa ambil daftar produk Canboso.', canbosoBackKeyboard());
+  }
+  let products;
+  try {
+    products = await canboso.getProducts();
+  } catch (err) {
+    return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil daftar produk dari Canboso:\n_${err.message}_`, canbosoBackKeyboard());
+  }
+  if (!products.length) {
+    return sendOrEditAdmin(chatId, messageId, '⚠️ Canboso tidak mengembalikan produk apapun saat ini.', canbosoBackKeyboard());
+  }
+  db.setPendingAction(chatId, { type: 'canboso_link_pick', data: { productId, variantId, products } });
+  const rows = products.map((p, i) => ([{
+    text: `${p.name} - Modal ${isNaN(p.price) ? '❓' : usd(p.price)} (stok: ${isNaN(p.stock) ? '?' : p.stock})`,
+    callback_data: `admin:canbosolink_set:${i}`
+  }]));
+  rows.push([{ text: '🐞 Lihat Raw Response (debug)', callback_data: 'admin:canbosodebug' }]);
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:canbosolink' }, 'back')]);
+  const naNote = products.some(p => isNaN(p.price))
+    ? '\n\n⚠️ Ada produk yang modalnya tampil ❓ (field harga di response API tidak dikenali). Tetap bisa dihubungkan lalu isi harga jual manual lewat ✏️ Harga Custom, atau tekan 🐞 Lihat Raw Response untuk cek nama field aslinya.'
+    : '';
+  await sendOrEditAdmin(chatId, messageId, `Pilih produk Canboso yang mau dihubungkan:${naNote}`, { inline_keyboard: rows });
+}
+
+// Keyboard cepat atur harga jual setelah link/refresh modal Canboso - pola
+// sama seperti supplierLinkPriceKeyboard(), tanpa opsi "3-Tier" (Canboso
+// tidak punya kalkulasi tier otomatis di sini, cukup markup flat).
+function canbosoLinkPriceKeyboard(chatId, productId, variantId) {
+  db.setPendingAction(chatId, { type: 'canboso_link_price_ctx', data: { productId, variantId } });
+  const markups = [10, 20, 30, 50];
+  return {
+    inline_keyboard: [
+      markups.map(pct => ({ text: `+${pct}%`, callback_data: `admin:canbosolinkmarkup:${pct}` })),
+      [{ text: '✏️ Harga Custom', callback_data: 'admin:canbosolinkcustomprice' }],
+      [withButtonIcon({ text: '‹ Selesai, Kembali', callback_data: 'admin:canboso' }, 'back')]
+    ]
+  };
+}
+
+// Sinkron ulang modal & stok SEMUA varian yang terhubung ke Canboso, dari
+// getProducts() live - dipanggil oleh tombol "🔄 Refresh Harga & Stok".
+// Beda dari refreshSupplierData() (AIVerse Hub): TIDAK menghitung ulang
+// tiers otomatis dari markup% (Canboso tidak punya kalkulasi tier per-
+// varian tersimpan) - cuma update variant.canbosoCost & variant.stock,
+// admin yang atur ulang harga jual manual kalau modal berubah signifikan.
+async function refreshCanbosoData() {
+  const products = await canboso.getProducts();
+  const byId = new Map(products.map(p => [String(p.id), p]));
+  const linked = db.getCanbosoLinkedVariants();
+  let updated = 0, missing = 0;
+  const lines = [];
+  const stockChanges = []; // dipakai scheduleCanbosoSync() buat broadcast "🔔 Stok Diperbarui" ke semua user
+  for (const l of linked) {
+    const remote = byId.get(String(l.variant.canbosoProductId));
+    const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
+    if (!remote) {
+      missing++;
+      lines.push(`⚠️ *${label}* - product_id \`${l.variant.canbosoProductId}\` sudah tidak ada di Canboso.`);
+      continue;
+    }
+    db.setVariantCanboso(l.productId, l.variant.id, l.variant.canbosoProductId, remote.price);
+    if (!isNaN(remote.stock)) {
+      const oldTotal = db.getTotalStock(l.variant);
+      db.setVariantStock(l.productId, l.variant.id, remote.stock);
+      const newTotal = (l.variant.stock || 0) + Math.max(0, Math.round(remote.stock));
+      if (newTotal !== oldTotal) {
+        const product = db.findProduct(l.productId);
+        if (product) stockChanges.push({ product, variant: l.variant, oldTotal, newTotal });
+      }
+    }
+    updated++;
+    const stockDisplay = isNaN(remote.stock) ? '❓ (field stok belum dikenali - lihat 🐞 Raw Response)' : remote.stock;
+    lines.push(`✅ *${label}* - Modal: ${isNaN(remote.price) ? '❓' : usd(remote.price)} • Stok: ${stockDisplay}`);
+  }
+  return { updated, missing, lines, stockChanges };
+}
+
+let canbosoSyncTimer = null;
+
+// Auto-sync modal & stok Canboso API secara berkala TANPA admin perlu klik
+// "🔄 Refresh Harga & Stok" manual - lihat CANBOSO_SYNC_INTERVAL_SECONDS di
+// config.js/.env. Mirip scheduleSupplierSync() di atas, tapi pakai satuan
+// DETIK (bukan menit, lihat penjelasan di config.js) dan TIDAK ada
+// perhitungan ulang tier dari markup% (Canboso tidak simpan markup per-
+// varian seperti Supplier API - refreshCanbosoData() cuma update modal &
+// stok, harga jual tetap manual). Kalau ada link yang rusak (product_id
+// sudah tidak ada lagi di Canboso) ATAU stok gagal diparse (NaN, nama
+// field belum dikenali), admin dikabari; kalau normal, jalan diam-diam
+// (tidak spam chat admin tiap sync).
+function scheduleCanbosoSync() {
+  if (canbosoSyncTimer) {
+    clearInterval(canbosoSyncTimer);
+    canbosoSyncTimer = null;
+  }
+  if (!CANBOSO_API_KEY || !CANBOSO_SYNC_INTERVAL_SECONDS || CANBOSO_SYNC_INTERVAL_SECONDS <= 0) return;
+  // Pengaman rate limit: nilai 1-9 detik dianggap terlalu rapat (bisa
+  // memicu 429 Too Many Requests di Canboso kalau banyak varian
+  // terhubung), otomatis dinaikkan ke minimum 10 detik.
+  const intervalSec = CANBOSO_SYNC_INTERVAL_SECONDS < 10 ? 10 : CANBOSO_SYNC_INTERVAL_SECONDS;
+  if (intervalSec !== CANBOSO_SYNC_INTERVAL_SECONDS) {
+    console.warn(`⚠️ CANBOSO_SYNC_INTERVAL_SECONDS=${CANBOSO_SYNC_INTERVAL_SECONDS} terlalu rapat, dinaikkan ke ${intervalSec} detik untuk jaga rate limit Canboso.`);
+  }
+  canbosoSyncTimer = setInterval(async () => {
+    try {
+      const linkedCheck = db.getCanbosoLinkedVariants();
+      if (!linkedCheck.length) return;
+      const { updated, missing, lines, stockChanges } = await refreshCanbosoData();
+      if (stockChanges && stockChanges.length) {
+        broadcastStockSyncChanges(stockChanges).catch(err => console.error('broadcastStockSyncChanges (Canboso) error:', err.message));
+      }
+      if (missing > 0) {
+        const brokenLines = lines.filter(l => l.startsWith('⚠️') && l.includes('sudah tidak ada di Canboso'));
+        notifyAdmins(
+          `⚠️ <b>Auto-sync Canboso API</b>: ${missing} varian bermasalah saat sinkron otomatis (${updated} lainnya berhasil diperbarui).\n\n${brokenLines.map(l => escapeHtml(l)).join('\n')}`
+        );
+      }
+      const unknownStockLines = lines.filter(l => l.includes('field stok belum dikenali'));
+      if (unknownStockLines.length > 0) {
+        notifyAdmins(
+          `⚠️ <b>Auto-sync Canboso API</b>: stok ${unknownStockLines.length} varian masih gagal terbaca (field belum dikenali).\n\n${unknownStockLines.map(l => escapeHtml(l)).join('\n')}\n\nCek 🐞 Lihat Raw Response untuk lihat nama field aslinya.`
+        );
+      }
+    } catch (err) {
+      console.error('Auto-sync Canboso API gagal:', err.message);
+    }
+  }, intervalSec * 1000);
+}
+
+
+
+// biar gampang dibaca admin - fallback ke string mentah kalau parsing gagal.
+function formatSupplierDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const bulan = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())} ${bulan[d.getMonth()]} ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const SUPPLIER_ORDERS_PAGE_SIZE = 10;
+
+// GET /api/v1/orders - riwayat order toko kita DI SISI Supplier (beda
+// dari "🧾 My Orders" buyer yang lihat riwayat beli mereka sendiri di bot
+// ini). Berguna buat admin audit: order mana yang sukses/gagal di sisi
+// supplier, tanpa perlu buka dashboard Supplier secara terpisah.
+async function supplierOrdersText(page) {
+  if (!AIVERSEHUB_API_KEY) {
+    return { text: '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`, tidak bisa ambil riwayat order.', totalPages: 1 };
+  }
+  let json;
+  try {
+    json = await supplier.getOrders({ page, limit: SUPPLIER_ORDERS_PAGE_SIZE });
+  } catch (err) {
+    return { text: `⚠️ Gagal ambil riwayat order dari Supplier:\n_${err.message}_`, totalPages: 1 };
+  }
+  const orders = Array.isArray(json.orders) ? json.orders : [];
+  if (!orders.length) {
+    return { text: '🧾 *Riwayat Order Supplier*\n\n_Belum ada order sama sekali._', totalPages: 1 };
+  }
+  const statusIcon = s => s === 'success' ? '✅' : s === 'pending' ? '⏳' : '❌';
+  const lines = orders.map(o =>
+    `${statusIcon(o.status)} \`${o.order_id}\` - ${o.service} x${o.quantity}\n` +
+    `   ${usd(o.amount || 0)} • ${o.status} • ${formatSupplierDate(o.created_at)}`
+  ).join('\n\n');
+  const totalPages = Math.max(1, Number(json.total_pages) || 1);
+  return {
+    text: `🧾 *Riwayat Order Supplier* (hal. ${json.page || page}/${totalPages}, total ${json.total_orders ?? orders.length} order)\n\n${lines}`,
+    totalPages,
+    page: json.page || page
+  };
+}
+
+function supplierOrdersKeyboard(page, totalPages) {
+  const navRow = [];
+  if (page > 1) navRow.push({ text: '‹ Sebelumnya', callback_data: `admin:supplierorders:${page - 1}` });
+  if (page < totalPages) navRow.push({ text: 'Berikutnya ›', callback_data: `admin:supplierorders:${page + 1}` });
+  const rows = [];
+  if (navRow.length) rows.push(navRow);
+  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:supplier' }, 'back')]);
+  return { inline_keyboard: rows };
+}
+
+// GET /api/v1/stats - ringkasan deposit, sales, dan breakdown per produk di
+// sisi Supplier. Tanpa filter start/end (pakai default periode API).
+async function supplierStatsText() {
+  if (!AIVERSEHUB_API_KEY) {
+    return '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`, tidak bisa ambil statistik.';
+  }
+  let stats;
+  try {
+    stats = await supplier.getStats();
+  } catch (err) {
+    return `⚠️ Gagal ambil statistik dari Supplier:\n_${err.message}_`;
+  }
+  const d = stats.deposits || {};
+  const s = stats.sales || {};
+  // API bisa saja tidak mengembalikan sebagian field (mis. periode baru
+  // tanpa transaksi) - fallback ke 0 supaya tidak muncul "$NaN" di teks.
+  const u = n => usd(n || 0);
+  const breakdown = Array.isArray(stats.products_breakdown) ? stats.products_breakdown : [];
+  const breakdownText = breakdown.length
+    ? breakdown
+        .slice()
+        .sort((a, b) => (b.revenue || 0) - (a.revenue || 0))
+        .slice(0, 10)
+        .map(p => `• ${p.name || p.service_id}: ${p.quantity_sold || 0} terjual - ${u(p.revenue)}`)
+        .join('\n')
+    : '_Belum ada penjualan._';
+
+  return (
+    `📊 *Statistik Supplier*\n\n` +
+    `💰 *Deposit*\n` +
+    `Hari ini: ${u(d.today)} • 7 hari: ${u(d['7d'])} • 30 hari: ${u(d['30d'])}\n` +
+    `1 tahun: ${u(d['365d'])} • Sepanjang waktu: ${u(d.all_time)}\n\n` +
+    `🛒 *Penjualan (Order via API)*\n` +
+    `Hari ini: ${u(s.today)} • 7 hari: ${u(s['7d'])} • 30 hari: ${u(s['30d'])}\n` +
+    `1 tahun: ${u(s['365d'])} • Sepanjang waktu: ${u(s.all_time)}\n\n` +
+    `📦 *Produk Terlaris*\n${breakdownText}`
+  );
+}
+
+// Layar pilih CARA nambah stok - 📋 Link/Kode (auto-kirim, lewat
+// addStockItems) ATAU 🔢 Angka Saja (manual, lewat addManualStock, buat
+// produk yang dikirim admin sendiri secara manual ke buyer). Ditampilkan
+// begitu admin sudah pilih produk/varian tujuan di /admin -> 📥 Tambah Stock.
+function addStockModeText(productName, variantLabel, currentStock) {
+  const title = variantLabel && variantLabel !== productName ? `${productName} - ${variantLabel}` : productName;
+  return (
+    `📥 *Tambah Stock - ${title}*\n` +
+    `📦 Total stok saat ini: *${currentStock}*\n\n` +
+    `Pilih cara nambah stok:\n\n` +
+    `📋 *Link/Kode (Auto-Kirim)* - tempel link/kode redeem, otomatis terkirim ke buyer begitu ada yang beli.\n` +
+    `🔢 *Angka Saja (Manual)* - cuma nambah JUMLAH stok tanpa link/kode, cocok untuk produk yang kamu kirim manual sendiri ke buyer.\n\n` +
+    `_Begitu stok berhasil ditambah (cara manapun), bot otomatis kirim notifikasi "🔔 Stok Baru Tersedia!" + tombol Buy Now ke SEMUA user._`
+  );
+}
+
+function addStockModeKeyboard(productId, variantId) {
+  const ref = productRef(productId, variantId);
+  return {
+    inline_keyboard: [
+      [withButtonIcon({ text: '📋 Kirim Link/Kode (Auto-Kirim)', callback_data: `admin:addstockmode:${ref}:items` }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '🔢 Tambah Angka Saja (Manual)', callback_data: `admin:addstockmode:${ref}:qty` }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:addstock' }, 'back')],
+      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+    ]
+  };
+}
+
+// Instruksi "Tambah Stock" dengan contoh 2 cara: satu-satu (1/1) & bulk.
+function stockInstructionsText(productName, variantLabel, currentStock) {
+  const title = variantLabel && variantLabel !== productName ? `${productName} - ${variantLabel}` : productName;
+  return (
+    `📥 *Tambah Stock - ${title}*\n` +
+    `📦 Stok siap auto-kirim saat ini: *${currentStock}*\n\n` +
+    `Kirim data stok. *1 baris = 1 unit stok*, boleh ketik satu-satu (1 baris per pesan) atau bulk (banyak baris dalam 1 pesan sekaligus) — bebas dicampur.\n\n` +
+    `Setiap baris boleh salah satu dari 2 format ini, boleh dicampur bebas dalam kiriman yang sama:\n\n` +
+    `*1️⃣ Link/kode saja*\n` +
+    '`https://link-redeem-1...`\n\n' +
+    `*2️⃣ Kombo akun (Email + Password + Kode 2FA + Link)*\n` +
+    `Pisahkan tiap field pakai tanda \`|\` (pipe), urutan tetap: Email, Password, Kode 2FA, Link.\n` +
+    `Untuk Kode 2FA, isi *Secret Key TOTP*-nya (bukan kode 6 digit statis) — persis seperti yang kamu masukkan ke situs [2fa.cn](https://2fa.cn) atau Google Authenticator. Boleh pakai spasi atau tidak, sama saja:\n` +
+    '`akun1@mail.com|Password123|kqzj jo6v m3ob nywd ag7m b4uo foa4 mzby|https://link-login-1...`\n' +
+    '`akun1b@mail.com|Password123|KQZJJO6VM3OBNYWDAG7MB4UOFOA4MZBY|https://link-login-1b...`  _(tanpa spasi, hasilnya sama)_\n' +
+    `Bot otomatis HITUNG kode 6 digit yang aktif saat itu dari secret-nya (algoritma sama seperti 2fa.cn/Google Authenticator) - jadi kode yang dilihat buyer selalu live & valid, bukan basi. Kalau kamu ketik kode digit statis di sini (bukan secret), tetap ditampilkan apa adanya seperti biasa - tidak error.\n` +
+    `Boleh berhenti dari belakang kalau field terakhir memang tidak ada (mis. tanpa Link):\n` +
+    '`akun2@mail.com|Password456|kqzjjo6vm3obnywd`  _(cuma 3 field, Link tidak ditampilkan)_\n' +
+    `Tapi kalau yang di-skip itu field di *tengah* (mis. tanpa 2FA tapi ada Link), kosongkan saja bagiannya - jangan dihapus segmennya, supaya Link tidak ketuker posisi:\n` +
+    '`akun3@mail.com|Password789||https://link-login-3...`  _(2 tanda \\| berdempetan = Kode 2FA dikosongkan)_\n\n' +
+    `Contoh kirim bulk campur kedua format sekaligus:\n` +
+    '```\nhttps://link-redeem-1...\nakun1@mail.com|Password123|kqzjjo6vm3obnywdag7mb4uofoa4mzby|https://link-login-1...\nakun2@mail.com|Password456||https://link-login-2...\nhttps://link-redeem-2...\n```\n\n' +
+    `Setiap kirim, bot balas konfirmasi jumlah yang masuk + total stok terbaru. Ketik /cancel kalau sudah selesai.`
+  );
+}
+
+async function sendOrEditAdmin(chatId, messageId, text, keyboard, parseMode) {
+  const mode = parseMode || 'Markdown';
+  const opts = { chat_id: chatId, message_id: messageId, parse_mode: mode, reply_markup: keyboard };
+  if (messageId) {
+    await bot.editMessageText(text, opts).catch(() => bot.sendMessage(chatId, text, { parse_mode: mode, reply_markup: keyboard }));
+  } else {
+    bot.sendMessage(chatId, text, { parse_mode: mode, reply_markup: keyboard });
+  }
+}
+
+// PENTING: regex WAJIB di-anchor ke awal teks (^) supaya cuma cocok kalau
+// pesannya BENERAN diawali "/cancel", bukan cuma MENGANDUNG "/cancel" di
+// mana saja. Tanpa "^", pesan bebas apapun yang kebetulan menyebut
+// "/cancel" di tengah kalimat (mis. deskripsi produk/how-to-use yang
+// isinya "...untuk batal ketik /cancel di grup support...") akan ikut
+// men-trigger handler ini dan DIAM-DIAM membatalkan pending action admin
+// yang lagi jalan (mis. lagi ngetik teks how-to-use panjang) - teks yang
+// sudah diketik hilang tanpa peringatan jelas kenapa.
+bot.onText(/^\/cancel(?:\s|$)/, (msg) => {
+  db.clearPendingAction(msg.chat.id);
+  bot.sendMessage(msg.chat.id, 'Dibatalkan.');
+});
+
+bot.onText(/^\/hapusemoji(?:\s|$)/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const pending = db.getPendingAction(chatId);
+  if (!pending || pending.type !== 'set_emoji_id') {
+    return bot.sendMessage(chatId, 'Gak ada proses "Set Emoji" yang lagi aktif.');
+  }
+  const { scope, key } = pending.data;
+  db.clearEmojiId(`${scope}:${key}`);
+  db.clearPendingAction(chatId);
+  bot.sendMessage(chatId, `🗑️ ID emoji untuk "${key}" dikosongkan, balik ke default.`);
+});
+
+bot.onText(/^\/admin/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  db.clearPendingAction(chatId);
+  bot.sendMessage(chatId, '🔧 *Admin Panel*\n\nPilih kategori di bawah:', { parse_mode: 'Markdown', reply_markup: adminMainKeyboard() });
+});
+
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+  const data = query.data;
+  if (!data.startsWith('admin:') || !isAdmin(chatId)) return;
+
+  try {
+    const parts = data.split(':'); // admin:<action>[:<param>]
+    const action = parts[1];
+    const param = parts[2];
+
+    if (action === 'menu') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, '🔧 *Admin Panel*\n\nPilih kategori di bawah:', adminMainKeyboard());
+    }
+
+    // ---- 4 kategori menu utama /admin (lihat adminMainKeyboard()) ----
+    else if (action === 'cat_products') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, '📦 *Produk & Stok*\n\nPilih menu di bawah:', adminProductsKeyboard());
+    }
+
+    else if (action === 'cat_users') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, '💰 *User & Saldo*\n\nPilih menu di bawah:', adminUsersKeyboard());
+    }
+
+    else if (action === 'cat_reports') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, '📊 *Laporan & Statistik*\n\nPilih menu di bawah:', adminReportsKeyboard());
+    }
+
+    else if (action === 'cat_gift') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, '🎁 *Gift (Userbot)*\n\nPilih menu di bawah:', adminGiftKeyboard());
+    }
+
+    else if (action === 'giftemoji') {
+      db.clearPendingAction(chatId);
+      const keyboard = await adminGiftEmojiListKeyboard();
+      await sendOrEditAdmin(chatId, messageId, adminGiftEmojiListText(), keyboard, 'HTML');
+    }
+
+    else if (action === 'gift_balance') {
+      db.clearPendingAction(chatId);
+      if (!userbot.isConfigured()) {
+        await sendOrEditAdmin(chatId, messageId, '⚠️ Userbot belum dikonfigurasi (USERBOT_SESSION kosong di .env). Lihat userbot-login.js.', adminBackKeyboard('admin:cat_gift'));
+        return;
+      }
+      try {
+        const stars = await userbot.getUserbotStarsBalance(true); // forceRefresh - admin mau angka terbaru
+        const lowWarning = stars < GIFT_LOW_STARS_THRESHOLD
+          ? `\n\n⚠️ Saldo di bawah ambang batas (${GIFT_LOW_STARS_THRESHOLD}⭐) - buyer bisa mulai kena "Stars habis". Top up segera lewat Settings > Stars di akun userbot.`
+          : '';
+        await sendOrEditAdmin(chatId, messageId, `🌟 *Saldo Stars Userbot*\n\n${stars}⭐${lowWarning}`, adminBackKeyboard('admin:cat_gift'));
+      } catch (err) {
+        logError('admin:gift_balance', err);
+        await sendOrEditAdmin(chatId, messageId, `❌ Gagal cek saldo Stars: ${escapeHtml(String(err.message || err))}`, adminBackKeyboard('admin:cat_gift'));
+      }
+    }
+
+    else if (action === 'gift_history') {
+      db.clearPendingAction(chatId);
+      const db_ = db.readDb();
+      const orders = (db_.giftOrders || []).slice(-20).reverse();
+      if (!orders.length) {
+        await sendOrEditAdmin(chatId, messageId, '📜 *Riwayat Gift Order*\n\nBelum ada order gift sama sekali.', adminBackKeyboard('admin:cat_gift'));
+        return;
+      }
+      const statusIcon = { pending: '⏳', sent: '✅', failed_refunded: '❌' };
+      const lines = orders.map(o => {
+        const who = o.username ? `@${escapeHtml(o.username)}` : `ID ${o.chatId}`;
+        const modeLabel = o.mode === 'confess' ? '💌 Confess' : (o.mode === 'saved' ? '🎨 Koleksi' : '🎁 Buy');
+        return `${statusIcon[o.status] || '❔'} ${modeLabel} ${o.stars}⭐ - ${who} → <code>${escapeHtml(String(o.target))}</code> (${usd(o.priceUsd, chatId)})`;
+      });
+      await sendOrEditAdmin(chatId, messageId, `📜 *Riwayat Gift Order* (${orders.length} terakhir)\n\n${lines.join('\n')}`, adminBackKeyboard('admin:cat_gift'), 'HTML');
+    }
+
+    else if (action === 'giftpricing') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, adminGiftPricingText(), adminGiftPricingKeyboard(), 'HTML');
+    }
+
+    else if (action === 'giftpricingmarkup') {
+      db.setPendingAction(chatId, { type: 'set_gift_markup' });
+      const pricing = db.getGiftPricingSettings();
+      const current = pricing.markupPct != null ? pricing.markupPct : GIFT_MARKUP_PCT;
+      await sendOrEditAdmin(chatId, messageId,
+        `📈 *Ubah Markup Gift*\n\nMarkup sekarang: *${current}%*\n\nKetik markup baru dalam persen (angka saja, contoh: \`30\`). Ketik /cancel untuk batal.`,
+        adminBackKeyboard('admin:giftpricing')
+      );
+    }
+
+    else if (action === 'giftpricingrate') {
+      db.setPendingAction(chatId, { type: 'set_gift_stars_rate' });
+      const pricing = db.getGiftPricingSettings();
+      const current = pricing.starsToUsdRate != null ? pricing.starsToUsdRate : STARS_TO_USD_RATE;
+      await sendOrEditAdmin(chatId, messageId,
+        `💱 *Ubah Kurs Stars→USD*\n\nKurs sekarang: *${current}* (artinya 1⭐ = $${current})\n\nKetik kurs baru (angka desimal, contoh: \`0.015\`). Ketik /cancel untuk batal.`,
+        adminBackKeyboard('admin:giftpricing')
+      );
+    }
+
+    else if (action === 'giftpricingreset') {
+      db.clearPendingAction(chatId);
+      db.setGiftPricingSettings({ markupPct: null, starsToUsdRate: null });
+      await sendOrEditAdmin(chatId, messageId, `✅ Harga gift direset ke default .env.\n\n${adminGiftPricingText()}`, adminGiftPricingKeyboard(), 'HTML');
+    }
+
+    else if (action === 'cat_settings') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, '⚙️ *Pengaturan Toko*\n\nPilih menu di bawah:', adminSettingsKeyboard());
+    }
+
+    else if (action === 'forcejoin') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, adminForceJoinText(), adminForceJoinKeyboard());
+    }
+
+    else if (action === 'forcejoin_toggle') {
+      const { enabled } = db.getForceJoinSettings();
+      db.setForceJoinEnabled(!enabled);
+      await sendOrEditAdmin(chatId, messageId, adminForceJoinText(), adminForceJoinKeyboard());
+      await bot.answerCallbackQuery(query.id, { text: !enabled ? '🟢 Wajib Join diaktifkan!' : '🔴 Wajib Join dinonaktifkan.' }).catch(() => {});
+    }
+
+    else if (action === 'forcejoin_add') {
+      db.setPendingAction(chatId, { type: 'forcejoin_add_link' });
+      await sendOrEditAdmin(chatId, messageId,
+        '➕ *Tambah Channel/Grup Wajib Join*\n\n*Langkah 1/2* - Kirim link undangan/publik channel atau grup-nya, contoh:\n`https://t.me/namachannel`\natau link invite private (channel maupun grup):\n`https://t.me/+AbCdEfGhIjK`\n\nKetik /cancel untuk batal.',
+        adminBackKeyboard('admin:cat_settings')
+      );
+    }
+
+    else if (action === 'forcejoin_remove') {
+      const removed = db.removeForceJoinChannel(param);
+      await sendOrEditAdmin(chatId, messageId, adminForceJoinText(), adminForceJoinKeyboard());
+      await bot.answerCallbackQuery(query.id, { text: removed ? '🗑️ Channel dihapus.' : '⚠️ Channel tidak ditemukan.' }).catch(() => {});
+    }
+
+    else if (action === 'channelnotif') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, adminChannelNotifText(), adminChannelNotifKeyboard());
+    }
+
+    else if (action === 'channelnotif_toggle') {
+      const current = db.getChannelNotifSettings();
+      if (!current.enabled && !current.chatRef) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set dulu Channel Tujuan sebelum mengaktifkan.', show_alert: true });
+      }
+      db.setChannelNotifSettings({ enabled: !current.enabled });
+      await sendOrEditAdmin(chatId, messageId, adminChannelNotifText(), adminChannelNotifKeyboard());
+      await bot.answerCallbackQuery(query.id, { text: !current.enabled ? '🟢 Notifikasi channel diaktifkan!' : '🔴 Notifikasi channel dinonaktifkan.' }).catch(() => {});
+    }
+
+    else if (action === 'channelnotif_toggle_purchase') {
+      const current = db.getChannelNotifSettings();
+      db.setChannelNotifSettings({ notifyPurchase: !current.notifyPurchase });
+      await sendOrEditAdmin(chatId, messageId, adminChannelNotifText(), adminChannelNotifKeyboard());
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    else if (action === 'channelnotif_toggle_topup') {
+      const current = db.getChannelNotifSettings();
+      db.setChannelNotifSettings({ notifyTopup: !current.notifyTopup });
+      await sendOrEditAdmin(chatId, messageId, adminChannelNotifText(), adminChannelNotifKeyboard());
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    else if (action === 'channelnotif_toggle_referral') {
+      const current = db.getChannelNotifSettings();
+      db.setChannelNotifSettings({ notifyReferral: !current.notifyReferral });
+      await sendOrEditAdmin(chatId, messageId, adminChannelNotifText(), adminChannelNotifKeyboard());
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    else if (action === 'channelnotif_toggle_maintenance') {
+      const current = db.getChannelNotifSettings();
+      db.setChannelNotifSettings({ notifyMaintenance: !current.notifyMaintenance });
+      await sendOrEditAdmin(chatId, messageId, adminChannelNotifText(), adminChannelNotifKeyboard());
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    else if (action === 'channelnotif_setchannel') {
+      db.setPendingAction(chatId, { type: 'channelnotif_setchannel' });
+      await sendOrEditAdmin(chatId, messageId,
+        '🆔 *Set Channel Tujuan Notifikasi*\n\n' +
+        'Kirim *Username channel/group* (contoh: `@namachannel`) ATAU *Chat ID numerik* (contoh: `-1001234567890`).\n\n' +
+        '💡 Untuk channel/group *private* (tidak punya username publik), WAJIB pakai Chat ID numerik. Cara dapat Chat ID: tambahkan bot ini sebagai admin di channel/group tujuan, lalu forward pesan apapun dari situ ke @userinfobot / @RawDataBot.\n\n' +
+        '⚠️ Bot WAJIB sudah jadi admin di channel/group tersebut, kalau tidak pengiriman notifikasi akan gagal.\n\nKetik /cancel untuk batal.',
+        adminBackKeyboard('admin:cat_settings')
+      );
+    }
+
+    else if (action === 'channelnotif_test') {
+      const settings = db.getChannelNotifSettings();
+      if (!settings.chatRef) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set dulu Channel Tujuan.', show_alert: true });
+      }
+      const sampleProduct = db.findProduct('gemini-pro-18-bulan') || { name: 'Gemini Pro', emoji: '🔍', emojiId: null };
+      const sampleVariant = (sampleProduct.variants && sampleProduct.variants[0]) || { label: '18 Months' };
+      const sampleText = buildChannelPurchaseText(chatId, sampleProduct, sampleVariant, 100, 49.99);
+      try {
+        await bot.sendMessage(settings.chatRef, sampleText, { parse_mode: 'HTML', reply_markup: channelNotifKeyboard() });
+        await bot.answerCallbackQuery(query.id, { text: '✅ Contoh notifikasi terkirim ke channel!' }).catch(() => {});
+      } catch (err) {
+        console.error('Gagal kirim contoh notifikasi channel:', err.message);
+        await bot.answerCallbackQuery(query.id, { text: `⚠️ Gagal kirim: ${err.message}`, show_alert: true }).catch(() => {});
+      }
+    }
+
+    else if (action === 'channelnotif_test_referral') {
+      const settings = db.getChannelNotifSettings();
+      if (!settings.chatRef) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set dulu Channel Tujuan.', show_alert: true });
+      }
+      const sampleText = buildChannelReferralText(chatId, chatId, REFERRAL_REWARD);
+      try {
+        await bot.sendMessage(settings.chatRef, sampleText, { parse_mode: 'HTML', reply_markup: channelNotifKeyboard() });
+        await bot.answerCallbackQuery(query.id, { text: '✅ Contoh notifikasi terkirim ke channel!' }).catch(() => {});
+      } catch (err) {
+        console.error('Gagal kirim contoh notifikasi channel:', err.message);
+        await bot.answerCallbackQuery(query.id, { text: `⚠️ Gagal kirim: ${err.message}`, show_alert: true }).catch(() => {});
+      }
+    }
+
+    else if (action === 'listproducts') {
+      const products = db.getAllProducts();
+      const text = products.map(p =>
+        `${productEmojiHtml(p)} <b>${escapeHtml(p.name)}</b> (id: <code>${escapeHtml(p.id)}</code>)\n` +
+        (p.variants.length
+          ? p.variants.map(v => {
+              const autoCount = db.getStockItemCount(p.id, v.id);
+              const autoTag = Array.isArray(v.stockItems) ? ` 🤖 auto-kirim: ${autoCount}` : '';
+              const supplierTag = v.supplierServiceId ? ` API: ${escapeHtml(v.supplierServiceId)}` : '';
+              const canbosoTag = v.canbosoProductId ? ` Canboso: ${escapeHtml(String(v.canbosoProductId))}` : '';
+              return `   - ${escapeHtml(v.label)}: mulai ${usd(db.getBasePrice(v))}, stok ${db.getTotalStock(v)} (id: ${escapeHtml(v.id)})${autoTag}${supplierTag}${canbosoTag}`;
+            }).join('\n')
+          : '   (belum ada varian)')
+      ).join('\n\n') || 'Belum ada produk.';
+      await sendOrEditAdmin(chatId, messageId, `📦 <b>Daftar Produk</b>\n\n${text}`, adminBackKeyboard('admin:cat_products'), 'HTML');
+    }
+
+    else if (action === 'addproduct') {
+      db.setPendingAction(chatId, { type: 'addproduct_name' });
+      await sendOrEditAdmin(chatId, messageId,
+        '➕ *Tambah Produk*\n\nCukup 3 langkah: nama → harga → deskripsi.\n\n' +
+        'Ketik *emoji premium* (pilih langsung dari panel emoji Telegram Premium kamu) diikuti *nama produk*, contoh:\n' +
+        '`✨ Gemini Pro 18 Bulan`\n\n' +
+        '⚠️ Emoji-nya wajib dipilih dari panel emoji Telegram Premium kamu sendiri (bukan cuma ngetik unicode biasa), supaya kesimpan sebagai emoji premium asli. Kalau dilewati / owner belum Premium, produk tetap dibuat pakai emoji default 📦.',
+        adminBackKeyboard('admin:cat_products')
+      );
+    }
+
+    else if (action === 'addvariant') {
+      await sendOrEditAdmin(chatId, messageId, '➕ *Tambah Varian*\n\nPilih produk tujuan:', adminProductPickKeyboard('addvariant_pick'));
+    }
+    else if (action === 'addvariant_pick') {
+      const product = db.findProduct(param);
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      db.setPendingAction(chatId, { type: 'addvariant_label', data: { productId: param } });
+      await sendOrEditAdmin(chatId, messageId, `➕ Tambah varian untuk *${product.name}*\n\nKetik label varian (contoh: "18 Bulan"):`, adminBackKeyboard('admin:cat_products'));
+    }
+
+    else if (action === 'setprice') {
+      const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
+      if (!productsWithVariants.length) {
+        await sendOrEditAdmin(chatId, messageId, '💲 *Set Harga Produk*\n\nBelum ada produk dengan varian. Tambah produk dulu lewat ➕ Tambah Produk.', adminBackKeyboard('admin:cat_products'));
+      } else {
+        await sendOrEditAdmin(chatId, messageId, '💲 *Set Harga Produk*\n\nPilih produk yang mau diubah harganya:', adminProductPickKeyboard('setprice_pick', productsWithVariants));
+      }
+    }
+    else if (action === 'setprice_pick') {
+      const product = db.findProduct(param);
+      if (!product || !product.variants.length) {
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, adminBackKeyboard('admin:cat_products'));
+      }
+      if (product.variants.length === 1) {
+        const variant = product.variants[0];
+        db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId: param, variantId: variant.id } });
+        await sendOrEditAdmin(chatId, messageId,
+          `💲 *Set Harga - ${product.name}*\n\nHarga saat ini: ${usd(db.getBasePrice(variant))}\n\nKetik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+          adminBackKeyboard('admin:cat_products')
+        );
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `💲 Set harga untuk *${product.name}*\n\nPilih varian:`, adminVariantPickKeyboard(product, 'setprice_variant', 'admin:setprice'));
+      }
+    }
+    else if (action === 'setprice_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const variantId = variant.id;
+      db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId: param, variantId } });
+      await sendOrEditAdmin(chatId, messageId,
+        `💲 *Set Harga - ${product.name} ${variant.label}*\n\nHarga saat ini: ${usd(db.getBasePrice(variant))}\n\nKetik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+        adminBackKeyboard('admin:cat_products')
+      );
+    }
+
+    // Set tier diskon grosir (1-49 / 50-499 / 500+) langsung pakai harga USD
+    // manual - berlaku untuk SEMUA varian (produk manual maupun yang
+    // terhubung Supplier API). Beda dengan "📊 Atur Markup 3-Tier" (khusus
+    // Supplier API, lihat action 'suppliertiermarkup') yang inputnya PERSEN
+    // markup dari modal - fitur ini inputnya harga JUAL langsung per tier,
+    // jadi cocok juga dipakai produk manual yang tidak punya modal Supplier.
+    else if (action === 'settierprice') {
+      const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
+      if (!productsWithVariants.length) {
+        await sendOrEditAdmin(chatId, messageId, '🎁 *Set Tier Diskon Grosir*\n\nBelum ada produk dengan varian. Tambah produk dulu lewat ➕ Tambah Produk.', adminBackKeyboard('admin:cat_products'));
+      } else {
+        await sendOrEditAdmin(chatId, messageId, '🎁 *Set Tier Diskon Grosir*\n\nPilih produk yang mau diatur tier harganya:', adminProductPickKeyboard('settierprice_pick', productsWithVariants));
+      }
+    }
+    else if (action === 'settierprice_pick') {
+      const product = db.findProduct(param);
+      if (!product || !product.variants.length) {
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, adminBackKeyboard('admin:cat_products'));
+      }
+      if (product.variants.length === 1) {
+        const variant = product.variants[0];
+        askSetTierPrice(chatId, messageId, product, variant);
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `🎁 Set tier diskon untuk *${product.name}*\n\nPilih varian:`, adminVariantPickKeyboard(product, 'settierprice_variant', 'admin:settierprice'));
+      }
+    }
+    else if (action === 'settierprice_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      askSetTierPrice(chatId, messageId, product, variant);
+    }
+
+    // Toggle "🔒 Kunci Harga Manual" per varian - dipanggil dari tombol di
+    // askSetTierPrice() (khusus varian Supplier API). Kalau dikunci,
+    // refreshSupplierData() skip perhitungan ulang tier dari markup tapi
+    // tetap sinkron modal & stok seperti biasa (lihat komentarnya di sana).
+    else if (action === 'pricelocktoggle') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const newLocked = !variant.priceLocked;
+      db.setVariantPriceLock(product.id, variant.id, newLocked);
+      variant.priceLocked = newLocked; // biar askSetTierPrice() di bawah langsung pakai status baru, bukan yang basi di memori
+      bot.answerCallbackQuery(query.id, { text: newLocked ? '🔒 Harga manual dikunci.' : '🔓 Kunci dibuka.' });
+      askSetTierPrice(chatId, messageId, product, variant);
+    }
+
+    else if (action === 'setdesc') {
+      await sendOrEditAdmin(chatId, messageId, '📝 *Set Deskripsi*\\n\\nPilih produk yang mau diatur deskripsinya:', adminProductPickKeyboard('setdesc_pick'));
+    }
+    else if (action === 'setdesc_pick') {
+      const product = db.findProduct(param);
+      if (!product || !product.variants.length) {
+        return sendOrEditAdmin(chatId, messageId,
+          `⚠️ Produk *${product ? product.name : param}* belum punya varian. Tambah variannya dulu lewat ➕ Tambah Varian.`,
+          adminBackKeyboard('admin:cat_products')
+        );
+      }
+      if (product.variants.length === 1) {
+        const variant = product.variants[0];
+        db.setPendingAction(chatId, { type: 'setdesc_choose_lang', data: { productId: param, variantId: variant.id } });
+        await sendOrEditAdmin(chatId, messageId,
+          `📝 *Set Deskripsi - ${product.name}*\\n\\n` +
+          (variant.description ? `Deskripsi saat ini (${variant.descriptionLang === 'en' ? 'EN' : 'ID'}):\\n${variant.description}\\n\\n` : 'Belum ada deskripsi.\\n\\n') +
+          'Teks deskripsi yang mau kamu ketik nanti itu bahasa apa? (Bahasa satunya bakal di-generate otomatis pakai auto-translate saat buyer /setlanguage beda dari ini)',
+          { inline_keyboard: [
+            [{ text: '🇮🇩 Indonesia', callback_data: 'admin:setdesclang:id' }, { text: '🇬🇧 English', callback_data: 'admin:setdesclang:en' }],
+            [{ text: '‹ Kembali', callback_data: 'admin:cat_products' }]
+          ] }
+        );
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `📝 Set Deskripsi untuk *${product.name}*\\n\\nPilih varian:`, adminVariantPickKeyboard(product, 'setdesc_variant', 'admin:setdesc'));
+      }
+    }
+    else if (action === 'setdesc_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const variantId = variant.id;
+      db.setPendingAction(chatId, { type: 'setdesc_choose_lang', data: { productId: param, variantId } });
+      await sendOrEditAdmin(chatId, messageId,
+        `📝 *Set Deskripsi - ${product.name} ${variant.label}*\\n\\n` +
+        (variant.description ? `Deskripsi saat ini (${variant.descriptionLang === 'en' ? 'EN' : 'ID'}):\\n${variant.description}\\n\\n` : 'Belum ada deskripsi.\\n\\n') +
+        'Teks deskripsi yang mau kamu ketik nanti itu bahasa apa? (Bahasa satunya bakal di-generate otomatis pakai auto-translate saat buyer /setlanguage beda dari ini)',
+        { inline_keyboard: [
+          [{ text: '🇮🇩 Indonesia', callback_data: 'admin:setdesclang:id' }, { text: '🇬🇧 English', callback_data: 'admin:setdesclang:en' }],
+          [{ text: '‹ Kembali', callback_data: 'admin:cat_products' }]
+        ] }
+      );
+    }
+    else if (action === 'setdesclang') {
+      const chosenLang = param === 'en' ? 'en' : 'id';
+      const pendingLangChoice = db.getPendingAction(chatId);
+      if (!pendingLangChoice || pendingLangChoice.type !== 'setdesc_choose_lang') {
+        return bot.answerCallbackQuery(query.id, { text: 'Sesi kedaluwarsa, ulangi dari menu Set Deskripsi.' });
+      }
+      const { productId, variantId } = pendingLangChoice.data;
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Produk/varian sudah tidak ada.' });
+      db.setPendingAction(chatId, { type: 'setdesc_text', data: { productId, variantId, lang: chosenLang } });
+      await sendOrEditAdmin(chatId, messageId,
+        `📝 *Set Deskripsi (${chosenLang === 'en' ? 'EN' : 'ID'}) - ${product.name}${variant.label ? ' ' + variant.label : ''}*\\n\\n` +
+        'Ketik deskripsi baru (bebas banyak baris, boleh tag HTML `<b>...</b>` untuk bold. Kalau kamu pilih emoji premium langsung dari panel Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga - nggak perlu setting ID manual). Ketik `-` untuk mengosongkan, atau /cancel untuk batal.',
+        adminBackKeyboard('admin:cat_products')
+      );
+    }
+
+    else if (action === 'setlogo') {
+      await sendOrEditAdmin(chatId, messageId, '🖼️ *Set Logo Produk*\n\nPilih produk yang mau diatur logo aplikasinya:', adminProductPickKeyboard('setlogo_pick'));
+    }
+    else if (action === 'setlogo_pick') {
+      const product = db.findProduct(param);
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      db.setPendingAction(chatId, { type: 'setlogo_url', data: { productId: param } });
+      await sendOrEditAdmin(chatId, messageId,
+        `🖼️ *Set Logo - ${product.name}*\n\n` +
+        (product.logoUrl ? `Logo saat ini:\n${product.logoUrl}\n\n` : 'Belum ada logo, masih pakai emoji biasa.\n\n') +
+        'Kirim URL gambar logo aplikasi ini (harus diawali `http://` atau `https://`, contoh: link logo resmi Netflix/Spotify/Gemini yang kamu hosting sendiri). Logo ini dipakai di notifikasi channel (📣 New Purchase) supaya tampil sebagai gambar, bukan cuma emoji.\n\n' +
+        'Ketik `-` untuk menghapus logo (balik pakai emoji biasa), atau /cancel untuk batal.',
+        adminBackKeyboard('admin:cat_products')
+      );
+    }
+
+    else if (action === 'setemoji') {
+      await sendOrEditAdmin(chatId, messageId, '😀 *Ganti Emoji Produk*\n\nPilih produk yang mau diganti ikonnya:', adminProductPickKeyboard('setemoji_pick'));
+    }
+    else if (action === 'setemoji_pick') {
+      const product = db.findProduct(param);
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      db.setPendingAction(chatId, { type: 'setemoji_capture', data: { productId: param } });
+      await sendOrEditAdmin(chatId, messageId,
+        `😀 *Ganti Emoji - ${product.name}*\n\n` +
+        `Ikon saat ini: ${product.emojiId ? `<tg-emoji emoji-id="${product.emojiId}">${product.emoji || '📦'}</tg-emoji>` : (product.emoji || '📦')}\n\n` +
+        'Kirim (boleh forward dari chat lain) 1 pesan yang mengandung 1 *emoji premium* — WAJIB dipilih langsung dari panel emoji Telegram Premium kamu sendiri (bukan cuma ngetik/paste unicode biasa), supaya ID-nya ke-capture asli dan tersimpan sebagai premium.\n\n' +
+        '💡 Tips: buka panel emoji di Telegram, cari kata kunci sesuai produknya (mis. "cart"/"keranjang", "netflix", "music"), lalu pilih salah satu hasilnya sebelum dikirim - jangan asal pilih ikon yang MIRIP tapi ternyata beda gambar.\n\n' +
+        'Atau ketik `-` untuk balik ke emoji unicode biasa (📦, tanpa premium). Ketik /cancel untuk batal.',
+        adminBackKeyboard('admin:cat_products'), 'HTML'
+      );
+    }
+
+    else if (action === 'sethowto') {
+      await sendOrEditAdmin(chatId, messageId, '✏️ *Set How to Use*\n\nPilih produk yang mau diatur teks "How to Use"-nya:', adminProductPickKeyboard('sethowto_pick'));
+    }
+    else if (action === 'sethowto_pick') {
+      const product = db.findProduct(param);
+      if (!product || !product.variants.length) {
+        return sendOrEditAdmin(chatId, messageId,
+          `⚠️ Produk *${product ? product.name : param}* belum punya varian. Tambah variannya dulu lewat ➕ Tambah Varian.`,
+          adminBackKeyboard('admin:cat_products')
+        );
+      }
+      if (product.variants.length === 1) {
+        const variant = product.variants[0];
+        db.setPendingAction(chatId, { type: 'sethowto_text', data: { productId: param, variantId: variant.id } });
+        await sendOrEditAdmin(chatId, messageId,
+          `✏️ *Set How to Use - ${product.name}*\n\n` +
+          (variant.howToUse ? `Teks saat ini:\n${variant.howToUse}\n\n` : 'Belum ada teks How to Use.\n\n') +
+          'Ketik teks *How to Use* yang baru (bebas banyak baris, boleh tag HTML `<b>...</b>` untuk bold. Kalau kamu pilih emoji premium langsung dari panel Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga - nggak perlu setting ID manual). Ketik /cancel untuk batal.',
+          adminBackKeyboard('admin:cat_products')
+        );
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `✏️ Set How to Use untuk *${product.name}*\n\nPilih varian:`, adminVariantPickKeyboard(product, 'sethowto_variant', 'admin:sethowto'));
+      }
+    }
+    else if (action === 'sethowto_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const variantId = variant.id;
+      db.setPendingAction(chatId, { type: 'sethowto_text', data: { productId: param, variantId } });
+      await sendOrEditAdmin(chatId, messageId,
+        `✏️ *Set How to Use - ${product.name} ${variant.label}*\n\n` +
+        (variant.howToUse ? `Teks saat ini:\n${variant.howToUse}\n\n` : 'Belum ada teks How to Use.\n\n') +
+        'Ketik teks *How to Use* yang baru. Ketik /cancel untuk batal.',
+        adminBackKeyboard('admin:cat_products')
+      );
+    }
+
+    else if (action === 'addstock') {
+      const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
+      if (!productsWithVariants.length) {
+        await sendOrEditAdmin(chatId, messageId, '📥 *Tambah Stock*\n\nBelum ada produk dengan varian. Tambah varian dulu lewat ➕ Tambah Varian.', adminBackKeyboard('admin:cat_products'));
+      } else {
+        await sendOrEditAdmin(chatId, messageId, '📥 *Tambah Stock*\n\nPilih produk tujuan:', adminProductPickKeyboard('addstock_pick', productsWithVariants));
+      }
+    }
+    else if (action === 'addstock_pick') {
+      const product = db.findProduct(param);
+      if (!product || !product.variants.length) {
+        // Fallback aman: kalau somehow produk tanpa varian masih ke-klik,
+        // jangan cuma toast sekilas - kasih pesan jelas + arahkan langkah berikutnya.
+        return sendOrEditAdmin(chatId, messageId,
+          `⚠️ Produk *${product ? product.name : param}* belum punya varian, jadi belum bisa diisi stok.\n\nTambah variannya dulu lewat menu ➕ Tambah Varian, baru bisa isi stok di sini.`,
+          adminBackKeyboard('admin:cat_products')
+        );
+      }
+      if (product.variants.length === 1) {
+        // Produk single-varian (hasil "➕ Tambah Produk" biasa) -> langsung
+        // masuk ke layar pilih cara (📋 link/kode vs 🔢 angka manual),
+        // tidak perlu pilih varian lagi.
+        const variant = product.variants[0];
+        db.clearPendingAction(chatId);
+        await sendOrEditAdmin(chatId, messageId,
+          addStockModeText(product.name, variant.label, db.getTotalStock(variant)),
+          addStockModeKeyboard(param, variant.id)
+        );
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `📥 Tambah stok untuk *${product.name}*\n\nPilih varian tujuan:`, adminVariantPickKeyboard(product, 'addstock_variant'));
+      }
+    }
+    else if (action === 'addstock_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId,
+        addStockModeText(product.name, variant.label, db.getTotalStock(variant)),
+        addStockModeKeyboard(param, variant.id)
+      );
+    }
+    else if (action === 'addstockmode') {
+      // callback_data: admin:addstockmode:<ref>:<items|qty> - ref = productRef(productId, variantId)
+      const ref = param;
+      const mode = parts[3];
+      const resolved = resolveProductRef(ref);
+      const product = resolved && db.findProduct(resolved.productId);
+      const variant = product && product.variants.find(v => v.id === resolved.variantId);
+      if (!product || !variant) {
+        return sendOrEditAdmin(chatId, messageId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.', adminBackKeyboard('admin:cat_products'));
+      }
+      if (mode === 'items') {
+        db.setPendingAction(chatId, { type: 'addstock_items', data: { productId: product.id, variantId: variant.id } });
+        await sendOrEditAdmin(chatId, messageId,
+          stockInstructionsText(product.name, variant.label, db.getTotalStock(variant)),
+          adminBackKeyboard('admin:cat_products')
+        );
+      } else if (mode === 'qty') {
+        db.setPendingAction(chatId, { type: 'addstock_manual_qty', data: { productId: product.id, variantId: variant.id } });
+        await sendOrEditAdmin(chatId, messageId,
+          `🔢 *Tambah Stock Manual - ${product.variants.length > 1 ? `${product.name} - ${variant.label}` : product.name}*\n\n` +
+          `📦 Total stok saat ini: *${db.getTotalStock(variant)}*\n\n` +
+          `Ketik JUMLAH stok yang mau ditambahkan (angka saja, mis. \`10\`). Stok ini TANPA link/kode - buyer yang beli tetap dapat pesan "ORDER BERHASIL!", tapi kamu yang kirim akun/detailnya manual.\n\n` +
+          `Ketik /cancel untuk batal.`,
+          adminBackKeyboard('admin:cat_products'),
+          'Markdown'
+        );
+      }
+    }
+
+    // ===== Supplier API =====
+    // Hubungkan 1 varian produk lokal ke 1 service_id di Supplier supaya
+    // pembelian buyer otomatis dipenuhi lewat API mereka. Lihat supplier.js
+    // untuk integrasi API-nya & alur "confirm:" di atas untuk pemakaiannya.
+    else if (action === 'supplier') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, await supplierMenuText(), await supplierMenuKeyboard());
+    }
+
+    else if (action === 'supplierlink') {
+      const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
+      if (!productsWithVariants.length) {
+        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Supplier API*\n\nBelum ada produk dengan varian. Tambah varian dulu lewat ➕ Tambah Varian.', supplierBackKeyboard());
+      } else {
+        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Supplier API*\n\nPilih produk lokal yang mau dihubungkan:', adminProductPickKeyboard('supplierlink_pick', productsWithVariants));
+      }
+    }
+    else if (action === 'supplierlink_pick') {
+      const product = db.findProduct(param);
+      if (!product || !product.variants.length) {
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, supplierBackKeyboard());
+      }
+      if (product.variants.length === 1) {
+        await showSupplierServicePicker(chatId, messageId, param, product.variants[0].id);
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `Hubungkan varian mana dari *${product.name}*?`, adminVariantPickKeyboard(product, 'supplierlink_variant', 'admin:supplierlink'));
+      }
+    }
+    else if (action === 'supplierlink_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      await showSupplierServicePicker(chatId, messageId, param, variant.id);
+    }
+    else if (action === 'supplierlink_set') {
+      const idx = Number(param);
+      const pending = db.getPendingAction(chatId);
+      if (!pending || pending.type !== 'supplier_link_pick' || !pending.data.services[idx]) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi pilih service sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+      }
+      const { productId, variantId, services } = pending.data;
+      const service = services[idx];
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      db.clearPendingAction(chatId);
+      if (!product || !variant) {
+        return sendOrEditAdmin(chatId, messageId, '⚠️ Produk/varian tidak ditemukan lagi, dibatalkan.', supplierBackKeyboard());
+      }
+      const cost = typeof service.price === 'number' ? service.price : parseFloat(service.price);
+      db.setVariantSupplier(productId, variantId, service.service_id, cost);
+      // Sinkron stok lokal ke stok live Supplier begitu link dibuat,
+      // supaya menu admin nggak nampilin angka manual lama yang sudah tidak
+      // relevan lagi buat varian bersupplier ini.
+      const liveStockOnLink = Number(service.stock);
+      if (!isNaN(liveStockOnLink)) db.setVariantStock(productId, variantId, liveStockOnLink);
+      // Langsung hitung 3 tier harga jual dari modal + markup% (config.js
+      // DEFAULT_SUPPLIER_TIER_MARKUP / variant.tierMarkup) SAAT link dibuat -
+      // supaya buyer tidak sempat lihat tier lama/manual yang sudah basi
+      // sambil nunggu jadwal auto-sync berikutnya. Admin tetap bisa override
+      // pakai tombol markup cepat / harga custom di bawah kalau mau harga
+      // flat (bukan 3 tier) untuk varian ini.
+      if (!isNaN(cost) && cost > 0) {
+        const initialMarkup = db.getVariantTierMarkup(variant, DEFAULT_SUPPLIER_TIER_MARKUP);
+        const initialTiers = computeTiersFromCost(cost, initialMarkup);
+        db.setVariantTiers(productId, variantId, initialTiers);
+        variant.tiers = initialTiers;
+      }
+      const currentSellPrice = db.getBasePrice(variant);
+      await sendOrEditAdmin(chatId, messageId,
+        `✅ *${product.name}${variant.label ? ' - ' + variant.label : ''}* berhasil dihubungkan ke Supplier API!\n\n` +
+        `Service ID: \`${service.service_id}\`\n🌐 Nama di Supplier: ${service.name || '-'}\n\n` +
+        `Mulai sekarang, tiap ada buyer beli varian ini, bot akan otomatis pesan lewat Supplier dan langsung teruskan hasilnya ke buyer - stok lokal/manual varian ini (kalau ada) tetap dipakai LEBIH DULU, baru sisa kekurangannya dipesan otomatis ke Supplier.\n\n` +
+        `${marginText(cost, currentSellPrice)}\n\n` +
+        `Mau atur harga jual sekarang? Pilih markup cepat dari modal (${typeof cost === 'number' && !isNaN(cost) ? usd(cost) : '?'}), atau isi harga custom - atau langsung "Selesai" kalau harga jual sekarang sudah pas.`,
+        supplierLinkPriceKeyboard(chatId, productId, variantId)
+      );
+    }
+    else if (action === 'supplierlinkmarkup') {
+      const pct = Number(param);
+      const priceCtx = db.getPendingAction(chatId);
+      if (!priceCtx || priceCtx.type !== 'supplier_link_price_ctx') {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+      }
+      const { productId, variantId } = priceCtx.data;
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const cost = variant.supplierCost;
+      if (typeof cost !== 'number' || isNaN(cost)) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Harga modal tidak diketahui untuk varian ini (linked sebelum fitur ini ada) - pakai ✏️ Harga Custom saja.', show_alert: true });
+      }
+      const newPrice = Math.round(cost * (1 + pct / 100) * 100) / 100;
+      db.setVariantPrice(productId, variantId, newPrice);
+      await bot.answerCallbackQuery(query.id, { text: `✅ Harga jual di-set ${usd(newPrice)} (modal +${pct}%)` }).catch(() => {});
+      await sendOrEditAdmin(chatId, messageId,
+        `✅ Harga jual *${product.name}${variant.label ? ' - ' + variant.label : ''}* di-set ke ${usd(newPrice)}.\n\n${marginText(cost, newPrice)}`,
+        supplierLinkPriceKeyboard(chatId, productId, variantId)
+      );
+    }
+    else if (action === 'supplierlinkcustomprice') {
+      const priceCtx = db.getPendingAction(chatId);
+      if (!priceCtx || priceCtx.type !== 'supplier_link_price_ctx') {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+      }
+      const { productId, variantId } = priceCtx.data;
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId, variantId } });
+      const cost = variant.supplierCost;
+      await sendOrEditAdmin(chatId, messageId,
+        `✏️ *Set Harga Custom - ${product.name}${variant.label ? ' - ' + variant.label : ''}*\n\n` +
+        `${typeof cost === 'number' ? `Modal Supplier: ${usd(cost)}\n` : ''}Harga jual saat ini: ${usd(db.getBasePrice(variant))}\n\n` +
+        `Ketik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+        supplierBackKeyboard()
+      );
+    }
+    // Atur markup 3-tier (1-49/50-499/500+) KHUSUS 1 varian ini - override
+    // DEFAULT_SUPPLIER_TIER_MARKUP global di config.js. Sekali diset, tiap
+    // sync berikutnya (auto tiap SUPPLIER_SYNC_INTERVAL_MINUTES atau refresh
+    // manual) akan pakai markup INI buat hitung ulang tier dari modal live -
+    // jadi harga tetap "ikut" modal Supplier, tapi persentase untungnya
+    // sesuai yang admin mau untuk produk ini secara spesifik (mis. Gemini
+    // yang marginnya lebih tipis dari produk lain).
+    // Tombol ini muncul di 2 tempat: (1) langsung setelah admin buka "💲
+    // Harga" 1 varian tertentu (lewat pendingAction ctx 'supplier_link_price_ctx',
+    // lihat di bawah), DAN (2) standalone lewat "📊 Atur Markup 3-Tier" di
+    // menu utama Supplier API (lihat handler 'suppliertiermarkuppick' dst -
+    // alurnya sama seperti "🎁 Set Tier Diskon Grosir": pilih produk -> pilih
+    // varian -> ketik). Keduanya berakhir memanggil askSetTierMarkup() yang
+    // sama, supaya tampilan & pending action-nya konsisten di 2 alur itu.
+    else if (action === 'suppliertiermarkup') {
+      const priceCtx = db.getPendingAction(chatId);
+      if (!priceCtx || priceCtx.type !== 'supplier_link_price_ctx') {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+      }
+      const { productId, variantId } = priceCtx.data;
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      askSetTierMarkup(chatId, messageId, product, variant);
+    }
+    // Entry point standalone (dari menu utama Supplier API) - lihat catatan
+    // di atas. Cuma tawarkan produk/varian yang MEMANG terhubung Supplier
+    // API, karena markup% ini dihitung dari modal live Supplier - kalau
+    // dipakai di varian manual, tidak ada modal buat dihitung.
+    else if (action === 'suppliertiermarkuppick') {
+      const linked = db.getSupplierLinkedVariants();
+      if (!linked.length) {
+        return sendOrEditAdmin(chatId, messageId, '📊 *Atur Markup 3-Tier*\n\nBelum ada varian yang terhubung ke Supplier API. Hubungkan dulu lewat "➕ Hubungkan Produk".', supplierBackKeyboard());
+      }
+      const seenIds = new Set();
+      const linkedProducts = [];
+      linked.forEach(l => {
+        if (!seenIds.has(l.productId)) {
+          seenIds.add(l.productId);
+          const p = db.findProduct(l.productId);
+          if (p) linkedProducts.push(p);
+        }
+      });
+      if (linkedProducts.length === 1 && linkedProducts[0].variants.filter(v => v.supplierServiceId).length === 1) {
+        const product = linkedProducts[0];
+        const variant = product.variants.find(v => v.supplierServiceId);
+        return askSetTierMarkup(chatId, messageId, product, variant);
+      }
+      await sendOrEditAdmin(chatId, messageId, '📊 *Atur Markup 3-Tier*\n\nPilih produk yang mau diatur (khusus varian yang terhubung Supplier API):', adminProductPickKeyboard('suppliertiermarkuppick_pick', linkedProducts));
+    }
+    else if (action === 'suppliertiermarkuppick_pick') {
+      const product = db.findProduct(param);
+      const linkedVariants = product ? product.variants.filter(v => v.supplierServiceId) : [];
+      if (!product || !linkedVariants.length) {
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* tidak punya varian yang terhubung Supplier API.`, supplierBackKeyboard());
+      }
+      if (linkedVariants.length === 1) {
+        return askSetTierMarkup(chatId, messageId, product, linkedVariants[0]);
+      }
+      await sendOrEditAdmin(chatId, messageId, `📊 Atur markup tier untuk *${product.name}*\n\nPilih varian (Supplier API):`, adminSupplierVariantPickKeyboard(product, 'suppliertiermarkuppick_variant', 'admin:suppliertiermarkuppick'));
+    }
+    else if (action === 'suppliertiermarkuppick_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant || !variant.supplierServiceId) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan / belum terhubung Supplier API.' });
+      askSetTierMarkup(chatId, messageId, product, variant);
+    }
+    else if (action === 'supplierorderid') {
+      db.setPendingAction(chatId, { type: 'supplier_orderid_lookup' });
+      await sendOrEditAdmin(chatId, messageId,
+        '🔍 *Cek Order ID (Supplier)*\n\nKetik Order ID yang mau dicek (contoh: `TRXN12345`). Ini order ID DI SISI Supplier, bukan Order ID lokal bot ini. Ketik /cancel untuk batal.',
+        supplierBackKeyboard()
+      );
+    }
+    else if (action === 'supplierharga') {
+      const linked = db.getSupplierLinkedVariants();
+      const l = linked[Number(param)];
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const { productId, variant, productName } = l;
+      const cost = variant.supplierCost;
+      const currentSellPrice = db.getBasePrice(variant);
+      await sendOrEditAdmin(chatId, messageId,
+        `💲 *Atur Harga - ${productName}${variant.label ? ' - ' + variant.label : ''}*\n\n${marginText(cost, currentSellPrice)}\n\nPilih markup cepat dari modal, atau isi harga custom.`,
+        supplierLinkPriceKeyboard(chatId, productId, variant.id)
+      );
+    }
+    else if (action === 'supplierunlinkconfirm') {
+      const linkedIdx = Number(param);
+      const linked = db.getSupplierLinkedVariants();
+      const l = linked[linkedIdx];
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const { variant, productName } = l;
+      const label = `${productName}${variant.label ? ' - ' + variant.label : ''}`;
+      await sendOrEditAdmin(chatId, messageId,
+        `⚠️ Yakin mau putuskan *${label}* dari Supplier API?\n\nVarian ini akan balik pakai stok lokal/manual - pastikan sudah ada stok yang diisi lewat 📥 Tambah Stock kalau mau tetap auto-kirim ke buyer.`,
+        {
+          inline_keyboard: [
+            [{ text: '✅ Ya, Putuskan', callback_data: `admin:supplierunlink:${linkedIdx}` }],
+            [{ text: '❌ Batal', callback_data: 'admin:supplier' }]
+          ]
+        }
+      );
+    }
+    else if (action === 'supplierunlink') {
+      const linked = db.getSupplierLinkedVariants();
+      const l = linked[Number(param)];
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      db.clearVariantSupplier(l.productId, l.variant.id);
+      await bot.answerCallbackQuery(query.id, { text: 'Link supplier diputus, varian ini balik pakai stok lokal.' }).catch(() => {});
+      await sendOrEditAdmin(chatId, messageId, await supplierMenuText(), await supplierMenuKeyboard());
+    }
+    else if (action === 'supplierrefresh') {
+      if (!AIVERSEHUB_API_KEY) {
+        return sendOrEditAdmin(chatId, messageId, '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`.', supplierBackKeyboard());
+      }
+      const linkedCheck = db.getSupplierLinkedVariants();
+      if (!linkedCheck.length) {
+        return sendOrEditAdmin(chatId, messageId, '_Belum ada varian yang terhubung, tidak ada yang perlu di-refresh._', supplierBackKeyboard());
+      }
+      let updated, missing, invalidPrice, lines;
+      try {
+        ({ updated, missing, invalidPrice, lines } = await refreshSupplierData());
+      } catch (err) {
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil data terbaru dari Supplier:\n_${err.message}_`, supplierBackKeyboard());
+      }
+      const problemTag = [missing ? `${missing} link rusak` : null, invalidPrice ? `${invalidPrice} modal tidak valid` : null].filter(Boolean).join(', ');
+      await sendOrEditAdmin(chatId, messageId,
+        `🔄 *Refresh Modal & Stok selesai*\n\n${updated} varian diperbarui${problemTag ? `, ${problemTag}` : ''}.\n\n${lines.join('\n\n')}`,
+        supplierBackKeyboard()
+      );
+    }
+    else if (action === 'supplierorders') {
+      const page = Math.max(1, parseInt(param, 10) || 1);
+      const { text, totalPages, page: actualPage } = await supplierOrdersText(page);
+      await sendOrEditAdmin(chatId, messageId, text, supplierOrdersKeyboard(actualPage || page, totalPages));
+    }
+    else if (action === 'supplierstats') {
+      await sendOrEditAdmin(chatId, messageId, await supplierStatsText(), supplierBackKeyboard());
+    }
+
+    // ===== Canboso API (supplier kedua) =====
+    else if (action === 'canboso') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId, canbosoMenuText(), canbosoMenuKeyboard());
+    }
+    else if (action === 'canbosolink') {
+      const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
+      if (!productsWithVariants.length) {
+        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Canboso API*\n\nBelum ada produk dengan varian. Tambah varian dulu lewat ➕ Tambah Varian.', canbosoBackKeyboard());
+      } else {
+        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Canboso API*\n\nPilih produk lokal yang mau dihubungkan:', adminProductPickKeyboard('canbosolink_pick', productsWithVariants));
+      }
+    }
+    else if (action === 'canbosolink_pick') {
+      const product = db.findProduct(param);
+      if (!product || !product.variants.length) {
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, canbosoBackKeyboard());
+      }
+      if (product.variants.length === 1) {
+        await showCanbosoProductPicker(chatId, messageId, param, product.variants[0].id);
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `Hubungkan varian mana dari *${product.name}*?`, adminVariantPickKeyboard(product, 'canbosolink_variant', 'admin:canbosolink'));
+      }
+    }
+    else if (action === 'canbosolink_variant') {
+      const product = db.findProduct(param);
+      const variant = product && product.variants[Number(parts[3])];
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      await showCanbosoProductPicker(chatId, messageId, param, variant.id);
+    }
+    else if (action === 'canbosolink_set') {
+      const idx = Number(param);
+      const pending = db.getPendingAction(chatId);
+      if (!pending || pending.type !== 'canboso_link_pick' || !pending.data.products[idx]) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi pilih produk sudah kadaluarsa, ulangi lagi dari Canboso API.', show_alert: true });
+      }
+      const { productId, variantId, products } = pending.data;
+      const remote = products[idx];
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      db.clearPendingAction(chatId);
+      if (!product || !variant) {
+        return sendOrEditAdmin(chatId, messageId, '⚠️ Produk/varian tidak ditemukan lagi, dibatalkan.', canbosoBackKeyboard());
+      }
+      const cost = typeof remote.price === 'number' ? remote.price : parseFloat(remote.price);
+      db.setVariantCanboso(productId, variantId, remote.id, cost);
+      const liveStockOnLink = Number(remote.stock);
+      if (!isNaN(liveStockOnLink)) db.setVariantStock(productId, variantId, liveStockOnLink);
+      const currentSellPrice = db.getBasePrice(variant);
+      await sendOrEditAdmin(chatId, messageId,
+        `✅ *${product.name}${variant.label ? ' - ' + variant.label : ''}* berhasil dihubungkan ke Canboso API!\n\n` +
+        `Product ID: \`${remote.id}\`\n🌐 Nama di Canboso: ${remote.name || '-'}\n\n` +
+        `Mulai sekarang, tiap ada buyer beli varian ini, bot akan otomatis pesan lewat Canboso dan langsung teruskan hasilnya ke buyer - stok lokal/manual varian ini (kalau ada) tetap dipakai LEBIH DULU, baru sisa kekurangannya dipesan otomatis ke Canboso.\n\n` +
+        `${marginText(cost, currentSellPrice)}\n\n` +
+        `Mau atur harga jual sekarang? Pilih markup cepat dari modal (${typeof cost === 'number' && !isNaN(cost) ? usd(cost) : '?'}), atau isi harga custom - atau langsung "Selesai" kalau harga jual sekarang sudah pas.`,
+        canbosoLinkPriceKeyboard(chatId, productId, variantId)
+      );
+    }
+    else if (action === 'canbosolinkmarkup') {
+      const pct = Number(param);
+      const priceCtx = db.getPendingAction(chatId);
+      if (!priceCtx || priceCtx.type !== 'canboso_link_price_ctx') {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Canboso API.', show_alert: true });
+      }
+      const { productId, variantId } = priceCtx.data;
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const cost = variant.canbosoCost;
+      if (typeof cost !== 'number' || isNaN(cost)) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Harga modal tidak diketahui untuk varian ini - pakai ✏️ Harga Custom saja.', show_alert: true });
+      }
+      const newPrice = Math.round(cost * (1 + pct / 100) * 100) / 100;
+      db.setVariantPrice(productId, variantId, newPrice);
+      await bot.answerCallbackQuery(query.id, { text: `✅ Harga jual di-set ${usd(newPrice)} (modal +${pct}%)` }).catch(() => {});
+      await sendOrEditAdmin(chatId, messageId,
+        `✅ Harga jual *${product.name}${variant.label ? ' - ' + variant.label : ''}* di-set ke ${usd(newPrice)}.\n\n${marginText(cost, newPrice)}`,
+        canbosoLinkPriceKeyboard(chatId, productId, variantId)
+      );
+    }
+    else if (action === 'canbosolinkcustomprice') {
+      const priceCtx = db.getPendingAction(chatId);
+      if (!priceCtx || priceCtx.type !== 'canboso_link_price_ctx') {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Canboso API.', show_alert: true });
+      }
+      const { productId, variantId } = priceCtx.data;
+      const product = db.findProduct(productId);
+      const variant = product && product.variants.find(v => v.id === variantId);
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId, variantId } });
+      const cost = variant.canbosoCost;
+      await sendOrEditAdmin(chatId, messageId,
+        `✏️ *Set Harga Custom - ${product.name}${variant.label ? ' - ' + variant.label : ''}*\n\n` +
+        `${typeof cost === 'number' ? `Modal Canboso: ${usd(cost)}\n` : ''}Harga jual saat ini: ${usd(db.getBasePrice(variant))}\n\n` +
+        `Ketik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+        canbosoBackKeyboard()
+      );
+    }
+    else if (action === 'canbosoharga') {
+      const linked = db.getCanbosoLinkedVariants();
+      const l = linked[Number(param)];
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const { productId, variant, productName } = l;
+      const cost = variant.canbosoCost;
+      const currentSellPrice = db.getBasePrice(variant);
+      await sendOrEditAdmin(chatId, messageId,
+        `💲 *Atur Harga - ${productName}${variant.label ? ' - ' + variant.label : ''}*\n\n${marginText(cost, currentSellPrice)}\n\nPilih markup cepat dari modal, atau isi harga custom.`,
+        canbosoLinkPriceKeyboard(chatId, productId, variant.id)
+      );
+    }
+    else if (action === 'canbosounlinkconfirm') {
+      const linkedIdx = Number(param);
+      const linked = db.getCanbosoLinkedVariants();
+      const l = linked[linkedIdx];
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      const { variant, productName } = l;
+      const label = `${productName}${variant.label ? ' - ' + variant.label : ''}`;
+      await sendOrEditAdmin(chatId, messageId,
+        `⚠️ Yakin mau putuskan *${label}* dari Canboso API?\n\nVarian ini akan balik pakai stok lokal/manual - pastikan sudah ada stok yang diisi lewat 📥 Tambah Stock kalau mau tetap auto-kirim ke buyer.`,
+        {
+          inline_keyboard: [
+            [{ text: '✅ Ya, Putuskan', callback_data: `admin:canbosounlink:${linkedIdx}` }],
+            [{ text: '❌ Batal', callback_data: 'admin:canboso' }]
+          ]
+        }
+      );
+    }
+    else if (action === 'canbosounlink') {
+      const linked = db.getCanbosoLinkedVariants();
+      const l = linked[Number(param)];
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      db.clearVariantCanboso(l.productId, l.variant.id);
+      await bot.answerCallbackQuery(query.id, { text: 'Link Canboso diputus, varian ini balik pakai stok lokal.' }).catch(() => {});
+      await sendOrEditAdmin(chatId, messageId, canbosoMenuText(), canbosoMenuKeyboard());
+    }
+    else if (action === 'canbosodebug') {
+      if (!CANBOSO_API_KEY) {
+        return bot.answerCallbackQuery(query.id, { text: 'CANBOSO_API_KEY belum diisi di .env.', show_alert: true });
+      }
+      let raw;
+      try {
+        raw = await canboso.getRawProducts();
+      } catch (err) {
+        return bot.answerCallbackQuery(query.id, { text: `Gagal ambil raw response: ${err.message}`, show_alert: true }).catch(() => {});
+      }
+      // Telegram batas 4096 karakter per pesan - potong kalau kepanjangan,
+      // dan kirim sebagai pesan BARU (bukan edit) supaya gampang di-scroll/
+      // di-forward/copy-paste ke developer buat sesuaikan pemetaan field
+      // di getProducts() (supplierCanboso.js).
+      let text = JSON.stringify(raw, null, 2);
+      const truncated = text.length > 3500;
+      if (truncated) text = text.slice(0, 3500) + '\n... (dipotong, total ' + text.length + ' karakter)';
+      await bot.sendMessage(chatId, `🐞 <b>Raw Response Canboso</b> (<code>GET /api/v2/telegram-buyer/products</code>)\n\n<pre>${escapeHtml(text)}</pre>`, { parse_mode: 'HTML' }).catch(async () => {
+        await bot.sendMessage(chatId, '⚠️ Gagal kirim raw response (mungkin format HTML-nya bentrok) - coba lagi.');
+      });
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+    else if (action === 'canbosorefresh') {
+      if (!CANBOSO_API_KEY) {
+        return sendOrEditAdmin(chatId, messageId, '⚠️ *CANBOSO_API_KEY* belum diisi di `.env`.', canbosoBackKeyboard());
+      }
+      const linkedCheck = db.getCanbosoLinkedVariants();
+      if (!linkedCheck.length) {
+        return sendOrEditAdmin(chatId, messageId, '_Belum ada varian yang terhubung, tidak ada yang perlu di-refresh._', canbosoBackKeyboard());
+      }
+      let updated, missing, lines;
+      try {
+        ({ updated, missing, lines } = await refreshCanbosoData());
+      } catch (err) {
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil data terbaru dari Canboso:\n_${err.message}_`, canbosoBackKeyboard());
+      }
+      await sendOrEditAdmin(chatId, messageId,
+        `🔄 *Refresh Harga & Stok selesai*\n\n${updated} varian diperbarui${missing ? `, ${missing} link rusak` : ''}.\n\n${lines.join('\n\n')}`,
+        canbosoBackKeyboard()
+      );
+    }
+
+    else if (action === 'removeproduct') {
+      await sendOrEditAdmin(chatId, messageId, '🗑️ *Hapus Produk*\n\nPilih produk yang ingin dihapus:', adminProductPickKeyboard('rmpick'));
+    }
+    else if (action === 'rmpick') {
+      const product = db.findProduct(param);
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      await sendOrEditAdmin(chatId, messageId,
+        `⚠️ Yakin hapus produk *${product.name}* (id: \`${product.id}\`) beserta semua variannya?`,
+        { inline_keyboard: [
+          [{ text: '✅ Ya, Hapus', callback_data: `admin:rmconfirm:${param}` }],
+          [{ text: '‹ Batal', callback_data: 'admin:removeproduct' }]
+        ] }
+      );
+    }
+    else if (action === 'rmconfirm') {
+      const ok = db.removeProduct(param);
+      await sendOrEditAdmin(chatId, messageId,
+        ok ? `✅ Produk \`${param}\` berhasil dihapus.` : `⚠️ Produk \`${param}\` tidak ditemukan.`,
+        adminBackKeyboard('admin:cat_products')
+      );
+    }
+
+    else if (action === 'addbalance') {
+      db.setPendingAction(chatId, { type: 'addbalance_user' });
+      await sendOrEditAdmin(chatId, messageId, '💰 *Atur Saldo User*\n\nKetik chat ID user yang ingin diubah saldonya:', adminBackKeyboard('admin:cat_users'));
+    }
+
+    else if (action === 'deliverylog') {
+      const logs = db.getDeliveryLogs(10);
+      if (!logs.length) {
+        await sendOrEditAdmin(chatId, messageId, '📜 *Log Pengiriman Otomatis*\n\nBelum ada order yang auto-delivered.', adminBackKeyboard('admin:cat_reports'));
+      } else {
+        await sendOrEditAdmin(chatId, messageId, `📜 *Log Pengiriman Otomatis* (${logs.length} terakhir)`, adminBackKeyboard('admin:cat_reports'));
+        for (const order of logs) {
+          await bot.sendMessage(chatId, formatDeliveryLogEntry(order), { parse_mode: 'HTML' }).catch(() => {});
+        }
+      }
+    }
+
+    else if (action === 'checkorder') {
+      db.setPendingAction(chatId, { type: 'checkorder_id' });
+      await sendOrEditAdmin(chatId, messageId, '🔍 *Cek Order ID*\n\nKetik ID order yang mau dicek (contoh: `ord_1735500000000`).\n\nID bisa dilihat di notifikasi order baru atau riwayat pembelian user.', adminBackKeyboard('admin:cat_reports'));
+    }
+
+    else if (action === 'emojiids') {
+      db.clearPendingAction(chatId);
+      await sendOrEditAdmin(chatId, messageId,
+        '🎨 *Kelola Emoji ID*\n\nPilih kategori tombol/teks yang mau dipasangi emoji premium. Nanti tinggal kirim/forward 1 pesan berisi emoji-nya - ID-nya ke-*capture otomatis*, gak perlu lewat @RawDataBot lagi.',
+        adminEmojiCategoryKeyboard()
+      );
+    }
+
+    else if (action === 'emojicat') {
+      const catId = param;
+      const catLabel = (EMOJI_CATEGORIES.find(c => c.id === catId) || {}).label || catId;
+      await sendOrEditAdmin(chatId, messageId,
+        `🎨 *${catLabel}*\n\n✅ = sudah ada ID custom\n⚪ = masih default/kosong\n\nTap salah satu buat pasang/ganti emoji-nya.`,
+        adminEmojiKeyListKeyboard(catId)
+      );
+    }
+
+    else if (action === 'emojiteks') {
+      await sendOrEditAdmin(chatId, messageId,
+        '✍️ *Emoji di Teks Pesan*\n\nPilih halaman/grup pesannya dulu:',
+        adminEmojiTeksGroupKeyboard()
+      );
+    }
+
+    else if (action === 'emojiteksgroup') {
+      const groupId = param;
+      const groupLabel = (TEKS_GROUPS.find(g => g.id === groupId) || {}).label || groupId;
+      await sendOrEditAdmin(chatId, messageId,
+        `🎨 *${groupLabel}*\n\n✅ = sudah ada ID custom\n⚪ = masih default/kosong\n\nTap salah satu buat pasang/ganti emoji-nya.`,
+        adminEmojiTeksItemKeyboard(groupId)
+      );
+    }
+
+    else if (action === 'emojiset') {
+      const scope = parts[2];
+      const key = parts[3];
+      if (!scope || !key) return;
+      db.setPendingAction(chatId, { type: 'set_emoji_id', data: { scope, key } });
+      let label = scope === 'teks' ? findTeksItemLabel(key) : (EMOJI_KEY_LABELS[key] || key);
+      // Scope "gift" -> key-nya giftId (bukan label statis di EMOJI_KEY_LABELS),
+      // jadi cari label yang lebih enak dibaca (nominal stars-nya) dari katalog
+      // live - lihat adminGiftEmojiListKeyboard().
+      if (scope === 'gift') {
+        try {
+          const catalog = await userbot.getGiftCatalog();
+          const g = catalog.find(x => x.id === key);
+          if (g) label = `🎁 Gift ${g.stars}⭐ (id: ${g.id})`;
+        } catch (err) {
+          logError('emojiset gift label lookup', err);
+        }
+      }
+      const current = db.getEmojiId(`${scope}:${key}`);
+      await sendOrEditAdmin(chatId, messageId,
+        `🎨 *Set Emoji: ${label}*\n\n` +
+        `Kirim (boleh forward dari chat lain) 1 pesan yang mengandung *emoji premium* (dipilih dari panel emoji Telegram Premium, bukan cuma ngetik unicode biasa) yang mau dipasang di sini.\n\n` +
+        (current ? `ℹ️ Saat ini sudah terisi ID: \`${current}\`\n\n` : '') +
+        `Ketik /cancel untuk batal, atau /hapusemoji buat kosongkan lagi (balik ke default).`,
+        adminBackKeyboard(scope === 'gift' ? 'admin:giftemoji' : 'admin:cat_settings')
+      );
+    }
+
+    else if (action === 'stats') {
+      const allDb = db.readDb();
+      const users = Object.values(allDb.users);
+      const totalUsers = users.length;
+      const totalBalance = users.reduce((sum, u) => sum + (u.balance || 0), 0);
+      const totalOrders = allDb.orders.length;
+      const totalRevenue = allDb.orders.reduce((sum, o) => sum + (o.total || 0), 0);
+      const pendingDepositCount = allDb.deposits.filter(d => d.status === 'pending').length;
+      const text =
+        `📊 *Statistik Toko*\n\n` +
+        `👤 Total user: *${totalUsers}*\n` +
+        `💰 Total saldo beredar: *${usd(totalBalance)}*\n` +
+        `🧾 Total order: *${totalOrders}*\n` +
+        `💵 Total omzet: *${usd(totalRevenue)}*\n` +
+        `⏳ Topup pending (menunggu pembayaran): *${pendingDepositCount}*`;
+      await sendOrEditAdmin(chatId, messageId, text, adminBackKeyboard('admin:cat_reports'));
+    }
+
+    else if (action === 'listusers') {
+      const page = Math.max(1, parseInt(param, 10) || 1);
+      const { text, totalPages, page: actualPage } = usersListText(page);
+      await sendOrEditAdmin(chatId, messageId, text, usersListKeyboard(actualPage || page, totalPages), 'HTML');
+    }
+
+    else if (action === 'listusers_search') {
+      db.setPendingAction(chatId, { type: 'listusers_search_id' });
+      await sendOrEditAdmin(chatId, messageId,
+        '🔍 <b>Cari User berdasarkan ID/Username</b>\n\nKetik Chat ID (boleh lengkap atau cuma sebagian angkanya, mis. <code>6213878</code>) ATAU ketik username-nya (boleh pakai "@" atau tidak, mis. <code>@nnamzcs</code> atau <code>nnamzcs</code>) - bot otomatis deteksi mana yang kamu ketik.\n\nKetik /cancel untuk batal.',
+        { inline_keyboard: [[{ text: '‹ Kembali ke List User', callback_data: 'admin:listusers:1' }]] },
+        'HTML'
+      );
+    }
+
+    else if (action === 'maintenance') {
+      db.clearPendingAction(chatId);
+      const settings = db.getMaintenanceSettings();
+      await sendOrEditAdmin(chatId, messageId, maintenanceMenuText(settings), maintenanceMenuKeyboard(settings));
+    }
+
+    // Toggle Mode Maintenance - kedua arah transisinya sekarang sama-sama
+    // proaktif ngasih tau: broadcast ke SEMUA user terdaftar (sama alur
+    // kirim seperti 📢 Broadcast - lihat action 'broadcast' sub 'send' di
+    // bawah) SEKALIGUS kirim notifikasi ke channel/group (kalau fitur 📣
+    // Notifikasi Channel aktif & notifyMaintenance dinyalakan - lihat
+    // sendChannelNotif()/buildChannelMaintenanceText()), supaya user maupun
+    // member channel tidak perlu nebak-nebak status bot:
+    // - AKTIF -> NONAKTIF ("🔴 Nonaktifkan"): broadcast teks "Maintenance
+    //   SELESAI" (buildMaintenanceFinishedText) + notif channel status finish.
+    // - NONAKTIF -> AKTIF ("🟢 Aktifkan"): broadcast teks maintenance yang
+    //   SAMA persis dengan yang bakal dilihat user kalau mereka coba
+    //   interaksi (buildMaintenanceText - custom message admin kalau ada,
+    //   atau default) + notif channel status start.
+    else if (action === 'maintenance_toggle') {
+      const current = db.getMaintenanceSettings();
+      const turningOn = current.enabled === false;
+      const turningOff = current.enabled === true;
+      const settings = db.setMaintenanceSettings({ enabled: !current.enabled });
+      await sendOrEditAdmin(chatId, messageId, maintenanceMenuText(settings), maintenanceMenuKeyboard(settings));
+      await bot.answerCallbackQuery(query.id, {
+        text: settings.enabled
+          ? '🟢 Mode Maintenance diaktifkan, sedang broadcast ke semua user...'
+          : '🔴 Mode Maintenance dinonaktifkan, sedang broadcast ke semua user...'
+      }).catch(() => {});
+
+      // Notifikasi channel/group - dikirim SEKALI, bukan per-user, jadi
+      // aman ditembak duluan sebelum loop broadcast user (yang bisa makan
+      // waktu kalau user-nya banyak).
+      sendChannelNotif('maintenance', buildChannelMaintenanceText(turningOn ? 'start' : 'finish'));
+
+      if (turningOn || turningOff) {
+        const allDb = db.readDb();
+        const userIds = Object.keys(allDb.users);
+        let success = 0, failed = 0;
+        for (const uid of userIds) {
+          try {
+            const text = turningOn ? buildMaintenanceText(uid) : buildMaintenanceFinishedText(uid);
+            await bot.sendMessage(uid, text, { parse_mode: 'HTML' });
+            success++;
+          } catch (err) {
+            failed++; // biasanya karena user sudah blokir/hapus bot - lanjut ke user berikutnya
+          }
+          // Jeda kecil antar pesan supaya tidak kena rate limit Telegram (sama seperti 📢 Broadcast).
+          await new Promise(r => setTimeout(r, 40));
+        }
+        const label = turningOn ? 'Maintenance Dimulai' : 'Maintenance Selesai';
+        await bot.sendMessage(chatId,
+          `📤 *Broadcast "${label}" terkirim.*\n\n📨 Berhasil: *${success}*\n⚠️ Gagal (kemungkinan user sudah blokir bot): *${failed}*`,
+          { parse_mode: 'Markdown' }
+        ).catch(() => {});
+      }
+    }
+
+    else if (action === 'maintenance_preview') {
+      await bot.sendMessage(chatId, buildMaintenanceText(chatId), { parse_mode: 'HTML' }).catch(() => {});
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+    }
+
+    else if (action === 'maintenance_setmsg') {
+      db.setPendingAction(chatId, { type: 'maintenance_message' });
+      await sendOrEditAdmin(chatId, messageId,
+        '✏️ *Set Pesan Custom Maintenance*\n\nKetik pesan yang mau ditampilkan ke user non-admin selama Mode Maintenance aktif - bebas, boleh banyak baris, boleh tag HTML `<b>...</b>`, dan kalau kamu pilih *emoji premium* langsung dari panel emoji Telegram Premium-mu, emoji itu otomatis ikut kesimpan sebagai premium juga.\n\nKetik /cancel untuk batal.',
+        adminBackKeyboard('admin:cat_settings')
+      );
+    }
+
+    else if (action === 'maintenance_resetmsg') {
+      const settings = db.setMaintenanceSettings({ message: null });
+      await sendOrEditAdmin(chatId, messageId, maintenanceMenuText(settings), maintenanceMenuKeyboard(settings));
+      await bot.answerCallbackQuery(query.id, { text: '↩️ Balik pakai pesan default.' }).catch(() => {});
+    }
+
+    else if (action === 'backup') {
+      const sub = param; // undefined = tampilkan menu, atau 'toggle'/'setinterval'/'setgroup'/'now'
+
+      if (!sub) {
+        db.clearPendingAction(chatId);
+        const settings = db.getBackupSettings();
+        await sendOrEditAdmin(chatId, messageId, backupMenuText(settings), backupMenuKeyboard(settings));
+      }
+
+      else if (sub === 'toggle') {
+        const current = db.getBackupSettings();
+        if (!current.enabled && !current.groupId) {
+          return bot.answerCallbackQuery(query.id, { text: '⚠️ Isi dulu Group ID tujuan sebelum mengaktifkan.', show_alert: true });
+        }
+        const settings = db.setBackupSettings({ enabled: !current.enabled });
+        scheduleBackup();
+        await sendOrEditAdmin(chatId, messageId, backupMenuText(settings), backupMenuKeyboard(settings));
+      }
+
+      else if (sub === 'setinterval') {
+        db.setPendingAction(chatId, { type: 'backup_interval' });
+        await sendOrEditAdmin(chatId, messageId,
+          '⏱️ *Atur Interval Backup*\n\nKetik interval backup dalam *MENIT* (angka saja).\n\nContoh: `60` untuk tiap jam, `15` untuk tiap 15 menit, `1440` untuk tiap hari. Minimal `1`.\n\nKetik /cancel untuk batal.',
+          adminBackKeyboard('admin:cat_settings')
+        );
+      }
+
+      else if (sub === 'setgroup') {
+        db.setPendingAction(chatId, { type: 'backup_groupid' });
+        await sendOrEditAdmin(chatId, messageId,
+          '🆔 *Atur Group ID Tujuan*\n\nKetik Group ID Telegram tujuan (angka, group/supergroup biasanya diawali minus, contoh: `-1001234567890`).\n\n' +
+          'Cara dapat Group ID: tambahkan bot ini ke group tujuan, lalu forward pesan apapun dari group itu ke @userinfobot atau @RawDataBot untuk melihat ID-nya.\n\n' +
+          '⚠️ Bot wajib sudah jadi member di group tersebut, kalau tidak pengiriman backup akan gagal.\n\nKetik /cancel untuk batal.',
+          adminBackKeyboard('admin:cat_settings')
+        );
+      }
+
+      else if (sub === 'now') {
+        const settings = db.getBackupSettings();
+        if (!settings.groupId) {
+          return bot.answerCallbackQuery(query.id, { text: '⚠️ Isi dulu Group ID tujuan.', show_alert: true });
+        }
+        await bot.answerCallbackQuery(query.id, { text: '⏳ Membuat & mengirim backup...' });
+        const result = await runBackupJob('manual');
+        const followUpText = result.ok
+          ? `✅ Backup berhasil dikirim ke group \`${settings.groupId}\` (${result.sizeKb} KB).`
+          : `⚠️ Backup gagal: ${result.error}`;
+        await bot.sendMessage(chatId, followUpText, { parse_mode: 'Markdown' }).catch(() => {});
+        return; // sudah answerCallbackQuery manual di atas
+      }
+    }
+
+    else if (action === 'broadcast') {
+      const sub = param; // undefined = mulai broadcast baru, atau 'send'/'cancel'
+
+      if (!sub) {
+        db.clearPendingAction(chatId);
+        db.setPendingAction(chatId, { type: 'broadcast_content' });
+        const totalUsers = Object.keys(db.readDb().users).length;
+        await sendOrEditAdmin(chatId, messageId,
+          `📢 *Broadcast ke Semua User*\n\nTotal user saat ini: *${totalUsers}*\n\n` +
+          `Kirim sekarang pesan yang mau di-broadcast:\n` +
+          `• Ketik *teks* aja, atau\n` +
+          `• Kirim *foto* (boleh + caption, boleh tanpa caption)\n\n` +
+          `Teks/caption *bebas* — boleh banyak baris, boleh tag HTML (\`<b>bold</b>\`, \`<i>italic</i>\`, \`<u>underline</u>\`, \`<s>coret</s>\`, \`<a href="...">link</a>\`, \`<blockquote>kutipan</blockquote>\`, dll), dan kalau kamu pilih *emoji premium* langsung dari panel emoji Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga ke semua user penerima.\n\n` +
+          `Setelah dikirim ke bot, kamu akan lihat *preview* dulu sebelum benar-benar di-broadcast.\n\nKetik /cancel untuk batal.`,
+          adminBackKeyboard('admin:cat_settings')
+        );
+      }
+
+      else if (sub === 'cancel') {
+        db.clearPendingAction(chatId);
+        await sendOrEditAdmin(chatId, messageId, '❌ Broadcast dibatalkan.', adminBackKeyboard('admin:cat_settings'));
+      }
+
+      else if (sub === 'send') {
+        const pendingBroadcast = db.getPendingAction(chatId);
+        if (!pendingBroadcast || pendingBroadcast.type !== 'broadcast_confirm') {
+          return bot.answerCallbackQuery(query.id, { text: '⚠️ Tidak ada broadcast yang menunggu dikirim. Buat broadcast baru dulu.', show_alert: true });
+        }
+        const { content } = pendingBroadcast.data;
+        db.clearPendingAction(chatId);
+        await bot.answerCallbackQuery(query.id, { text: '📤 Mengirim broadcast...' });
+
+        const allDb = db.readDb();
+        const userIds = Object.keys(allDb.users);
+        let success = 0, failed = 0;
+        for (const uid of userIds) {
+          try {
+            if (content.kind === 'photo') {
+              await bot.sendPhoto(uid, content.fileId, { caption: content.caption, parse_mode: 'HTML' });
+            } else {
+              await bot.sendMessage(uid, content.text, { parse_mode: 'HTML' });
+            }
+            success++;
+          } catch (err) {
+            failed++; // biasanya karena user sudah blokir/hapus bot - lanjut ke user berikutnya
+          }
+          // Jeda kecil antar pesan supaya tidak kena rate limit Telegram.
+          await new Promise(r => setTimeout(r, 40));
+        }
+
+        await bot.sendMessage(chatId,
+          `✅ *Broadcast selesai.*\n\n📨 Berhasil terkirim: *${success}*\n⚠️ Gagal (kemungkinan user sudah blokir bot): *${failed}*`,
+          { parse_mode: 'Markdown' }
+        );
+        return; // sudah answerCallbackQuery manual di atas
+      }
+    }
+
+    bot.answerCallbackQuery(query.id).catch(() => {});
+  } catch (err) {
+    logError('callback_query_broadcast', err);
+    bot.answerCallbackQuery(query.id, { text: 'Terjadi kesalahan.' }).catch(() => {});
+  }
+});
+
+resumePendingDeposits();
+
+// Seed sekali dari .env kalau db.json belum pernah diisi settingan backup-nya
+// - supaya bisa pre-configure BACKUP_GROUP_ID / BACKUP_INTERVAL_MINUTES di
+// .env sebelum run pertama. Setelahnya, pengaturan selalu lewat /admin.
+(function seedBackupSettingsFromEnv() {
+  const current = db.getBackupSettings();
+  const patch = {};
+  if (!current.groupId && process.env.BACKUP_GROUP_ID) {
+    patch.groupId = process.env.BACKUP_GROUP_ID.trim();
+  }
+  if (process.env.BACKUP_INTERVAL_MINUTES && current.intervalMinutes === 60) {
+    const envMinutes = Number(process.env.BACKUP_INTERVAL_MINUTES);
+    if (envMinutes > 0) patch.intervalMinutes = envMinutes;
+  }
+  if (Object.keys(patch).length) db.setBackupSettings(patch);
+})();
+scheduleBackup();
+scheduleSupplierSync();
+scheduleCanbosoSync();
+scheduleProductListRepaint();
+
+console.log('🤖 Bot berjalan...');

@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Environment / kredensial (JANGAN pernah di-commit)
+.env
+.env.local
+.env.*.local
+
+# Backup otomatis
+backups/
+*.zip
+
+# Session userbot
+*.session
+session.txt
+
+# Log & file sementara
+*.log
+npm-debug.log*
+.DS_Store
