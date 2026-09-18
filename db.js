@@ -8,45 +8,45 @@ const DB_PATH = path.join(__dirname, 'data', 'db.json');
 const DEFAULT_DB = {
   users: {},     // chatId -> { username, balance }
   products: [],
-  // deposits: topup Wallet via pembayaran otomatis (QRIS PayKita / USDT BEP20).
+  // deposits: Wallet topups via automatic payment (QRIS PayKita / USDT BEP20).
   // { id, chatId, method: 'qris'|'usdt_bep20', status: 'pending'|'paid'|'expired',
-  //   requestedAmount (USD yang masuk ke saldo), createdAt, expiresAt,
-  //   -- khusus qris: paykitaOrderId, paykitaReference, finalAmount
-  //   -- khusus usdt_bep20: usdtAmount (nominal unik), walletAddress, txHash }
+  //   requestedAmount (the USD credited to the balance), createdAt, expiresAt,
+  //   -- qris only: paykitaOrderId, paykitaReference, finalAmount
+  //   -- usdt_bep20 only: usdtAmount (the unique amount), walletAddress, txHash }
   deposits: [],
   orders: [],    // { id, chatId, productId, variantId, qty, unitPrice, total, createdAt, status }
   pendingAction: {}, // chatId -> { type: '...', data }
-  emojiIds: {},  // key (mis. "menu:buy_produk" / "teks:product_desc") -> custom_emoji_id string
+  emojiIds: {},  // key (e.g. "menu:buy_produk" / "teks:product_desc") -> custom_emoji_id string
   settings: {
-    // Auto Backup: zip full source code (kecuali node_modules & .npm)
-    // dikirim otomatis ke sebuah group Telegram tiap interval tertentu.
+    // Auto Backup: a zip of the full source code (except node_modules and .npm)
+    // sent automatically to a Telegram group at a set interval.
     backup: { enabled: false, intervalMinutes: 60, groupId: null },
-    // Wajib Join Channel: user WAJIB join semua channel di daftar ini dulu
-    // sebelum bisa pakai menu bot (kalau enabled: true). Tiap channel:
-    // { id, title, link, chatRef } - chatRef = @username ATAU chat id numerik
-    // (dipakai bot buat cek status join via getChatMember), link = link
-    // undangan yang ditampilkan sebagai tombol ke user.
+    // Force Join Channel: users MUST join every channel in this list before they
+    // can use the bot menus (when enabled: true). Each channel is:
+    // { id, title, link, chatRef } - chatRef = @username OR a numeric chat id
+    // (used by the bot to check join status via getChatMember), link = the
+    // invite link shown to the user as a button.
     forceJoin: { enabled: false, channels: [] },
-    // Notifikasi Channel Otomatis: tiap ada pembelian produk / topup Wallet
-    // sukses (QRIS/USDT/TON), bot otomatis kirim pesan teks + menu inline ke
-    // 1 channel/group tujuan ini (kalau enabled: true). chatRef = @username
-    // channel ATAU chat id numerik (mis. "-1001234567890") - bot WAJIB sudah
-    // jadi admin di channel/group tsb supaya bisa kirim pesan ke sana.
-    // notifyPurchase/notifyTopup/notifyReferral masing-masing bisa dimatikan terpisah.
-    // notifyMaintenance: kirim juga ke channel ini setiap admin
-    // aktif/nonaktifkan Mode Maintenance (lihat sendChannelNotif kind
-    // 'maintenance' & buildChannelMaintenanceText() di bot.js).
+    // Automatic Channel Notifications: on every product purchase / successful
+    // Wallet topup (QRIS/USDT/TON), the bot automatically sends a text message
+    // plus an inline menu to this one destination channel/group (when enabled:
+    // true). chatRef = the channel @username OR a numeric chat id (for example
+    // "-1001234567890") - the bot MUST already be an admin in that channel/group
+    // to post there. notifyPurchase/notifyTopup/notifyReferral can each be
+    // turned off separately. notifyMaintenance: also post here whenever an admin
+    // enables/disables Maintenance Mode (see sendChannelNotif kind 'maintenance'
+    // and buildChannelMaintenanceText() in bot.js).
     channelNotif: { enabled: false, chatRef: null, title: null, notifyPurchase: true, notifyTopup: true, notifyReferral: true, notifyMaintenance: true },
-    // Mode Maintenance: kalau enabled true, SEMUA user non-admin diblokir dari
-    // seluruh interaksi bot (command, tombol, input teks) dan cuma dikasih
-    // lihat pesan maintenance. Admin (ADMIN_IDS) selalu tetap bisa akses
-    // normal, supaya owner tidak pernah ikut terkunci dari bot-nya sendiri.
-    // message: null -> pakai teks default "keren" (lihat buildMaintenanceText()
-    // di bot.js, emoji-nya diambil dari teksEmoji() -> bisa di-custom lewat
-    // admin "🎨 Kelola Emoji ID"). Kalau admin isi pesan custom sendiri lewat
-    // "✏️ Set Pesan Custom", field ini kepakai apa adanya (termasuk custom
-    // emoji premium yang owner pilih langsung saat ngetik, lihat
-    // embedOwnerCustomEmoji() di bot.js).
+    // Maintenance Mode: when enabled is true, ALL non-admin users are blocked
+    // from every bot interaction (commands, buttons, text input) and only shown
+    // the maintenance message. Admins (ADMIN_IDS) always keep normal access, so
+    // the owner is never locked out of their own bot.
+    // message: null -> use the default "nice" text (see buildMaintenanceText() in
+    // bot.js, whose emoji come from teksEmoji() -> customisable via admin
+    // "🎨 Manage Emoji ID"). When an admin sets their own custom message via
+    // "✏️ Set Custom Message", this field is used as is (including any premium
+    // custom emoji the owner picked while typing, see embedOwnerCustomEmoji() in
+    // bot.js).
     maintenance: { enabled: false, message: null }
   }
 };
@@ -66,21 +66,21 @@ function readDb() {
   try {
     db = JSON.parse(raw);
   } catch (err) {
-    // db.json corrupt (mis. sisa crash sebelum patch atomic-write ini ada).
-    // Coba pulih dari db.json.bak (salinan terakhir yang sukses ditulis) -
-    // jauh lebih baik daripada bot gagal start total tanpa penjelasan.
-    console.error('⚠️ db.json corrupt/tidak valid JSON:', err.message);
+    // db.json is corrupt (for example left over from a crash before this atomic-
+    // write patch existed). Try to recover from db.json.bak (the last copy
+    // written successfully) - far better than the bot failing to start at all
+    console.error('⚠️ db.json is corrupt / not valid JSON:', err.message);
     const bakPath = DB_PATH + '.bak';
     if (fs.existsSync(bakPath)) {
-      console.error('⚠️ Memulihkan dari db.json.bak...');
+      console.error('⚠️ Recovering from db.json.bak...');
       raw = fs.readFileSync(bakPath, 'utf-8');
-      db = JSON.parse(raw); // kalau .bak juga corrupt, biar error asli kelihatan
+      db = JSON.parse(raw); // if the .bak is corrupt too, let the original error surface
       fs.writeFileSync(DB_PATH, raw);
     } else {
       throw err;
     }
   }
-  // Migrasi ringan untuk db.json lama (dari sebelum fitur deposits ada)
+  // Light migration for older db.json files (from before the deposits feature)
   if (!Array.isArray(db.deposits)) db.deposits = [];
   if (!db.emojiIds || typeof db.emojiIds !== 'object') db.emojiIds = {};
   if (!db.settings || typeof db.settings !== 'object') db.settings = {};
@@ -103,34 +103,34 @@ function readDb() {
   }
   if (typeof db.settings.maintenance.enabled !== 'boolean') db.settings.maintenance.enabled = false;
   if (typeof db.settings.maintenance.message === 'undefined') db.settings.maintenance.message = null;
-  // Migrasi: produk lama (dibuat sebelum fitur "🖼️ Set Logo Produk" ada) belum
-  // punya field logoUrl sama sekali -> tambahkan default null supaya kode lain
-  // yang baca product.logoUrl tidak pernah dapat `undefined` (aman dipakai
-  // langsung di productLogoUrl()/if-check tanpa cek tambahan).
+  // Migration: older products (created before the "🖼️ Set Product Logo" feature
+  // existed) have no logoUrl field at all -> default it to null so other code
+  // reading product.logoUrl never gets `undefined` (safe to use directly in
+  // productLogoUrl() / if-checks without extra guards).
   if (Array.isArray(db.products)) {
     db.products.forEach(p => {
       if (typeof p.logoUrl === 'undefined') p.logoUrl = null;
     });
   }
-  // Migrasi: log order fitur "🎁 Buy Gift" / "💌 Confess Gift" (lihat
-  // createGiftOrder() di bawah) - db.json lama belum punya array ini.
+  // Migration: the order log for the "🎁 Buy Gift" / "💌 Confess Gift" features
+  // (see createGiftOrder() below) - older db.json files have no such array yet.
   if (!Array.isArray(db.giftOrders)) db.giftOrders = [];
   return db;
 }
 
-// Tulis db.json secara ATOMIC: tulis dulu ke file sementara (.tmp), baru
-// rename ke nama asli. rename() di level filesystem itu atomic (all-or-
-// nothing) - jadi kalau proses mati/di-kill PAS lagi nulis, db.json yang
-// LAMA tetap utuh (tidak pernah ke-truncate setengah jalan). Tanpa ini,
-// kill proses di tengah writeFileSync bisa bikin db.json corrupt -> bot
-// gagal start lagi karena JSON.parse error.
+// Write db.json ATOMICALLY: write to a temporary file (.tmp) first, then rename
+// it to the real name. rename() is atomic at the filesystem level (all-or-
+// nothing) - so if the process dies or is killed WHILE writing, the OLD db.json
+// stays intact (never half-truncated). Without this, killing the process in the
+// middle of writeFileSync could corrupt db.json -> the bot then fails to start
+// again because of a JSON.parse error.
 function writeDb(db) {
   const tmpPath = DB_PATH + '.tmp';
   const json = JSON.stringify(db, null, 2);
   fs.writeFileSync(tmpPath, json);
   fs.renameSync(tmpPath, DB_PATH);
-  // Simpan salinan cadangan best-effort (tidak boleh sampai bikin writeDb
-  // gagal kalau ini error, makanya dibungkus try/catch sendiri).
+  // Keep a best-effort backup copy (this must never make writeDb fail, hence its
+  // own try/catch).
   try { fs.writeFileSync(DB_PATH + '.bak', json); } catch (_) {}
 }
 
@@ -140,10 +140,9 @@ function getUser(chatId, username) {
     db.users[chatId] = {
       username: username || '',
       balance: 0,
-      referredBy: null,      // chatId user yang mengundang (null kalau bukan hasil referral)
-      referralCount: 0,      // jumlah orang yang berhasil diundang
-      referralEarnings: 0,   // total saldo yang didapat dari program referral
-      lang: null             // 'id' | 'en' | null (null = belum pernah pilih bahasa)
+      referredBy: null,      // chatId of the inviting user (null when not from a referral)
+      referralCount: 0,      // how many people they have successfully invited
+      referralEarnings: 0    // total balance earned from the referral programme
     };
     writeDb(db);
   } else if (username && db.users[chatId].username !== username) {
@@ -153,78 +152,50 @@ function getUser(chatId, username) {
   return db.users[chatId];
 }
 
-// ===== Bahasa (i18n) per-user =====
-// Default 'id' kalau user belum pernah pilih bahasa sama sekali - dipakai
-// oleh lang.js supaya semua teks tetap tampil (bukan error) walau chatId
-// belum sempat lewat alur pilih-bahasa (mis. user lama sebelum fitur ini ada).
-function getUserLang(chatId) {
-  const db = readDb();
-  const user = db.users[chatId];
-  return (user && user.lang) || 'id';
-}
-
-// Return true kalau user ini BELUM PERNAH pilih bahasa sama sekali (dipakai
-// buat mutuskan apakah perlu munculin layar pilih-bahasa dulu pas /start).
-function hasChosenLang(chatId) {
-  const db = readDb();
-  const user = db.users[chatId];
-  return !!(user && user.lang);
-}
-
-function setUserLang(chatId, langCode) {
-  const db = readDb();
-  if (!db.users[chatId]) {
-    db.users[chatId] = { username: '', balance: 0, referredBy: null, referralCount: 0, referralEarnings: 0, lang: null };
-  }
-  db.users[chatId].lang = langCode;
-  writeDb(db);
-  return db.users[chatId].lang;
-}
-
-// Daftarkan user baru sebagai hasil referral dari `referrerChatId`.
-// ===== PATCH v7: FIX celah "referral tuyul" =====
-// SEBELUMNYA: reward langsung dikreditkan ke pengundang begitu user baru
-// ketik /start lewat link referral - TANPA syarat apapun lain. Ini gampang
-// banget dieksploitasi: bikin akun Telegram baru sebanyak-banyaknya (nomor
-// virtual/VoIP gampang & murah didapat), /start pakai link referral sendiri
-// dari tiap akun baru itu -> reward masuk terus tanpa ada uang beneran yang
-// masuk ke toko sama sekali ("di-tuyul").
-// SEKARANG: fungsi ini CUMA mencatat relasi referral (siapa ngundang siapa)
-// - TIDAK ada reward diberikan di sini. Reward baru dikreditkan lewat
-// creditReferralOnFirstDeposit() di bawah, DIPICU HANYA saat user yang
-// diundang itu BENERAN top-up saldo pertama kalinya lewat salah satu
-// payment gateway (QRIS/USDT/TON/Binance Pay - lihat pemanggilnya di
-// bot.js, di 4 titik pollXxxDeposit() setelah status jadi 'paid'). Syarat
-// ini jauh lebih mahal buat dieksploitasi - pelaku curang harus BENERAN
-// setor uang asli lewat gateway pembayaran asli untuk tiap akun palsu yang
-// dibikin, bukan cuma modal nomor SIM murah.
-// Return null kalau referral tidak valid (self-referral, referrer tidak
-// ada, atau user ini bukan user baru), atau { referrerChatId } kalau
-// relasinya berhasil dicatat (BUKAN berarti reward sudah diberikan).
+// Register a new user as a referral from `referrerChatId`.
+// ===== PATCH v7: FIX for the fake-referral loophole =====
+// PREVIOUSLY: the reward was credited to the inviter the moment a new user typed
+// /start through a referral link - with NO other condition at all. That was very
+// easy to exploit: create as many new Telegram accounts as you like (virtual/VoIP
+// numbers are cheap and easy to get), press /start with your own referral link
+// from each new account -> rewards keep coming in without a single real payment
+// reaching the store.
+// NOW: this function ONLY records the referral relationship (who invited whom)
+// - NO reward is granted here. The reward is credited later by
+// creditReferralOnFirstDeposit() below, TRIGGERED ONLY when the invited user
+// REALLY tops up their balance for the first time through one of the payment
+// gateways (QRIS/USDT/TON/Binance Pay - see the callers in bot.js, at the 4
+// pollXxxDeposit() points once the status becomes 'paid'). That condition is far
+// more expensive to exploit - a cheater has to ACTUALLY deposit real money
+// through a real payment gateway for every fake account they create, not just
+// buy a cheap SIM number.
+// Returns null when the referral is invalid (self-referral, the referrer does not
+// exist, or this is not a new user), or { referrerChatId } when the relationship
+// was recorded successfully (which does NOT mean a reward has been granted).
 function registerReferral(newChatId, referrerChatId) {
   if (!referrerChatId || String(referrerChatId) === String(newChatId)) return null;
   const db = readDb();
   const newUser = db.users[newChatId];
   const referrer = db.users[referrerChatId];
   if (!newUser || !referrer) return null;
-  if (newUser.referredBy) return null; // sudah pernah diproses sebelumnya
+  if (newUser.referredBy) return null; // already processed previously
 
   newUser.referredBy = referrerChatId;
   writeDb(db);
   return { referrerChatId };
 }
 
-// Dipanggil setiap kali ADA deposit yang statusnya baru saja jadi 'paid'
-// lewat payment gateway asli (QRIS/USDT/TON/Binance - BUKAN penyesuaian
-// saldo manual oleh admin, supaya admin bebas koreksi/refund saldo tanpa
-// sengaja memicu reward referral berkali-kali). Kreditkan reward ke
-// pengundang HANYA kalau: (1) user ini memang diundang seseorang
-// (referredBy ada), dan (2) ini benar-benar deposit sukses PERTAMA user
-// ini (referralRewardGiven belum pernah true) - dicek & di-set di sini
-// supaya user tidak bisa top-up berkali-kali untuk trigger reward
-// berkali-kali dari 1 kali diundang.
-// Return null kalau tidak ada reward yang perlu diberikan, atau
-// { referrerChatId, reward, newBalance } kalau berhasil dikreditkan.
+// Called every time a deposit's status has just become 'paid' through a real
+// payment gateway (QRIS/USDT/TON/Binance - NOT a manual balance adjustment by an
+// admin, so admins can freely correct or refund balances without accidentally
+// triggering referral rewards over and over). The reward is credited to the
+// inviter ONLY when: (1) this user really was invited by someone (referredBy is
+// set), and (2) this really is the user's FIRST successful deposit
+// (referralRewardGiven has never been true) - checked and set here so a user
+// cannot top up repeatedly to trigger the reward repeatedly from a single
+// invitation.
+// Returns null when no reward is due, or { referrerChatId, reward, newBalance }
+// when one was credited successfully.
 function creditReferralOnFirstDeposit(newChatId, rewardAmount) {
   const db = readDb();
   const newUser = db.users[newChatId];
@@ -250,14 +221,14 @@ function getReferralStats(chatId) {
 }
 
 function updateBalance(chatId, delta) {
-  // Guard terakhir: kalau ada pemanggil lain (sekarang atau nanti) yang lupa
-  // validasi input sebelum sampai sini dan `delta` ternyata NaN, JANGAN
-  // ditulis ke saldo - NaN + apapun = NaN, dan sekali saldo user jadi NaN
-  // itu RUSAK PERMANEN (tidak kebaca lagi sebagai angka, tidak bisa
-  // dipulihkan lewat transaksi normal apapun). Lebih aman gagal diam-diam
-  // (saldo tetap seperti semula) daripada korupsi data user.
+  // A last guard: if some other caller (now or in future) forgets to validate
+  // its input before reaching here and `delta` turns out to be NaN, do NOT
+  // write it to the balance - NaN plus anything is NaN, and once a user's
+  // balance becomes NaN it is PERMANENTLY BROKEN (no longer readable as a
+  // number, unrecoverable through any normal transaction). Failing quietly
+  // (leaving the balance untouched) is safer than corrupting user data.
   if (typeof delta !== 'number' || isNaN(delta)) {
-    console.error(`⚠️ updateBalance(${chatId}, ${delta}) ditolak - delta bukan angka valid.`);
+    console.error(`⚠️ updateBalance(${chatId}, ${delta}) rejected - delta is not a valid number.`);
     const db = readDb();
     return (db.users[chatId] && db.users[chatId].balance) || 0;
   }
@@ -310,25 +281,25 @@ function decrementStock(productId, variantId, qty) {
   return true;
 }
 
-// ===== PATCH: pisahkan stok live Supplier/Canboso (variant.liveStock) dari
-// stok manual (variant.stock, dimirror dari stockItems.length via
-// addStockItems/popStockItems di bawah, atau angka manual polos untuk
-// varian tanpa auto-delivery) - lihat setVariantStock() lebih bawah untuk
-// kronologi bug-nya. Dua sumber ini sekarang DIJUMLAH (bukan saling timpa)
-// lewat getTotalStock() supaya "Stock: N" yang ditampilkan ke buyer/admin
-// selalu mencerminkan total yang benar-benar bisa dipenuhi.
+// ===== PATCH: separate the live Supplier/Canboso stock (variant.liveStock) from
+// the manual stock (variant.stock, mirrored from stockItems.length via
+// addStockItems/popStockItems below, or a plain manual number for variants
+// without auto-delivery) - see setVariantStock() further down for the history of
+// the bug. These two sources are now ADDED TOGETHER (rather than overwriting one
+// another) via getTotalStock(), so the "Stock: N" shown to buyers/admins always
+// reflects the total that can genuinely be fulfilled.
 function getTotalStock(variant) {
   if (!variant) return 0;
   return (variant.liveStock || 0) + (variant.stock || 0);
 }
 
-// Kebalikan dari popStockItems() - kembalikan item ke stockItems (di DEPAN
-// array, supaya urutan FIFO semula tetap terjaga) kalau order lokal sudah
-// terlanjur dipop tapi ternyata gagal diselesaikan (mis. panggilan Supplier/
-// Canboso API buat sisa qty-nya gagal setelah stok lokal dipakai duluan -
-// lihat alur partial fulfillment di bot.js handler 'confirm:'). Tanpa ini,
-// item yang sudah dipop tapi order dibatalkan akan hilang percuma dari
-// database walau belum pernah benar-benar terkirim ke buyer manapun.
+// The opposite of popStockItems() - put items back into stockItems (at the FRONT
+// of the array, so the original FIFO order is preserved) when a local order has
+// already been popped but then could not be completed (for example the
+// Supplier/Canboso API call for the remaining qty failed after local stock was
+// used first - see the partial fulfilment flow in the 'confirm:' handler in
+// bot.js). Without this, items already popped from a cancelled order would be
+// lost from the database for nothing, despite never having been delivered.
 function restoreStockItems(productId, variantId, items) {
   if (!items || !items.length) return false;
   const db = readDb();
@@ -342,10 +313,10 @@ function restoreStockItems(productId, variantId, items) {
   return true;
 }
 
-// ===== Auto-delivery stock items (mis. link redeem Gemini Premium) =====
-// Setiap baris teks yang admin masukkan = 1 unit stok siap kirim otomatis.
-// variant.stockItems: string[] . variant.stock selalu disinkronkan ke
-// stockItems.length begitu varian tersebut dipakai untuk auto-delivery.
+// ===== Auto-delivery stock items (e.g. Gemini Premium redeem links) =====
+// Every line of text the admin enters = 1 unit of stock ready for auto-delivery.
+// variant.stockItems: string[] . variant.stock is always kept in sync with
+// stockItems.length once that variant is used for auto-delivery.
 
 function addStockItems(productId, variantId, items) {
   const db = readDb();
@@ -360,9 +331,9 @@ function addStockItems(productId, variantId, items) {
   return { added: clean.length, total: variant.stock };
 }
 
-// Ambil & hapus `qty` item stok teratas (FIFO) untuk dikirim ke pembeli.
-// Return null kalau varian ini belum pakai auto-delivery ATAU stok item kurang
-// dari qty -> caller wajib fallback ke alur manual (notifikasi admin).
+// Take and remove the top `qty` stock items (FIFO) to send to the buyer.
+// Returns null when this variant does not use auto-delivery OR has fewer items
+// than qty -> the caller must fall back to the manual flow (notify the admin).
 function popStockItems(productId, variantId, qty) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -380,7 +351,7 @@ function getStockItemCount(productId, variantId) {
   return variant && Array.isArray(variant.stockItems) ? variant.stockItems.length : 0;
 }
 
-// ===== Wallet deposits (topup otomatis via QRIS / USDT BEP20) =====
+// ===== Wallet deposits (automatic topup via QRIS / USDT BEP20) =====
 
 function createDeposit(fields) {
   const db = readDb();
@@ -410,8 +381,8 @@ function getPendingDeposits(method) {
   return db.deposits.filter(d => d.status === 'pending' && (!method || d.method === method));
 }
 
-// Nominal USDT yang lagi dipakai deposit pending lain - dipakai untuk
-// menghindari 2 deposit pending punya nominal unik yang sama persis.
+// USDT amounts currently in use by other pending deposits - used to avoid two
+// pending deposits having exactly the same unique amount.
 function getUsedUsdtAmounts() {
   const db = readDb();
   return new Set(
@@ -421,7 +392,7 @@ function getUsedUsdtAmounts() {
   );
 }
 
-// Sama seperti getUsedUsdtAmounts() di atas, tapi untuk deposit TON.
+// Same as getUsedUsdtAmounts() above, but for TON deposits.
 function getUsedTonAmounts() {
   const db = readDb();
   return new Set(
@@ -431,8 +402,8 @@ function getUsedTonAmounts() {
   );
 }
 
-// Sama seperti getUsedUsdtAmounts()/getUsedTonAmounts() di atas, tapi untuk
-// deposit Binance Pay.
+// Same as getUsedUsdtAmounts()/getUsedTonAmounts() above, but for Binance Pay
+// deposits.
 function getUsedBinanceAmounts() {
   const db = readDb();
   return new Set(
@@ -442,39 +413,39 @@ function getUsedBinanceAmounts() {
   );
 }
 
-// ⚠️ PENTING - proteksi anti replay/double-credit:
-// fetchIncomingUsdtTransfers()/fetchIncomingTonTransfers() nge-scan histori
-// on-chain sampai ~2,5 jam ke belakang (jauh lebih lama dari masa berlaku
-// 1 deposit yang cuma 30 menit). getUsedUsdtAmounts()/getUsedTonAmounts()
-// di atas cuma ngecek nominal dari deposit yang MASIH 'pending' - deposit
-// yang sudah 'paid' tidak dihitung lagi. Jadi kalau toko lagi ramai, 2 user
-// beda bisa saja kebagian nominal unik yang SAMA PERSIS dalam rentang 2,5
-// jam itu (cuma ada ~999 variasi 4 desimal). Begitu itu terjadi, polling
-// berikutnya bakal cocokkan transaksi LAMA yang sudah pernah dipakai buat
-// bayar deposit user pertama ke deposit user kedua -> user kedua ke-credit
-// saldo TANPA benar-benar transfer apapun (double-credit/replay exploit).
-// Makanya SETIAP match transfer WAJIB dicek dulu txHash-nya belum pernah
-// dipakai buat deposit lain sebelum saldo dikreditkan - lihat isTxHashUsed().
+// ⚠️ IMPORTANT - anti replay/double-credit protection:
+// fetchIncomingUsdtTransfers()/fetchIncomingTonTransfers() scan on-chain history
+// up to ~2.5 hours back (far longer than one deposit's 30-minute validity).
+// getUsedUsdtAmounts()/getUsedTonAmounts() above only check amounts from deposits
+// that are STILL 'pending' - ones already marked 'paid' are no longer counted. So
+// when the store is busy, two different users could be assigned EXACTLY THE SAME
+// unique amount within that 2.5-hour window (only ~999 four-decimal variations
+// exist). Once that happens, the next poll would match an OLD transaction that
+// already paid the first user's deposit against the second user's deposit -> the
+// second user gets credited WITHOUT transferring anything (a double-credit/replay
+// exploit). That is why EVERY matched transfer MUST first be checked to confirm
+// its txHash has never been used for another deposit before any balance is
+// credited - see isTxHashUsed().
 function isTxHashUsed(hash) {
   if (!hash) return false;
   const db = readDb();
   return db.deposits.some(d => d.txHash === hash);
 }
 
-// `supplierMeta` opsional: { supplierServiceId, supplierOrderId } - diisi
-// kalau order ini dipenuhi lewat Supplier API (AIVerse Hub) alih-alih stok
-// lokal, supaya admin bisa lacak balik order mana yang butuh dicek di sisi
-// API kalau ada komplain buyer (lihat supplier.js / admin:supplier di bot.js).
+// `supplierMeta` is optional: { supplierServiceId, supplierOrderId } - filled in
+// when this order was fulfilled through the Supplier API (AIVerse Hub) rather
+// than local stock, so an admin can trace which orders need checking on the API
+// side if a buyer complains (see supplier.js / admin:supplier in bot.js).
 function createOrder(chatId, productId, variantId, qty, unitPrice, total, deliveredItems, username, supplierMeta) {
   const db = readDb();
-  // PENTING: pakai Date.now() + random suffix, BUKAN Date.now() saja - sama
-  // seperti pola id deposit/channel di atas. Date.now() cuma presisi
-  // milidetik, jadi 2 order dari 2 buyer berbeda yang diproses SANGAT dekat
-  // (mis. dalam milidetik yang sama saat toko ramai) bisa dapat id KEMBAR.
-  // getOrderById() pakai .find() (ambil match PERTAMA) - kalau id kembar
-  // terjadi, fitur "🔍 Cek Order ID", log pengiriman, dan tombol
-  // "🔄 Refresh Kode 2FA"/"🏅 Recover Product" bisa salah ambil/nampilin
-  // detail akun order LAIN yang bukan miliknya - jadi wajib unik.
+  // IMPORTANT: use Date.now() plus a random suffix, NOT Date.now() alone - the
+  // same pattern as the deposit/channel ids above. Date.now() is only
+  // millisecond-precise, so two orders from two different buyers processed VERY
+  // close together (within the same millisecond when the store is busy) could
+  // get DUPLICATE ids. getOrderById() uses .find() (taking the FIRST match) - if
+  // duplicate ids occurred, the "🔍 Check Order ID" feature, the delivery log,
+  // and the "🔄 Refresh 2FA Code"/"🏅 Recover Product" buttons could pick up or
+  // display account details from a DIFFERENT order - so they must be unique.
   const id = 'ord_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
   const delivered = Array.isArray(deliveredItems) && deliveredItems.length > 0;
   db.orders.push({
@@ -485,10 +456,10 @@ function createOrder(chatId, productId, variantId, qty, unitPrice, total, delive
     ...(supplierMeta ? {
       supplierServiceId: supplierMeta.supplierServiceId,
       supplierOrderId: supplierMeta.supplierOrderId,
-      // Opsional: potongan raw response API luar, cuma diisi kalau
-      // ekstraksi item gagal (lihat bot.js) - dipakai admin/developer buat
-      // lacak balik field mapping yang meleset, tanpa perlu andalkan
-      // notifikasi Telegram yang bisa terlewat.
+      // Optional: a slice of the external API's raw response, only filled in
+      // when item extraction failed (see bot.js) - used by an admin/developer to
+      // trace back a field mapping that missed, without relying on a Telegram
+      // notification that could be missed.
       ...(supplierMeta.rawDebug ? { rawDebug: supplierMeta.rawDebug } : {})
     } : {})
   });
@@ -501,7 +472,7 @@ function getOrdersByUser(chatId) {
   return db.orders.filter(o => o.chatId === chatId).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-// ===== Audit log pengiriman otomatis =====
+// ===== Auto-delivery audit log =====
 function getOrderById(orderId) {
   const db = readDb();
   return db.orders.find(o => o.id === orderId) || null;
@@ -538,8 +509,8 @@ function getBackupSettings() {
   return db.settings.backup;
 }
 
-// partial: subset dari { enabled, intervalMinutes, groupId } yang mau diubah.
-// Return object settings terbaru (full, sudah di-merge).
+// partial: the subset of { enabled, intervalMinutes, groupId } to change.
+// Returns the latest settings object (complete, already merged).
 function setBackupSettings(partial) {
   const db = readDb();
   db.settings.backup = { ...db.settings.backup, ...partial };
@@ -547,19 +518,19 @@ function setBackupSettings(partial) {
   return db.settings.backup;
 }
 
-// ===== Harga Gift (markup% & kurs Stars->USD, override GIFT_MARKUP_PCT /
-// STARS_TO_USD_RATE dari .env - lihat giftPriceUsd() di bot.js) =====
-// null = belum di-override, pakai default dari .env (config.js). Disimpan
-// terpisah dari giftPriceUsd() sendiri supaya admin bisa ubah live dari
-// chat Telegram TANPA perlu restart server (beda dari env var yang harus
-// restart proses buat kebaca ulang).
+// ===== Gift pricing (markup% and the Stars->USD rate, overriding
+// GIFT_MARKUP_PCT / STARS_TO_USD_RATE from .env - see giftPriceUsd() in bot.js) =====
+// null = not overridden, use the default from .env (config.js). Stored separately
+// from giftPriceUsd() itself so an admin can change it live from Telegram chat
+// WITHOUT restarting the server (unlike env vars, which need a process restart to
+// be re-read).
 function getGiftPricingSettings() {
   const db = readDb();
   if (!db.settings.giftPricing) db.settings.giftPricing = { markupPct: null, starsToUsdRate: null };
   return db.settings.giftPricing;
 }
 
-// partial: subset dari { markupPct, starsToUsdRate } yang mau diubah.
+// partial: the subset of { markupPct, starsToUsdRate } to change.
 function setGiftPricingSettings(partial) {
   const db = readDb();
   db.settings.giftPricing = { ...(db.settings.giftPricing || { markupPct: null, starsToUsdRate: null }), ...partial };
@@ -567,7 +538,7 @@ function setGiftPricingSettings(partial) {
   return db.settings.giftPricing;
 }
 
-// ===== Wajib Join Channel =====
+// ===== Force Join Channel =====
 function getForceJoinSettings() {
   return readDb().settings.forceJoin;
 }
@@ -600,13 +571,13 @@ function getForceJoinChannels() {
   return readDb().settings.forceJoin.channels;
 }
 
-// ===== Notifikasi Channel Otomatis (New Purchase / New Wallet Top-Up) =====
+// ===== Automatic Channel Notifications (New Purchase / New Wallet Top-Up) =====
 function getChannelNotifSettings() {
   return readDb().settings.channelNotif;
 }
 
-// partial: subset dari { enabled, chatRef, title, notifyPurchase, notifyTopup }
-// yang mau diubah. Return object settings terbaru (full, sudah di-merge).
+// partial: the subset of { enabled, chatRef, title, notifyPurchase, notifyTopup }
+// to change. Returns the latest settings object (complete, already merged).
 function setChannelNotifSettings(partial) {
   const db = readDb();
   db.settings.channelNotif = { ...db.settings.channelNotif, ...partial };
@@ -614,14 +585,14 @@ function setChannelNotifSettings(partial) {
   return db.settings.channelNotif;
 }
 
-// ===== Mode Maintenance Bot =====
+// ===== Bot Maintenance Mode =====
 function getMaintenanceSettings() {
   return readDb().settings.maintenance;
 }
 
-// partial: subset dari { enabled, message } yang mau diubah. `message: null`
-// artinya balik pakai teks default (lihat buildMaintenanceText() di bot.js).
-// Return object settings terbaru (full, sudah di-merge).
+// partial: the subset of { enabled, message } to change. `message: null` means
+// go back to the default text (see buildMaintenanceText() in bot.js).
+// Returns the latest settings object (complete, already merged).
 function setMaintenanceSettings(partial) {
   const db = readDb();
   db.settings.maintenance = { ...db.settings.maintenance, ...partial };
@@ -629,16 +600,16 @@ function setMaintenanceSettings(partial) {
   return db.settings.maintenance;
 }
 
-// ===== List User (admin "📋 List User") =====
-// Return SEMUA user terdaftar sebagai array (chatId ikut disisipkan di tiap
-// object-nya, karena di db.json chatId cuma jadi KEY object `users`, bukan
-// field di dalam value-nya). orderCount dihitung on-the-fly dari db.orders -
-// tidak disimpan sebagai field terpisah di user, supaya selalu akurat walau
-// ada order yang dihapus/diubah manual. Urutan hasil array SAMA PERSIS
-// dengan urutan Object.keys(db.users) - untuk key numerik (chatId Telegram
-// selalu numerik), JavaScript otomatis mengurutkannya ASCENDING secara
-// otomatis (bukan urutan pendaftaran), jadi user dengan chatId lebih kecil
-// akan selalu tampil lebih dulu.
+// ===== User list (the admin "📋 User List") =====
+// Returns EVERY registered user as an array (chatId is inserted into each object,
+// because in db.json chatId is only the KEY of the `users` object, not a field
+// inside the value). orderCount is computed on the fly from db.orders - not
+// stored as a separate field on the user, so it stays accurate even when orders
+// are deleted or edited by hand. The array order is EXACTLY the order of
+// Object.keys(db.users) - and for numeric keys (a Telegram chatId is always
+// numeric) JavaScript sorts them ASCENDING automatically rather than by
+// registration order, so users with a smaller chatId always appear first in the
+// listing.
 function getUsersList() {
   const db = readDb();
   const orders = Array.isArray(db.orders) ? db.orders : [];
@@ -663,11 +634,11 @@ function addProduct(id, name, emoji) {
   return true;
 }
 
-// Set/ganti URL logo resmi 1 produk (mis. logo Netflix/Spotify/Gemini) -
-// dipakai di notifikasi channel supaya tiap produk tampil dengan logo
-// aplikasinya sendiri, bukan cuma emoji. url null/'' -> hapus logo (balik
-// pakai emoji seperti biasa, tidak error). Return false kalau produk tidak
-// ditemukan.
+// Set or change the official logo URL of a product (the Netflix/Spotify/Gemini
+// logo, say) - used in channel notifications so each product shows its own app
+// logo rather than just an emoji. A null/'' url removes the logo (falling back to
+// the emoji as usual, without error). Returns false when the product is not
+// found.
 function setProductLogo(productId, url) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -677,12 +648,12 @@ function setProductLogo(productId, url) {
   return true;
 }
 
-// Set/ganti custom emoji premium 1 produk (dipakai di productEmojiHtml() -
-// bot.js). "emoji" = karakter unicode fallback (buat client lama/emoji
-// biasa), "emojiId" = custom_emoji_id ASLI hasil forward pesan owner sendiri
-// dari panel Telegram Premium-nya (lihat handler 'setemoji_capture' di
-// bot.js) - null kalau owner cuma mau pakai unicode biasa tanpa premium.
-// Return false kalau produk tidak ditemukan.
+// Set or change a product's premium custom emoji (used by productEmojiHtml() in
+// bot.js). "emoji" = the fallback unicode character (for older clients / plain
+// emoji), "emojiId" = the REAL custom_emoji_id captured by forwarding the owner's
+// own message from their Telegram Premium panel (see the 'setemoji_capture'
+// handler in bot.js) - null when the owner only wants plain unicode without
+// premium. Returns false when the product is not found.
 function setProductEmoji(productId, emoji, emojiId) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -693,15 +664,15 @@ function setProductEmoji(productId, emoji, emojiId) {
   return true;
 }
 
-// Alur utama "➕ Tambah Produk": nama + harga + deskripsi saja.
-// Otomatis bikin 1 produk dengan 1 varian default (id: `${id}-default`),
-// stok mulai dari 0 - stok diisi belakangan lewat "📥 Tambah Stock".
-// emoji: karakter unicode fallback (dipakai di tombol/teks Markdown yang tidak
-// bisa render custom emoji). emojiId: custom_emoji_id ASLI kalau owner pilih
-// emoji itu langsung dari panel Telegram Premium-nya saat ngetik nama produk
-// (lihat handler 'addproduct_name' di TEXT MESSAGES) - kalau kosong/null berarti
-// owner cuma ngetik emoji unicode biasa (atau tidak pakai emoji sama sekali),
-// otomatis fallback ke `emoji` polos / 📦, tidak ada error.
+// The main "➕ Add Product" flow: name + price + description only.
+// Automatically creates one product with one default variant (id:
+// `${id}-default`), stock starting at 0 - stock is added later via "📥 Add Stock".
+// emoji: the fallback unicode character (used on buttons and in Markdown text,
+// which cannot render custom emoji). emojiId: the REAL custom_emoji_id when the
+// owner picked that emoji straight from their Telegram Premium panel while typing
+// the product name (see the 'addproduct_name' handler under TEXT MESSAGES) - when
+// empty/null the owner simply typed a plain unicode emoji (or none at all), and
+// it falls back to the plain `emoji` / 📦 without error.
 function addSimpleProduct(id, name, price, description, emoji, emojiId) {
   const db = readDb();
   if (db.products.find(p => p.id === id)) return null;
@@ -729,22 +700,22 @@ function addVariant(productId, variantId, label, price, stock, description) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
   if (!product) return false;
-  // Cegah 2 varian di produk yang sama punya id KEMBAR (mis. admin ketik
-  // label yang sama/mirip dua kali, sehingga slug id-nya sama persis).
-  // Tanpa cek ini, findVariant() (pakai .find(), ambil match PERTAMA) akan
-  // selalu ambil varian LAMA - varian baru jadi "ghost" yang kelihatan di
-  // daftar tapi kalau diklik/diedit (stok, harga, dll) yang berubah malah
-  // punya varian lama, bikin admin bingung kenapa perubahannya "tidak masuk".
+  // Prevent two variants of the same product having DUPLICATE ids (an admin
+  // typing the same or a similar label twice, so the slug id comes out
+  // identical). Without this, findVariant() (which uses .find(), taking the FIRST
+  // match) would always return the OLD variant - the new one becomes a "ghost"
+  // that shows in the list but, when clicked or edited (stock, price, etc.),
+  // changes the old variant instead, leaving the admin puzzled.
   if (product.variants.some(v => v.id === variantId)) return false;
   product.variants.push({
     id: variantId,
     label,
     stock: stock || 0,
     tiers: [{ min: 1, max: null, price }],
-    // BUG FIX: dulu field ini tidak pernah di-set sama sekali di sini, jadi
-    // varian baru selalu tampil tanpa deskripsi. Sekarang ikut disimpan
-    // (default string kosong kalau admin tidak mengisi apa-apa), sama
-    // seperti addSimpleProduct() di atas.
+    // BUG FIX: this field used to never be set here at all, so a new variant
+    // always showed up with no description. It is now saved too (defaulting to an
+    // empty string when the admin enters nothing), the same as addSimpleProduct()
+    // above.
     description: description || '',
     howToUse: ''
   });
@@ -752,10 +723,10 @@ function addVariant(productId, variantId, label, price, stock, description) {
   return true;
 }
 
-// Ubah harga dasar (tier pertama) sebuah varian. Kalau varian punya diskon
-// grosir bertingkat (tiers > 1), tier-tier lain TIDAK ikut berubah otomatis -
-// itu tetap harus diedit manual di data/db.json biar aman, ini cuma ubah
-// harga dasarnya saja (tier 1: min 1).
+// Change the base price (the first tier) of a variant. When a variant has tiered
+// bulk discounts (tiers > 1), the other tiers do NOT change automatically - those
+// still have to be edited by hand in data/db.json to be safe; this only changes
+// the base price (tier 1: min 1).
 function setVariantPrice(productId, variantId, price) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -770,20 +741,20 @@ function setVariantPrice(productId, variantId, price) {
   return true;
 }
 
-// ===== Supplier API (AIVerse Hub) - link 1 varian ke 1 service_id remote =====
-// Kalau variant.supplierServiceId terisi, alur beli (lihat bot.js) akan
-// pesan produknya OTOMATIS lewat API supplier (bukan dari stockItems lokal)
-// begitu ada buyer beli varian ini. Lihat supplier.js untuk integrasi API-nya.
+// ===== Supplier API (AIVerse Hub) - link one variant to one remote service_id =====
+// When variant.supplierServiceId is set, the purchase flow (see bot.js) orders the
+// product AUTOMATICALLY through the supplier API (rather than from local
+// stockItems) as soon as a buyer purchases this variant. See supplier.js for the API.
 function setVariantSupplier(productId, variantId, serviceId, costPrice) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
   const variant = product && product.variants.find(v => v.id === variantId);
   if (!variant) return false;
   variant.supplierServiceId = serviceId;
-  // Harga modal (cost) dari AIVerse Hub PADA SAAT dihubungkan - disimpan
-  // biar bisa hitung margin (modal vs harga jual lokal) tanpa perlu panggil
-  // API lagi tiap kali tampilkan menu Supplier API. Modal AIVerse Hub bisa
-  // berubah sewaktu-waktu di sisi mereka - nilai ini snapshot, bukan live.
+  // The cost price from AIVerse Hub AT THE MOMENT it was linked - stored so the
+  // margin (cost vs local sale price) can be calculated without calling the API
+  // again every time the Supplier API menu is shown. The AIVerse Hub cost can
+  // change on their side at any time - this value is a snapshot, not live.
   if (typeof costPrice === 'number' && !isNaN(costPrice)) {
     variant.supplierCost = costPrice;
   }
@@ -802,18 +773,18 @@ function clearVariantSupplier(productId, variantId) {
   return true;
 }
 
-// Sinkron stok LIVE dari Supplier/Canboso API ke variant.liveStock - dipakai
-// oleh 'admin:supplierrefresh', refreshSupplierData(), dan live-check
-// Canboso di handler 'variant:'/'confirm:' bot.js.
-// ===== BUG FIX: dulu fungsi ini menimpa variant.stock langsung - field yang
-// SAMA dipakai juga oleh stok manual (stockItems.length, lihat addStockItems/
-// popStockItems di atas). Karena keduanya sumber terpisah yang berebut 1
-// field, sync live berikutnya bisa menimpa stok manual admin jadi 0/basi
-// (kalau saldo/stok di sisi API luar kebetulan habis), padahal stok manual
-// lokal masih ada dan siap kirim. Sekarang ditulis ke field liveStock yang
-// terpisah - variant.stock (mirror stok manual) tidak pernah disentuh di
-// sini lagi. Pakai getTotalStock(variant) untuk dapat angka gabungan
-// (live + manual) buat ditampilkan ke buyer/admin.
+// Sync the LIVE stock from the Supplier/Canboso API into variant.liveStock - used
+// by 'admin:supplierrefresh', refreshSupplierData(), and the Canboso live check
+// in the 'variant:'/'confirm:' handlers in bot.js.
+// ===== BUG FIX: this function used to overwrite variant.stock directly - the SAME
+// field also used by manual stock (stockItems.length, see addStockItems/
+// popStockItems above). Because two separate sources fought over one field, the
+// next live sync could overwrite the admin's manual stock with 0 or a stale value
+// (whenever the external API's balance/stock happened to be empty), even though
+// local manual stock was still there and ready to deliver. It now writes to the
+// separate liveStock field - variant.stock (the manual stock mirror) is never
+// touched here again. Use getTotalStock(variant) to get the combined number
+// (live + manual) to display to buyers/admins.
 function setVariantStock(productId, variantId, stock) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -825,19 +796,19 @@ function setVariantStock(productId, variantId, stock) {
   return true;
 }
 
-// ===== FITUR BARU: 🔢 Tambah Stock Manual (Angka) =====
-// Beda dari addStockItems() di atas (yang nerima link/kode REAL per baris
-// untuk auto-delivery), fungsi ini cuma NAMBAH ANGKA polos ke variant.stock
-// - dipakai admin lewat /admin -> 📥 Tambah Stock -> "🔢 Tambah Angka Saja
-// (Manual)" untuk produk yang TIDAK auto-kirim (mis. akun yang dikirim
-// manual sendiri oleh admin ke buyer setelah order masuk). Tetap pakai
-// field variant.stock yang SAMA dengan mirror stockItems.length (lihat
-// komentar di setVariantStock di atas) - jadi kalau varian ini nanti JUGA
-// dipakai lewat addStockItems (paste link), stock akan ketimpa jadi
-// stockItems.length lagi (bukan lagi angka manual ini) - ini SENGAJA
-// konsisten dengan cara variant.stock sudah dipakai selama ini, cukup
-// jangan campur 2 cara itu di 1 varian yang sama kalau tidak mau angkanya
-// ketimpa.
+// ===== FEATURE: 🔢 Add Manual Stock (a plain number) =====
+// Unlike addStockItems() above (which takes REAL links/codes one per line for
+// auto-delivery), this function only ADDS A PLAIN NUMBER to variant.stock - used
+// by admins via /admin -> 📥 Add Stock -> "🔢 Add Number Only (Manual)" for
+// products that are NOT auto-delivered (accounts the admin sends to the buyer
+// themselves after an order comes in). It still uses the SAME variant.stock field
+// that mirrors stockItems.length (see the comment on setVariantStock above) - so
+// if this variant is LATER also used via addStockItems (pasting links), stock will
+// be overwritten back to stockItems.length (no longer this manual number). That is
+// DELIBERATELY consistent with how variant.stock has always been used; just avoid
+// mixing the two approaches on the same variant if you do not want the number
+// overwritten.
+//
 function addManualStock(productId, variantId, qty) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -850,11 +821,11 @@ function addManualStock(productId, variantId, qty) {
   return { added: addQty, total: variant.stock };
 }
 
-// Timpa langsung array tiers (harga jual per rentang qty) 1 varian - dipakai
-// oleh refreshSupplierData() di bot.js untuk menghitung ULANG harga jual
-// varian Supplier API dari modal live + persentase markup (lihat
-// DEFAULT_SUPPLIER_TIER_MARKUP / getVariantTierMarkup), supaya harga yang
-// dilihat buyer selalu ikut harga terbaru Supplier, bukan angka basi.
+// Overwrite a variant's tiers array (sale price per qty range) directly - used by
+// refreshSupplierData() in bot.js to RECALCULATE the sale price of a Supplier API
+// variant from the live cost plus a markup percentage (see
+// DEFAULT_SUPPLIER_TIER_MARKUP / getVariantTierMarkup), so the price buyers see
+// always follows the supplier's latest price rather than a stale number.
 function setVariantTiers(productId, variantId, tiers) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -865,10 +836,10 @@ function setVariantTiers(productId, variantId, tiers) {
   return true;
 }
 
-// Override markup per-varian (opsional) - kalau tidak diset, refreshSupplierData()
-// pakai DEFAULT_SUPPLIER_TIER_MARKUP dari config.js untuk SEMUA varian
-// Supplier API. Dipakai kalau 1 produk tertentu butuh markup beda sendiri
-// (mis. produk yang lebih kompetitif butuh margin lebih tipis).
+// Optional per-variant markup override - when it is not set, refreshSupplierData()
+// uses DEFAULT_SUPPLIER_TIER_MARKUP from config.js for ALL Supplier API variants.
+// Useful when one particular product needs its own markup (for example a more
+// competitive product needing a thinner margin).
 function setVariantTierMarkup(productId, variantId, tierMarkup) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -885,11 +856,11 @@ function getVariantTierMarkup(variant, defaultMarkup) {
     : defaultMarkup;
 }
 
-// Toggle "kunci harga manual" per varian - kalau true, refreshSupplierData()
-// di bot.js akan skip perhitungan ULANG tier (computeTiersFromCost) buat
-// varian ini walau tetap sinkron modal (supplierCost) & stok seperti biasa.
-// Dipakai buat varian Supplier API yang admin sudah set harga manual lewat
-// "🎁 Set Tier Diskon Grosir" dan tidak mau harganya ketimpa auto-sync lagi.
+// Toggle a per-variant "manual price lock" - when true, refreshSupplierData() in
+// bot.js skips RECALCULATING the tiers (computeTiersFromCost) for this variant,
+// while still syncing the cost (supplierCost) and stock as usual.
+// Used for Supplier API variants whose price an admin has already set manually via
+// "🎁 Set Bulk Discount Tiers" and does not want overwritten by auto-sync again.
 function setVariantPriceLock(productId, variantId, locked) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -900,9 +871,9 @@ function setVariantPriceLock(productId, variantId, locked) {
   return true;
 }
 
-// Daftar semua varian yang lagi terhubung ke supplier API - dipakai untuk
-// tampilan "Supplier API" di /admin (lihat variant mana saja yang aktif
-// auto-order via AIVerse Hub, plus tombol putus link per varian).
+// List every variant currently linked to the supplier API - used by the
+// "Supplier API" screen in /admin (to see which variants auto-order via AIVerse
+// Hub, plus a per-variant unlink button).
 function getSupplierLinkedVariants() {
   const db = readDb();
   const result = [];
@@ -914,13 +885,13 @@ function getSupplierLinkedVariants() {
   return result;
 }
 
-// ===== Supplier API (Canboso) - link 1 varian ke 1 product_id remote =====
-// Pola PERSIS sama dengan setVariantSupplier/clearVariantSupplier/
-// getSupplierLinkedVariants di atas (AIVerse Hub), tapi field terpisah
-// (canbosoProductId/canbosoCost) supaya 1 varian bisa saja punya salah
-// SATU dari dua supplier ini (tidak keduanya sekaligus - alur beli di
-// bot.js akan prioritaskan AIVerse Hub kalau ternyata ada 2-2nya terisi,
-// jadi UI link/unlink di admin sudah didesain saling eksklusif per varian).
+// ===== Supplier API (Canboso) - link one variant to one remote product_id =====
+// EXACTLY the same pattern as setVariantSupplier/clearVariantSupplier/
+// getSupplierLinkedVariants above (AIVerse Hub), but with separate fields
+// (canbosoProductId/canbosoCost) so a variant can have EITHER of the two
+// suppliers (not both at once - the purchase flow in bot.js prioritises AIVerse
+// Hub if both are somehow set, so the link/unlink UI in admin is designed to be
+// mutually exclusive per variant).
 function setVariantCanboso(productId, variantId, canbosoProductId, costPrice) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
@@ -966,40 +937,16 @@ function setHowToUse(productId, variantId, text) {
   return true;
 }
 
-// Sama seperti setHowToUse() di atas, tapi untuk field "description" -
-// dipakai admin action "Set Deskripsi" (mirror dari "Set How to Use") supaya
-// deskripsi varian yang dibuat lewat "Tambah Varian" (yang dulu tidak pernah
-// nanya deskripsi sama sekali) bisa diisi belakangan tanpa harus edit
-// data/db.json manual.
-// `sourceLang` ('id'|'en'): bahasa yang dipakai ADMIN saat mengetik teks ini.
-// Dipakai bot.js buat mutuskan apakah deskripsi perlu di-auto-translate saat
-// buyer yang /setlanguage-nya BEDA dari sourceLang ini membuka halaman
-// deskripsi (lihat getLocalizedDescription() di bot.js). descriptionTranslated
-// di-reset kosong tiap kali admin ganti teksnya, supaya translate cache lama
-// tidak "nyangkut" dan ketampil basi kalau teks aslinya sudah diedit.
-function setDescription(productId, variantId, text, sourceLang) {
+// Same as setHowToUse() above, but for the "description" field - used by the
+// admin "Set Description" action (mirroring "Set How to Use") so a variant
+// description created through "Add Variant" (which never used to ask for a
+// description at all) can be filled in later without editing data/db.json by hand.
+function setDescription(productId, variantId, text) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
   const variant = product && product.variants.find(v => v.id === variantId);
   if (!variant) return false;
   variant.description = text;
-  variant.descriptionLang = sourceLang === 'en' ? 'en' : 'id';
-  variant.descriptionTranslated = {};
-  writeDb(db);
-  return true;
-}
-
-// Simpan hasil auto-translate deskripsi ke cache (supaya panggilan
-// translate berikutnya ke bahasa yang sama tidak perlu hit API lagi).
-// Aman diabaikan (return false) kalau produk/variant-nya sudah dihapus di
-// antara waktu translate dimulai & selesai (async, bisa telat).
-function cacheDescriptionTranslation(productId, variantId, langCode, translatedText) {
-  const db = readDb();
-  const product = db.products.find(p => p.id === productId);
-  const variant = product && product.variants.find(v => v.id === variantId);
-  if (!variant) return false;
-  if (!variant.descriptionTranslated) variant.descriptionTranslated = {};
-  variant.descriptionTranslated[langCode] = translatedText;
   writeDb(db);
   return true;
 }
@@ -1016,11 +963,11 @@ function getAllProducts() {
   return readDb().products;
 }
 
-// ===================== Custom Emoji ID (hasil "tangkap otomatis") =====================
-// key contoh: "menu:buy_produk" (ikon tombol) atau "teks:product_desc" /
-// "teks:menu_notif" (emoji di dalam teks). Disimpan di db.json supaya
-// PERSISTEN antar restart bot TANPA perlu admin edit file .js manual -
-// diisi otomatis lewat fitur "🎨 Kelola Emoji ID" di /admin (forward emoji).
+// ===================== Custom Emoji ID (from "automatic capture") =====================
+// Example keys: "menu:buy_produk" (a button icon) or "teks:product_desc" /
+// "teks:menu_notif" (emoji inside text). Stored in db.json so they PERSIST across
+// bot restarts WITHOUT the admin editing a .js file by hand - filled in
+// automatically by the "🎨 Manage Emoji ID" feature in /admin (forward an emoji).
 function setEmojiId(key, customEmojiId) {
   const db = readDb();
   db.emojiIds[key] = customEmojiId;
@@ -1041,10 +988,10 @@ function clearEmojiId(key) {
   writeDb(db);
 }
 
-// ===== Gift orders (fitur "🎁 Buy Gift" / "💌 Confess Gift" - lihat userbot.js) =====
-// Terpisah dari createOrder() (order produk katalog biasa) karena gift TIDAK
-// punya productId/variantId/stok lokal - sumbernya katalog live dari
-// Telegram (userbot.getGiftCatalog()), bukan data/db.json.
+// ===== Gift orders (the "🎁 Buy Gift" / "💌 Confess Gift" features - see userbot.js) =====
+// Kept separate from createOrder() (ordinary catalogue product orders) because a
+// gift has NO productId/variantId/local stock - its source is the live catalogue
+// from Telegram (userbot.getGiftCatalog()), not data/db.json.
 function createGiftOrder(fields) {
   const db = readDb();
   const order = {
@@ -1052,11 +999,11 @@ function createGiftOrder(fields) {
     chatId: fields.chatId,
     username: fields.username || '',
     mode: fields.mode,                 // 'buy' | 'confess' | 'saved'
-    giftId: fields.giftId,             // id katalog (mode buy/confess) ATAU msgId saved gift (mode 'saved')
+    giftId: fields.giftId,             // catalogue id (buy/confess mode) OR the saved gift msgId ('saved' mode)
     stars: fields.stars,
     priceUsd: fields.priceUsd,
-    target: fields.target,             // username/id tujuan, apa adanya
-    message: fields.message || null,   // pesan anonim (mode 'confess')
+    target: fields.target,             // destination username/id, as entered
+    message: fields.message || null,   // the anonymous message ('confess' mode)
     status: 'pending',                 // 'pending' | 'sent' | 'failed_refunded'
     error: null,
     createdAt: Date.now()
@@ -1082,7 +1029,6 @@ function getGiftOrdersByUser(chatId) {
 
 module.exports = {
   readDb, writeDb, getUser, updateBalance,
-  getUserLang, setUserLang, hasChosenLang,
   registerReferral, creditReferralOnFirstDeposit, getReferralStats,
   findProduct, findVariant, getBasePrice, getBulkPrice, getUnitPriceForQty, decrementStock,
   getTotalStock, restoreStockItems,
@@ -1090,7 +1036,7 @@ module.exports = {
   createDeposit, getDeposit, updateDeposit, getPendingDeposits, getUsedUsdtAmounts, getUsedTonAmounts, getUsedBinanceAmounts, isTxHashUsed,
   createOrder, getOrdersByUser, getOrderById, getDeliveryLogs,
   setPendingAction, getPendingAction, clearPendingAction,
-  addProduct, addSimpleProduct, addVariant, setVariantPrice, setHowToUse, setDescription, cacheDescriptionTranslation, setProductLogo, setProductEmoji, removeProduct, getAllProducts,
+  addProduct, addSimpleProduct, addVariant, setVariantPrice, setHowToUse, setDescription, setProductLogo, setProductEmoji, removeProduct, getAllProducts,
   setVariantSupplier, clearVariantSupplier, setVariantStock, getSupplierLinkedVariants,
   setVariantCanboso, clearVariantCanboso, getCanbosoLinkedVariants,
   setVariantTiers, setVariantTierMarkup, getVariantTierMarkup, setVariantPriceLock,
