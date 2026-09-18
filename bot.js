@@ -2251,23 +2251,23 @@ function quantityKeyboard(productId, variantId, chatId) {
   return { inline_keyboard: rows };
 }
 
-// Baris tombol quick-topup (QRIS/USDT/TON) untuk nominal tertentu (USD) -
-// dipakai di 2 tempat sesuai keputusan produk: (1) langsung di halaman Order
-// Confirmation kalau saldo kurang, (2) di pesan tambahan begitu user pencet
-// "Place Order" tapi saldo ternyata masih kurang. Nominal dikirim via
-// callback_data dalam SEN (integer) - bukan desimal - supaya tidak ada
-// masalah pembulatan/parsing float di data callback yang cuma string.
+// The quick-topup button row (QRIS/USDT/TON) for a given USD amount - used in 2
+// places by product decision: (1) directly on the Order Confirmation page when
+// the balance is short, and (2) in the follow-up message when a user presses
+// "Place Order" but the balance is still short. The amount travels in
+// callback_data as CENTS (an integer) - not a decimal - so there is no rounding
+// or float-parsing trouble in callback data, which is only ever a string.
 function quickTopupButtonsRow(amountUsd) {
   const cents = Math.max(1, Math.round(amountUsd * 100));
-  // Pakai key emoji yang SAMA dengan tombol topup:qris/usdt/ton/binance di
-  // menu Wallet utama ('topup_qris'/'topup_usdt'/'topup_ton'/'topup_binance'
-  // di emoji-id-menu-inline.js) - supaya kalau admin sudah pasang emoji
-  // premium buat tombol itu lewat "🎨 Kelola Emoji ID", ikon yang sama
-  // otomatis kepakai juga di sini tanpa perlu di-set ulang.
-  // Balikin 2 ROWS (bukan 1 row 4 tombol) supaya tidak kepencet/kegepeng di
-  // layar HP sekarang yang sudah nambah 1 metode (Binance) - pemanggilnya
-  // WAJIB spread hasil ini (...quickTopupButtonsRows(...)), bukan push
-  // sebagai 1 array tunggal.
+  // Use the SAME emoji keys as the topup:qris/usdt/ton/binance buttons in the
+  // main Wallet menu ('topup_qris'/'topup_usdt'/'topup_ton'/'topup_binance' in
+  // emoji-id-menu-inline.js) - so when an admin has already set a premium emoji
+  // for those buttons via "🎨 Manage Emoji ID", the same icon is reused here
+  // automatically with nothing extra to configure.
+  // It returns 2 ROWS (not one row of 4 buttons) so the buttons are not squeezed
+  // on today's phone screens now that a fourth method (Binance) exists - callers
+  // MUST spread the result (...quickTopupButtonsRow(...)) rather than pushing it
+  // as a single array.
   return [
     [
       withButtonIcon({ text: '📱 QRIS', callback_data: `qtopup:qris:${cents}` }, 'topup_qris'),
@@ -2286,10 +2286,10 @@ function confirmKeyboard(productId, variantId, qty, chatId, shortfall) {
     [withButtonIcon({ text: lang.t(chatId, 'btn_place_order'), callback_data: `confirm:${ref}:${qty}` }, 'place_order')],
     [withButtonIcon({ text: lang.t(chatId, 'btn_cancel_order'), callback_data: `variant:${ref}` }, 'cancel_order')]
   ];
-  // Kalau saldo user masih kurang buat order ini, tambahkan baris quick-topup
-  // (QRIS/USDT/TON/Binance) langsung di sini - user tinggal pencet salah satu
-  // tanpa perlu keluar dulu ke menu Wallet, nominalnya otomatis sejumlah
-  // KEKURANGAN saldo (bukan total order), supaya begitu selesai bayar, saldo
+  // When the user's balance is still short for this order, add the quick-topup
+  // row (QRIS/USDT/TON/Binance) right here - the user just presses one without
+  // leaving for the Wallet menu, and the amount is automatically the SHORTFALL
+  // (not the order total), so once they have paid the balance is exactly enough.
   // pas cukup.
   if (shortfall > 0) {
     rows.push(...quickTopupButtonsRow(shortfall));
@@ -2304,7 +2304,7 @@ async function showOrderConfirmation(chatId, messageId, productId, variantId, qt
     return bot.sendMessage(chatId, lang.t(chatId, 'invalid_qty'));
   }
   const unitPrice = db.getUnitPriceForQty(variant, qty);
-  const total = Math.round(unitPrice * qty * 100) / 100; // lihat catatan bug fix floating-point di handler 'confirm:'
+  const total = Math.round(unitPrice * qty * 100) / 100; // see the floating-point bug fix note in the 'confirm:' handler
   const user = db.getUser(chatId);
   const shortfall = Math.max(0, total - user.balance);
 
@@ -2337,23 +2337,23 @@ bot.onText(/^\/start(?:\s+(.+))?/, async (msg, match) => {
   const isNewUser = !db.readDb().users[chatId];
   db.getUser(chatId, msg.from.username);
 
-  // Gerbang Mode Maintenance: admin selalu tetap bisa akses normal (supaya
-  // owner tidak pernah ikut terkunci dari bot-nya sendiri), tapi SEMUA user
-  // lain langsung dikasih lihat pesan maintenance dan berhenti di sini -
-  // tidak lanjut ke proses referral, pilih bahasa, wajib join, atau menu
+  // The Maintenance Mode gate: admins always keep normal access (so the owner is
+  // never locked out of their own bot), but EVERY other user is shown the
+  // maintenance message and stops here - never reaching the referral step, the
+  // force-join gate, or the main menu at all.
   // utama sama sekali.
   if (!isAdmin(chatId) && db.getMaintenanceSettings().enabled) {
     return bot.sendMessage(chatId, buildMaintenanceText(chatId), { parse_mode: 'HTML' });
   }
 
-  // payload dari deep-link https://t.me/<bot>?start=<referrerChatId> ->
-  // hanya diproses kalau user ini BENERAN baru (belum pernah /start
-  // sebelumnya), supaya user lama tidak bisa "refer" diri sendiri berkali-kali
-  // cuma dengan buka ulang link yang sama.
-  // ===== PATCH v7: reward TIDAK lagi diberikan di sini (lihat db.registerReferral()
-  // & db.creditReferralOnFirstDeposit() untuk penjelasan lengkap kenapa) -
-  // di sini cuma catat relasinya. Reward baru dikreditkan nanti begitu user
-  // ini beneran top-up saldo pertama kalinya lewat payment gateway asli.
+  // The payload from the deep link https://t.me/<bot>?start=<referrerChatId> is
+  // only processed when this user is GENUINELY new (has never pressed /start
+  // before), so an existing user cannot "refer" themselves over and over just by
+  // reopening the same link.
+  // ===== PATCH v7: the reward is NO LONGER granted here (see db.registerReferral()
+  // and db.creditReferralOnFirstDeposit() for the full explanation of why) - this
+  // only records the relationship. The reward is credited later, once this user
+  // really tops up their balance for the first time through a real payment gateway.
   const referrerChatId = match && match[1] ? match[1].trim() : null;
   if (isNewUser && referrerChatId) {
     db.registerReferral(chatId, referrerChatId);
@@ -2376,20 +2376,20 @@ bot.onText(/^\/start(?:\s+(.+))?/, async (msg, match) => {
 
 // ================= CALLBACK QUERY =================
 
-// Wrapper aman untuk editMessageText - kalau kontennya PERSIS sama dengan yang
-// sudah tampil di layar (Telegram bakal nolak dengan error "message is not
-// modified" - paling sering kejadian kalau user DOBEL-TAP tombol yang sama,
-// atau koneksi lemot bikin Telegram kirim callback yang sama 2x), diamkan
-// saja TANPA kirim pesan baru (supaya tidak dobel/nyampah di chat). Untuk
-// error lain (mis. pesan kelewat lama buat di-edit), fallback kirim pesan baru
-// seperti biasa.
+// A safe wrapper around editMessageText - when the content is EXACTLY the same as
+// what is already on screen (Telegram rejects that with a "message is not
+// modified" error, which happens most often when a user DOUBLE-TAPS the same
+// button, or a slow connection makes Telegram deliver the same callback twice),
+// stay quiet WITHOUT sending a new message (so the chat is not cluttered with
+// duplicates). For any other error (the message being too old to edit, say), fall
+// back to sending a new message as usual.
 async function safeEditMessage(chatId, messageId, text, opts) {
   try {
     await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...opts });
   } catch (err) {
     const desc = (err && err.response && err.response.body && err.response.body.description) || (err && err.message) || '';
     if (/message is not modified/i.test(desc)) {
-      return; // isi yang mau ditampilkan sudah sama persis - aman diabaikan
+      return; // what we wanted to show is already there - safe to ignore
     }
     await bot.sendMessage(chatId, text, opts).catch(() => {});
   }
@@ -2400,43 +2400,42 @@ bot.on('callback_query', async (query) => {
   const messageId = query.message.message_id;
   const data = query.data;
 
-  // Callback data yang diawali "admin:" SEPENUHNYA ditangani oleh handler
-  // bot.on('callback_query', ...) KEDUA di bawah (lihat guard
-  // `if (!data.startsWith('admin:') ...) return;` di sana). Tanpa guard ini,
-  // handler PERTAMA ini akan tetap jalan sampai baris `bot.answerCallbackQuery`
-  // di paling bawah (karena tidak ada if/else yang cocok untuk data 'admin:...'),
-  // dan MENJAWAB callback query itu duluan dengan toast KOSONG - Telegram
-  // cuma mengizinkan 1x jawaban per callback query, jadi toast/alert asli
-  // dari handler admin (mis. "⚠️ Produk tidak ditemukan.") jadi GAGAL TAMPIL
+  // Callback data starting with "admin:" is handled ENTIRELY by the SECOND
+  // bot.on('callback_query', ...) handler below (see its
+  // `if (!data.startsWith('admin:') ...) return;` guard). Without this guard, THIS
+  // first handler would still run down to the `bot.answerCallbackQuery` line at
+  // the very bottom (since no if/else matches 'admin:...' data) and ANSWER that
+  // callback query first with an EMPTY toast - Telegram only allows one answer per
+  // callback query, so the real toast/alert from the admin handler ("⚠️ Product
+  // not found.", say) would silently FAIL TO APPEAR. This guard prevents that bug.
   // secara diam-diam. Guard ini mencegah bug itu.
   if (data.startsWith('admin:')) return;
 
-  // ===== Guard untuk fitur live-repaint (lihat openProductListMsg &
-  // scheduleProductListRepaint() di atas) =====
-  // Bot ini (seperti kebanyakan bot Telegram) EDIT pesan yang SAMA di
-  // tempat setiap kali user pindah menu (bukan kirim pesan baru tiap kali) -
-  // jadi 1 message_id yang sama bisa gantian menampilkan menu utama, daftar
-  // produk, saldo, dst tergantung tombol apa yang terakhir dipencet.
-  // openProductListMsg nge-track message_id TERAKHIR yang menampilkan
-  // daftar produk, supaya bisa direpaint ulang warnanya nanti - TAPI kalau
-  // user lanjut navigasi ke menu LAIN di message_id yang SAMA itu (mis. buka
-  // 'desc:' salah satu produk, atau balik ke 'menu:main'), pesan itu SUDAH
-  // TIDAK LAGI menampilkan daftar produk. Tanpa guard ini, repaint job
-  // berikutnya akan menimpa keyboard menu BARU itu dengan
-  // productListKeyboard() - salah total, bisa bikin tombol menu lain
-  // kelihatan seperti daftar produk padahal teksnya menu lain.
-  // Guard ini menghapus tracking SEBELUM branch manapun dieksekusi kalau
-  // data-nya BUKAN 'menu:products' - handler 'menu:products' sendiri
-  // langsung set ulang tracking-nya lagi setelah ini (lihat di bawah), jadi
-  // aman untuk kasus itu.
+  // ===== Guard for the live-repaint feature (see openProductListMsg and
+  // scheduleProductListRepaint() above) =====
+  // This bot (like most Telegram bots) EDITS the SAME message in place whenever a
+  // user moves between menus (rather than sending a new one each time) - so a
+  // single message_id can show the main menu, the product list, the balance, and
+  // so on in turn, depending on the last button pressed.
+  // openProductListMsg tracks the LAST message_id that displayed the
+  // product list, so its colours can be repainted later - BUT if the user then
+  // navigates to a DIFFERENT menu on that SAME message_id (opening a product's
+  // 'desc:', or going back to 'menu:main'), that message is NO LONGER showing the
+  // product list. Without this guard, the next repaint job would overwrite that
+  // NEW menu's keyboard with productListKeyboard() - completely wrong, and it
+  // could make another menu's buttons look like the product list while the text
+  // says something else.
+  // This guard clears the tracking BEFORE any branch runs whenever the data is NOT
+  // 'menu:products' - the 'menu:products' handler itself immediately re-registers
+  // the tracking straight afterwards (see below), so that case stays safe.
   if (data !== 'menu:products') openProductListMsg.delete(chatId);
-  // Guard yang sama untuk tracking halaman detail (openProductDescMsg) -
-  // handler 'desc:' di bawah akan set ULANG tracking-nya lagi kalau data
-  // memang 'desc:...', jadi aman dihapus dulu di sini untuk semua kasus lain.
+  // The same guard for detail page tracking (openProductDescMsg) - the 'desc:'
+  // handler below re-registers it when the data really is 'desc:...', so it is
+  // safe to clear here for every other case.
   if (!data.startsWith('desc:')) openProductDescMsg.delete(chatId);
 
   try {
-    // ---- Wajib Join Channel/Grup: cek "✅ Saya Sudah Join" (auto deteksi) ----
+    // ---- Force Join Channel/Group: the "✅ I've Joined" check (auto-detected) ----
     if (data === 'checkjoin') {
       const unjoined = await getUnjoinedChannels(chatId);
       if (unjoined.length) {
@@ -2477,9 +2476,9 @@ bot.on('callback_query', async (query) => {
       await bot.editMessageText(lang.t(chatId, 'products_title'), {
         chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: await productListKeyboard(chatId)
       });
-      // Catat pesan ini supaya scheduleProductListRepaint() bisa ikut
-      // menyegarkan warna tombolnya nanti kalau stok berubah SEMENTARA
-      // buyer masih melihat menu ini di layarnya (lihat definisi
+      // Register this message so scheduleProductListRepaint() can refresh its
+      // button colours later if stock changes WHILE the buyer still has this menu
+      // on screen (see the openProductListMsg definition above).
       // openProductListMsg di atas).
       openProductListMsg.set(chatId, messageId);
     }
@@ -2493,10 +2492,10 @@ bot.on('callback_query', async (query) => {
       });
     }
 
-    // ---- Gift (Buy Gift / Confess Gift, via userbot GramJS - lihat userbot.js) ----
-    // Menu utama cuma punya 1 tombol gabungan "🎁 Buy Gift / Confess Gift" ->
-    // submenu ini yang baru nanya mau mode "buy" (tanpa pesan, atas nama
-    // toko) atau "confess" (+ pesan anonim, identitas disembunyikan).
+    // ---- Gift (Buy Gift / Confess Gift, via the GramJS userbot - see userbot.js) ----
+    // The main menu has only one combined "🎁 Buy Gift / Confess Gift" button ->
+    // this submenu then asks whether they want "buy" mode (no message, on behalf
+    // of the store) or "confess" (plus an anonymous message, identity hidden).
     else if (data === 'gift:mode') {
       db.clearPendingAction(chatId);
       if (!userbot.isConfigured()) {
@@ -2550,35 +2549,35 @@ bot.on('callback_query', async (query) => {
     }
 
     else if (data.startsWith('gift:confirm:')) {
-      // Cegah double-tap/duplikat callback memicu 2 gift order berjalan
-      // bersamaan buat chatId yang sama - pakai lock yang sama dengan
-      // handler 'confirm:' (order produk biasa) di atas. Tanpa ini, tap
-      // ganda pada "✅ Kirim Sekarang" bisa lolos cek saldo 2x sebelum
-      // salah satunya sempat clearPendingAction/updateBalance (karena ada
-      // `await userbot.getUserbotStarsBalance()` di tengah), sehingga
-      // saldo user kepotong 2x dan gift terkirim 2x untuk 1 konfirmasi.
+      // Stop a double-tap or duplicate callback triggering 2 gift orders running
+      // at once for the same chatId - using the same lock as the 'confirm:'
+      // handler (ordinary product orders) above. Without it, a double tap on
+      // "✅ Send Now" could pass the balance check twice before either had
+      // cleared the pending action or updated the balance (because there is an
+      // `await userbot.getUserbotStarsBalance()` in between), so the user would be
+      // charged twice and the gift sent twice for one confirmation.
       if (pendingOrderConfirms.has(chatId)) {
-        return bot.answerCallbackQuery(query.id, { text: '⏳ Order sebelumnya masih diproses, tunggu sebentar...', show_alert: true }).catch(() => {});
+        return bot.answerCallbackQuery(query.id, { text: '⏳ Your previous order is still processing, please wait a moment...', show_alert: true }).catch(() => {});
       }
       pendingOrderConfirms.add(chatId);
       try {
       const confirmToken = data.split(':')[2];
       const pending = db.getPendingAction(chatId);
       if (!pending || pending.type !== 'gift_confirm' || pending.data.confirmToken !== confirmToken) {
-        await bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi order sudah tidak berlaku, ulangi dari menu Gift.', show_alert: true });
+        await bot.answerCallbackQuery(query.id, { text: '⚠️ This order session has expired, please start again from the Gift menu.', show_alert: true });
         return;
       }
       const { priceUsd, stars } = pending.data;
       const user = db.getUser(chatId, query.from.username);
       if (user.balance < priceUsd) {
-        // Sama seperti order produk biasa (lihat handler 'confirm:' di atas) -
-        // bukan cuma toast alert doang, tapi juga kirim pesan actionable
-        // dengan tombol quick-topup (QRIS/USDT/TON/Binance) SEJUMLAH PERSIS
-        // kekurangan saldonya, jadi user bisa langsung bayar tanpa keluar
-        // dulu ke menu Wallet lalu balik lagi cari gift-nya. Pending action
-        // gift_confirm SENGAJA tidak dihapus supaya begitu saldo sudah
-        // cukup, user tinggal tap lagi "✅ Kirim Sekarang" di pesan
-        // konfirmasi sebelumnya tanpa perlu ulang dari awal.
+        // Just like an ordinary product order (see the 'confirm:' handler above) -
+        // not merely a toast alert, but an actionable message with quick-topup
+        // buttons (QRIS/USDT/TON/Binance) for EXACTLY the shortfall, so the user
+        // can pay straight away without leaving for the Wallet menu and then
+        // hunting for the gift again. The gift_confirm pending action is
+        // DELIBERATELY kept, so that once the balance is enough the user only has
+        // to tap "✅ Send Now" again on the earlier confirmation message rather
+        // than starting over.
         const shortfall = priceUsd - user.balance;
         await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'insufficient_balance'), show_alert: true }).catch(() => {});
         await bot.sendMessage(chatId,
@@ -2588,12 +2587,12 @@ bot.on('callback_query', async (query) => {
         return;
       }
 
-      // Cek dulu saldo Stars akun userbot SEBELUM potong saldo buyer - kalau
-      // Stars-nya habis, buyer JANGAN sampai kepotong saldo sama sekali,
-      // cukup diminta tunggu admin top up lalu order ulang. Pending action
-      // sengaja TIDAK dihapus di sini supaya buyer bisa langsung tap lagi
-      // "✅ Kirim Sekarang" begitu Stars sudah di-top up, tanpa perlu ulang
-      // dari awal (pilih gift & ketik target lagi).
+      // Check the userbot account's Stars balance BEFORE deducting the buyer's
+      // balance - when Stars have run out, the buyer must NOT be charged at all;
+      // they are simply asked to wait for an admin top-up and order again. The
+      // pending action is deliberately NOT cleared here so the buyer can tap
+      // "✅ Send Now" again as soon as the Stars are topped up, without starting
+      // over (picking the gift and typing the target again).
       try {
         const starsBalance = await userbot.getUserbotStarsBalance();
         if (starsBalance < stars) {
