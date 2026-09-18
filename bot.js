@@ -4799,198 +4799,198 @@ const EMOJI_CATEGORIES = [
     'admin_log_pengiriman', 'admin_cek_order', 'admin_statistik', 'admin_list_user', 'admin_maintenance', 'admin_kelola_emoji', 'admin_auto_backup', 'admin_broadcast', 'admin_forcejoin', 'admin_channel_notif',
     'admin_gift_balance', 'admin_gift_history', 'admin_gift_emoji', 'admin_gift_pricing'
   ] },
-  { id: 'referral_btn', label: '🎁 Tombol Halaman Refer & Earn', keys: ['share_referral', 'copy_referral'] },
-  { id: 'forcejoin_btn', label: '🔐 Tombol Wajib Join Channel/Grup', keys: ['join_channel', 'checkjoin'] },
-  { id: 'misc_buttons', label: '🔘 Tombol Halaman Lainnya', keys: [
+  { id: 'referral_btn', label: '🎁 Refer & Earn Page Buttons', keys: ['share_referral', 'copy_referral'] },
+  { id: 'forcejoin_btn', label: '🔐 Force Join Channel/Group Buttons', keys: ['join_channel', 'checkjoin'] },
+  { id: 'misc_buttons', label: '🔘 Buttons on Other Pages', keys: [
     'contact_support', 'close_menu', 'recover', 'cancel_recover', 'refresh_2fa'
   ] },
-  { id: 'gift_btn', label: '🎁 Tombol Pilihan Gift (Buy Gift/Confess Gift)', keys: ['gift'] }
+  { id: 'gift_btn', label: '🎁 Gift Selection Buttons (Buy Gift/Confess Gift)', keys: ['gift'] }
 ];
 const EMOJI_KEY_LABELS = {
-  buy_produk: 'Buy Produk', profile: 'Profile', saldo_saya: 'Saldo Saya', topup: 'Wallet / Topup',
+  buy_produk: 'Buy Product', profile: 'Profile', saldo_saya: 'My Balance', topup: 'Wallet / Topup',
   riwayat_pembelian: 'My Orders', referral: 'Refer & Earn', support: 'Support',
-  back: 'Tombol Kembali', go_back: 'Tombol Go Back',
+  back: 'Back Button', go_back: 'Go Back Button',
   how_to_use: 'How to Use', buy_now: 'Buy Now',
-  jumlah_custom: 'Jumlah Custom', place_order: 'Place Order', cancel_order: 'Cancel Order',
-  topup_qris: 'Tombol QRIS (Otomatis)', topup_usdt: 'Tombol USDT - BEP20 (Otomatis)', topup_ton: 'Tombol TON / Gram (Otomatis)', topup_binance: 'Tombol Binance Pay (Otomatis)',
-  batal: 'Tombol "⬅️ Batal" (nav singkat)',
-  nominal_cepat: 'Tombol Nominal Cepat QRIS ($1/$5/dst)', nominal_custom: 'Tombol Nominal Kustom QRIS',
-  batalkan_qris: 'Tombol Batalkan Pembayaran QRIS',
-  copy_address_usdt: 'Tombol Copy Address USDT', batalkan_usdt: 'Tombol Batalkan Topup USDT',
-  copy_address_ton: 'Tombol Copy Address TON', batalkan_ton: 'Tombol Batalkan Topup TON',
-  copy_id_binance: 'Tombol Copy Binance ID', batalkan_binance: 'Tombol Batalkan Topup Binance Pay',
-  admin_cat_products: 'Kategori: Produk & Stok', admin_cat_users: 'Kategori: User & Saldo',
-  admin_cat_reports: 'Kategori: Laporan & Statistik', admin_cat_gift: 'Kategori: Gift (Userbot)', admin_cat_settings: 'Kategori: Pengaturan Toko',
-  admin_menu_utama: 'Tombol Shortcut "🏠 Menu Utama" (semua submenu admin)',
-  admin_daftar_produk: 'Daftar Produk', admin_tambah_produk: 'Tambah Produk', admin_hapus_produk: 'Hapus Produk',
-  admin_tambah_stock: 'Tambah Stock', admin_supplier_api: 'Supplier API', admin_tambah_varian: 'Tambah Varian', admin_set_harga: 'Set Harga Produk', admin_set_howto: 'Set How to Use',
-  admin_set_deskripsi: 'Set Deskripsi', admin_set_logo: 'Set Logo Produk', admin_set_emoji: 'Ganti Emoji Produk', admin_atur_saldo: 'Atur Saldo User', admin_topup_pending: 'Topup Pending', admin_log_pengiriman: 'Log Pengiriman',
-  admin_cek_order: 'Cek Order ID', admin_statistik: 'Statistik', admin_list_user: 'List User', admin_maintenance: 'Maintenance Bot', admin_kelola_emoji: 'Kelola Emoji ID',
-  admin_auto_backup: 'Auto Backup', admin_broadcast: 'Broadcast', admin_forcejoin: 'Wajib Join Channel/Grup',
-  admin_channel_notif: 'Set Notifikasi Channel',
-  admin_gift_balance: 'Cek Saldo Stars Userbot', admin_gift_history: 'Riwayat Gift Order', admin_gift_emoji: 'Kelola Emoji Gift', admin_gift_pricing: 'Atur Harga Gift',
-  join_channel: 'Tombol "📢 Join Channel" (tiap channel wajib join)',
-  checkjoin: 'Tombol "✅ Saya Sudah Join" (Wajib Join Channel/Grup)',
-  share_referral: 'Bagikan Link Referral', copy_referral: 'Copy Refer Link',
-  contact_support: 'Contact Support (Halaman Support)',
-  close_menu: 'Tutup Menu (How to Use)', recover: 'Recover Product (My Orders)',
-  cancel_recover: 'Batal (My Orders)', refresh_2fa: 'Refresh Kode 2FA (Detail Order)',
-  gift: 'Ikon Fallback Tombol Pilihan Gift (dipakai kalau gift itu tidak punya sticker custom dari Telegram sendiri)'
+  jumlah_custom: 'Custom Quantity', place_order: 'Place Order', cancel_order: 'Cancel Order',
+  topup_qris: 'QRIS Button (Automatic)', topup_usdt: 'USDT - BEP20 Button (Automatic)', topup_ton: 'TON / Gram Button (Automatic)', topup_binance: 'Binance Pay Button (Automatic)',
+  batal: '"⬅️ Cancel" Button (short nav)',
+  nominal_cepat: 'QRIS Quick Amount Buttons ($1/$5/etc.)', nominal_custom: 'QRIS Custom Amount Button',
+  batalkan_qris: 'Cancel QRIS Payment Button',
+  copy_address_usdt: 'Copy USDT Address Button', batalkan_usdt: 'Cancel USDT Topup Button',
+  copy_address_ton: 'Copy TON Address Button', batalkan_ton: 'Cancel TON Topup Button',
+  copy_id_binance: 'Copy Binance ID Button', batalkan_binance: 'Cancel Binance Pay Topup Button',
+  admin_cat_products: 'Category: Products & Stock', admin_cat_users: 'Category: Users & Balance',
+  admin_cat_reports: 'Category: Reports & Statistics', admin_cat_gift: 'Category: Gift (Userbot)', admin_cat_settings: 'Category: Store Settings',
+  admin_menu_utama: '"🏠 Main Menu" Shortcut Button (all admin submenus)',
+  admin_daftar_produk: 'Product List', admin_tambah_produk: 'Add Product', admin_hapus_produk: 'Delete Product',
+  admin_tambah_stock: 'Add Stock', admin_supplier_api: 'Supplier API', admin_tambah_varian: 'Add Variant', admin_set_harga: 'Set Product Price', admin_set_howto: 'Set How to Use',
+  admin_set_deskripsi: 'Set Description', admin_set_logo: 'Set Product Logo', admin_set_emoji: 'Change Product Emoji', admin_atur_saldo: 'Manage User Balance', admin_topup_pending: 'Pending Topups', admin_log_pengiriman: 'Delivery Log',
+  admin_cek_order: 'Check Order ID', admin_statistik: 'Statistics', admin_list_user: 'User List', admin_maintenance: 'Bot Maintenance', admin_kelola_emoji: 'Manage Emoji ID',
+  admin_auto_backup: 'Auto Backup', admin_broadcast: 'Broadcast', admin_forcejoin: 'Force Join Channel/Group',
+  admin_channel_notif: 'Set Channel Notifications',
+  admin_gift_balance: 'Check Userbot Stars Balance', admin_gift_history: 'Gift Order History', admin_gift_emoji: 'Manage Gift Emoji', admin_gift_pricing: 'Set Gift Pricing',
+  join_channel: '"📢 Join Channel" Button (per force-join channel)',
+  checkjoin: '"✅ I\'ve Joined" Button (Force Join Channel/Group)',
+  share_referral: 'Share Referral Link', copy_referral: 'Copy Referral Link',
+  contact_support: 'Contact Support (Support Page)',
+  close_menu: 'Close Menu (How to Use)', recover: 'Recover Product (My Orders)',
+  cancel_recover: 'Cancel (My Orders)', refresh_2fa: 'Refresh 2FA Code (Order Details)',
+  gift: 'Fallback Icon for Gift Selection Buttons (used when a gift has no custom sticker from Telegram itself)'
 };
 const EMOJI_TEKS_SLOTS = [
-  { key: 'product_desc', label: 'Bullet "{e}" di Deskripsi Produk & How-to-Use' },
-  { key: 'menu_notif', label: 'Teks Menu / Notifikasi (welcome, order berhasil, dll)' }
+  { key: 'product_desc', label: 'The "{e}" Bullet in Product Descriptions & How-to-Use' },
+  { key: 'menu_notif', label: 'Menu / Notification Text (welcome, order success, etc.)' }
 ];
 
-// Emoji di teks pesan lainnya (BUKAN placeholder "⚡" bolt di atas), dikelompokkan
-// per halaman supaya gampang dicari admin. Setiap item = 1 baris/ikon spesifik
-// di 1 halaman, masing-masing punya slot ID sendiri (key-nya dipakai sebagai
-// argumen ke-1 teksEmoji() di kode).
+// Emoji in other message text (NOT the "⚡" bolt placeholder above), grouped by
+// page so admins can find them easily. Each item = one specific line/icon on one
+// page, each with its own ID slot (the key is passed as the 1st argument to
+// teksEmoji() in the code).
 const TEKS_GROUPS = [
-  { id: 'bolt', label: '⚡ Bolt Umum (dipakai di banyak pesan)', items: EMOJI_TEKS_SLOTS },
-  { id: 'welcome', label: '👋 Pesan Welcome (/start)', items: [
-    { key: 'welcome_wave', label: 'Ikon Sapaan' },
-    { key: 'welcome_cart', label: 'Ikon Baris "Beli Akun Premium"' },
-    { key: 'welcome_wallet', label: 'Ikon Baris "Topup Otomatis"' },
-    { key: 'welcome_bolt', label: 'Ikon Baris "Auto-delivery"' },
-    { key: 'welcome_gift', label: 'Ikon Baris "Refer & Earn"' },
-    { key: 'welcome_arrow', label: 'Ikon Baris "Pilih Menu"' }
+  { id: 'bolt', label: '⚡ General Bolt (used in many messages)', items: EMOJI_TEKS_SLOTS },
+  { id: 'welcome', label: '👋 Welcome Message (/start)', items: [
+    { key: 'welcome_wave', label: 'Greeting Icon' },
+    { key: 'welcome_cart', label: '"Buy Premium Accounts" Line Icon' },
+    { key: 'welcome_wallet', label: '"Automatic Topup" Line Icon' },
+    { key: 'welcome_bolt', label: '"Auto-delivery" Line Icon' },
+    { key: 'welcome_gift', label: '"Refer & Earn" Line Icon' },
+    { key: 'welcome_arrow', label: '"Pick a Menu" Line Icon' }
   ] },
-  { id: 'profile', label: '👤 Halaman Profile', items: [
-    { key: 'profile_title', label: 'Judul "Profile"' },
-    { key: 'profile_nama', label: 'Baris Nama' },
-    { key: 'profile_username', label: 'Baris Username' },
-    { key: 'profile_chatid', label: 'Baris Chat ID' },
-    { key: 'profile_saldo', label: 'Baris Saldo Wallet' },
-    { key: 'profile_order', label: 'Baris Total Order' },
-    { key: 'profile_referral', label: 'Baris Total Referral' }
+  { id: 'profile', label: '👤 Profile Page', items: [
+    { key: 'profile_title', label: '"Profile" Heading' },
+    { key: 'profile_nama', label: 'Name Line' },
+    { key: 'profile_username', label: 'Username Line' },
+    { key: 'profile_chatid', label: 'Chat ID Line' },
+    { key: 'profile_saldo', label: 'Wallet Balance Line' },
+    { key: 'profile_order', label: 'Total Orders Line' },
+    { key: 'profile_referral', label: 'Total Referrals Line' }
   ] },
-  { id: 'balance', label: '💰 Halaman Saldo Wallet', items: [
-    { key: 'balance_line', label: 'Baris Saldo' }
+  { id: 'balance', label: '💰 Wallet Balance Page', items: [
+    { key: 'balance_line', label: 'Balance Line' }
   ] },
-  { id: 'wallet', label: '💳 Halaman Wallet - Pilih Metode Topup', items: [
-    { key: 'wallet_title', label: 'Ikon Judul "Wallet - Topup Saldo"' }
+  { id: 'wallet', label: '💳 Wallet Page - Choose Topup Method', items: [
+    { key: 'wallet_title', label: '"Wallet - Add Balance" Heading Icon' }
   ] },
-  { id: 'orders', label: '🧾 Halaman My Orders', items: [
-    { key: 'orders_empty', label: 'Ikon "Belum Punya Riwayat Pembelian"' }
+  { id: 'orders', label: '🧾 My Orders Page', items: [
+    { key: 'orders_empty', label: '"No Purchase History Yet" Icon' }
   ] },
-  { id: 'howto', label: '❗️ Halaman How to Use', items: [
-    { key: 'howto_title', label: 'Ikon Judul "How it works"' }
+  { id: 'howto', label: '❗️ How to Use Page', items: [
+    { key: 'howto_title', label: '"How it works" Heading Icon' }
   ] },
-  { id: 'support', label: '📞 Halaman Support Center', items: [
-    { key: 'support_title', label: 'Ikon Judul "Support Center"' }
+  { id: 'support', label: '📞 Support Center Page', items: [
+    { key: 'support_title', label: '"Support Center" Heading Icon' }
   ] },
-  { id: 'referral', label: '🎁 Halaman Refer & Earn', items: [
-    { key: 'referral_title', label: 'Judul Halaman' },
+  { id: 'referral', label: '🎁 Refer & Earn Page', items: [
+    { key: 'referral_title', label: 'Page Heading' },
     { key: 'referral_reward', label: 'Reward per Referral' },
-    { key: 'referral_link', label: 'Link Referral Kamu' },
-    { key: 'referral_howitworks', label: 'Ikon "How It Works"' },
-    { key: 'referral_total', label: 'Total Referral' },
-    { key: 'referral_earnings', label: 'Total Penghasilan Referral' }
+    { key: 'referral_link', label: 'Your Referral Link' },
+    { key: 'referral_howitworks', label: '"How It Works" Icon' },
+    { key: 'referral_total', label: 'Total Referrals' },
+    { key: 'referral_earnings', label: 'Total Referral Earnings' }
   ] },
-  { id: 'forcejoin', label: '🔐 Layar Wajib Join Channel/Grup', items: [
-    { key: 'forcejoin_lock', label: 'Ikon Gembok (Judul)' },
-    { key: 'forcejoin_sparkle', label: 'Ikon Sparkle (Pembuka Deskripsi)' },
-    { key: 'forcejoin_bolt', label: 'Ikon Petir (Penutup Kalimat Pertama)' },
-    { key: 'forcejoin_arrow', label: 'Ikon Panah (Instruksi Join)' },
-    { key: 'forcejoin_check', label: 'Ikon Centang (dalam kutipan nama tombol)' },
-    { key: 'forcejoin_status_joined', label: 'Ikon Status "Sudah Join" (per channel)' },
-    { key: 'forcejoin_status_pending', label: 'Ikon Status "Belum Join" (per channel)' }
+  { id: 'forcejoin', label: '🔐 Force Join Channel/Group Screen', items: [
+    { key: 'forcejoin_lock', label: 'Padlock Icon (Heading)' },
+    { key: 'forcejoin_sparkle', label: 'Sparkle Icon (Description Opener)' },
+    { key: 'forcejoin_bolt', label: 'Bolt Icon (End of First Sentence)' },
+    { key: 'forcejoin_arrow', label: 'Arrow Icon (Join Instruction)' },
+    { key: 'forcejoin_check', label: 'Tick Icon (inside the quoted button name)' },
+    { key: 'forcejoin_status_joined', label: '"Joined" Status Icon (per channel)' },
+    { key: 'forcejoin_status_pending', label: '"Not Joined" Status Icon (per channel)' }
   ] },
-  { id: 'success', label: '🎉 Pesan Order Berhasil', items: [
-    { key: 'success_border', label: 'Ikon Border ✨ (atas & bawah judul)' },
-    { key: 'success_title', label: 'Judul "ORDER BERHASIL"' },
-    { key: 'success_delivered', label: 'Header Produk Sudah Terkirim' },
-    { key: 'success_link', label: 'Link Aktivasi / Redeem' },
-    { key: 'success_manual', label: 'Info Kirim Manual Admin' },
-    { key: 'success_thanks', label: 'Ucapan Terima Kasih' }
+  { id: 'success', label: '🎉 Order Successful Message', items: [
+    { key: 'success_border', label: '✨ Border Icon (above & below the heading)' },
+    { key: 'success_title', label: '"ORDER SUCCESSFUL" Heading' },
+    { key: 'success_delivered', label: 'Product Delivered Header' },
+    { key: 'success_link', label: 'Activation / Redeem Link' },
+    { key: 'success_manual', label: 'Manual Admin Delivery Note' },
+    { key: 'success_thanks', label: 'Thank You Message' }
   ] },
-  { id: 'qris', label: '🧾 Tagihan QRIS (Topup)', items: [
-    { key: 'qris_title', label: 'Judul "TAGIHAN QRIS SUDAH SIAP"' },
-    { key: 'qris_rocket', label: 'Ikon Roket (ajakan saldo penuh)' },
-    { key: 'qris_orderid', label: 'Baris Order ID' },
-    { key: 'qris_saldo', label: 'Baris Saldo yang Didapat' },
-    { key: 'qris_total', label: 'Baris Total Bayar via QRIS' },
-    { key: 'qris_expire', label: 'Baris Berlaku Selama' },
-    { key: 'qris_carabayar', label: 'Judul "Cara Bayar"' },
-    { key: 'qris_step1', label: 'Langkah 1 (buka e-wallet)' },
-    { key: 'qris_step2', label: 'Langkah 2 (pilih Scan QR)' },
-    { key: 'qris_step3', label: 'Langkah 3 (scan & bayar)' },
-    { key: 'qris_auto', label: 'Ikon Saldo Masuk Otomatis' },
-    { key: 'qris_tip', label: 'Ikon Tip Batalkan Pembayaran' },
-    { key: 'qris_creating', label: 'Ikon Loading "Sedang Membuat QRIS"' },
-    { key: 'qris_choose_amount_title', label: 'Ikon Judul "Pilih Nominal Deposit"' }
+  { id: 'qris', label: '🧾 QRIS Invoice (Topup)', items: [
+    { key: 'qris_title', label: '"YOUR QRIS INVOICE IS READY" Heading' },
+    { key: 'qris_rocket', label: 'Rocket Icon (full-balance nudge)' },
+    { key: 'qris_orderid', label: 'Order ID Line' },
+    { key: 'qris_saldo', label: 'Balance Received Line' },
+    { key: 'qris_total', label: 'Total to Pay via QRIS Line' },
+    { key: 'qris_expire', label: 'Valid For Line' },
+    { key: 'qris_carabayar', label: '"How to Pay" Heading' },
+    { key: 'qris_step1', label: 'Step 1 (open an e-wallet)' },
+    { key: 'qris_step2', label: 'Step 2 (choose Scan QR)' },
+    { key: 'qris_step3', label: 'Step 3 (scan & pay)' },
+    { key: 'qris_auto', label: 'Automatic Balance Credit Icon' },
+    { key: 'qris_tip', label: 'Cancel Payment Tip Icon' },
+    { key: 'qris_creating', label: '"Creating QRIS" Loading Icon' },
+    { key: 'qris_choose_amount_title', label: '"Choose Deposit Amount" Heading Icon' }
   ] },
-  { id: 'usdt', label: '🪙 Deposit USDT (BEP20)', items: [
-    { key: 'usdt_title', label: 'Judul "Deposit via USDT"' },
-    { key: 'usdt_min', label: 'Baris Min Deposit' },
-    { key: 'usdt_max', label: 'Baris Max Deposit' },
-    { key: 'usdt_address_label', label: 'Ikon Label Address' },
-    { key: 'usdt_auto', label: 'Ikon Automatic Deposit' },
-    { key: 'usdt_prompt', label: 'Ikon Prompt "Ketik Nominal Topup"' }
+  { id: 'usdt', label: '🪙 USDT Deposit (BEP20)', items: [
+    { key: 'usdt_title', label: '"Deposit via USDT" Heading' },
+    { key: 'usdt_min', label: 'Min Deposit Line' },
+    { key: 'usdt_max', label: 'Max Deposit Line' },
+    { key: 'usdt_address_label', label: 'Address Label Icon' },
+    { key: 'usdt_auto', label: 'Automatic Deposit Icon' },
+    { key: 'usdt_prompt', label: '"Type the Topup Amount" Prompt Icon' }
   ] },
-  { id: 'ton', label: '💎 Deposit TON', items: [
-    { key: 'ton_title', label: 'Judul "Deposit via TON"' },
-    { key: 'ton_min', label: 'Baris Min Deposit' },
-    { key: 'ton_max', label: 'Baris Max Deposit' },
-    { key: 'ton_address_label', label: 'Ikon Label Address' },
-    { key: 'ton_auto', label: 'Ikon Automatic Deposit' },
-    { key: 'ton_prompt', label: 'Ikon Prompt "Ketik Nominal Topup"' }
+  { id: 'ton', label: '💎 TON Deposit', items: [
+    { key: 'ton_title', label: '"Deposit via TON" Heading' },
+    { key: 'ton_min', label: 'Min Deposit Line' },
+    { key: 'ton_max', label: 'Max Deposit Line' },
+    { key: 'ton_address_label', label: 'Address Label Icon' },
+    { key: 'ton_auto', label: 'Automatic Deposit Icon' },
+    { key: 'ton_prompt', label: '"Type the Topup Amount" Prompt Icon' }
   ] },
-  { id: 'qty', label: '🛒 Halaman Jumlah Beli', items: [
-    { key: 'qty_warning', label: 'Ikon Peringatan "Masukkan Jumlah"' },
-    { key: 'qty_stock', label: 'Ikon "Stok Tersedia"' },
-    { key: 'bulk_title', label: 'Ikon Judul "Diskon Grosir" (🎉)' },
-    { key: 'bulk_check', label: 'Ikon Centang Tiap Baris Diskon (✅)' }
+  { id: 'qty', label: '🛒 Purchase Quantity Page', items: [
+    { key: 'qty_warning', label: '"Enter Quantity" Warning Icon' },
+    { key: 'qty_stock', label: '"Available Stock" Icon' },
+    { key: 'bulk_title', label: '"Bulk Discount" Heading Icon (🎉)' },
+    { key: 'bulk_check', label: 'Tick Icon on Each Discount Line (✅)' }
   ] },
-  { id: 'confirm', label: '✅ Order Confirmation & Saldo Kurang', items: [
-    { key: 'order_confirm_title', label: 'Ikon Judul "Order Confirmation"' },
-    { key: 'order_confirm_balance', label: 'Baris Saldo Wallet' },
-    { key: 'order_confirm_stock', label: 'Baris Stok Tersedia' },
-    { key: 'insufficient_balance_warn', label: 'Ikon Peringatan "Saldo Tidak Cukup"' },
-    { key: 'insufficient_balance_shortfall', label: 'Baris Nominal Kekurangan' }
+  { id: 'confirm', label: '✅ Order Confirmation & Insufficient Balance', items: [
+    { key: 'order_confirm_title', label: '"Order Confirmation" Heading Icon' },
+    { key: 'order_confirm_balance', label: 'Wallet Balance Line' },
+    { key: 'order_confirm_stock', label: 'Available Stock Line' },
+    { key: 'insufficient_balance_warn', label: '"Insufficient Balance" Warning Icon' },
+    { key: 'insufficient_balance_shortfall', label: 'Shortfall Amount Line' }
   ] },
-  { id: 'channelnotif', label: '📢 Notifikasi Channel (New Purchase / Top-Up)', items: [
-    { key: 'channelnotif_border', label: 'Ikon Border ✨ (atas & bawah judul)' },
-    { key: 'channelnotif_purchase_title', label: 'Judul "NEW PURCHASE!"' },
-    { key: 'channelnotif_id', label: 'Baris ID (tersamar)' },
-    { key: 'channelnotif_product', label: 'Baris Product' },
-    { key: 'channelnotif_qty', label: 'Baris Quantity' },
-    { key: 'channelnotif_total', label: 'Baris Total' },
-    { key: 'channelnotif_time', label: 'Baris Time' },
-    { key: 'channelnotif_topup_title', label: 'Judul "NEW WALLET TOP-UP!"' },
-    { key: 'channelnotif_network', label: 'Baris Network' },
-    { key: 'channelnotif_amount', label: 'Baris Amount' },
-    { key: 'channelnotif_referral_title', label: 'Judul "NEW REFERRAL SUCCESS!"' },
-    { key: 'channelnotif_referral_user', label: 'Baris User (tersamar)' },
-    { key: 'channelnotif_referral_referredby', label: 'Baris Referred By (tersamar)' },
-    { key: 'channelnotif_referral_reward', label: 'Baris Reward' },
-    { key: 'channelnotif_footer', label: 'Ikon Footer 🔥 (baris "Fast & Trusted")' },
-    { key: 'channelnotif_maintenance_start_title', label: 'Judul "MAINTENANCE DIMULAI!"' },
-    { key: 'channelnotif_maintenance_start_status', label: 'Ikon Status (Maintenance Dimulai)' },
-    { key: 'channelnotif_maintenance_finish_title', label: 'Judul "MAINTENANCE SELESAI!"' },
-    { key: 'channelnotif_maintenance_finish_status', label: 'Ikon Status (Maintenance Selesai)' }
+  { id: 'channelnotif', label: '📢 Channel Notifications (New Purchase / Top-Up)', items: [
+    { key: 'channelnotif_border', label: '✨ Border Icon (above & below the heading)' },
+    { key: 'channelnotif_purchase_title', label: '"NEW PURCHASE!" Heading' },
+    { key: 'channelnotif_id', label: 'ID Line (masked)' },
+    { key: 'channelnotif_product', label: 'Product Line' },
+    { key: 'channelnotif_qty', label: 'Quantity Line' },
+    { key: 'channelnotif_total', label: 'Total Line' },
+    { key: 'channelnotif_time', label: 'Time Line' },
+    { key: 'channelnotif_topup_title', label: '"NEW WALLET TOP-UP!" Heading' },
+    { key: 'channelnotif_network', label: 'Network Line' },
+    { key: 'channelnotif_amount', label: 'Amount Line' },
+    { key: 'channelnotif_referral_title', label: '"NEW REFERRAL SUCCESS!" Heading' },
+    { key: 'channelnotif_referral_user', label: 'User Line (masked)' },
+    { key: 'channelnotif_referral_referredby', label: 'Referred By Line (masked)' },
+    { key: 'channelnotif_referral_reward', label: 'Reward Line' },
+    { key: 'channelnotif_footer', label: '🔥 Footer Icon ("Fast & Trusted" line)' },
+    { key: 'channelnotif_maintenance_start_title', label: '"MAINTENANCE STARTED!" Heading' },
+    { key: 'channelnotif_maintenance_start_status', label: 'Status Icon (Maintenance Started)' },
+    { key: 'channelnotif_maintenance_finish_title', label: '"MAINTENANCE FINISHED!" Heading' },
+    { key: 'channelnotif_maintenance_finish_status', label: 'Status Icon (Maintenance Finished)' }
   ] },
-  { id: 'stockalert', label: '🔔 Notifikasi Live Stock (ke Semua User)', items: [
-    { key: 'stockalert_bell', label: 'Ikon Lonceng (Judul)' },
-    { key: 'stockalert_product', label: 'Baris Produk' },
-    { key: 'stockalert_added', label: 'Baris Jumlah Ditambahkan' },
-    { key: 'stockalert_total', label: 'Baris Total Stok Sekarang' },
-    { key: 'stockalert_price', label: 'Baris Harga' },
-    { key: 'stockalert_footer', label: 'Ikon Footer (Ajakan Buy Now)' }
+  { id: 'stockalert', label: '🔔 Live Stock Notification (to All Users)', items: [
+    { key: 'stockalert_bell', label: 'Bell Icon (Heading)' },
+    { key: 'stockalert_product', label: 'Product Line' },
+    { key: 'stockalert_added', label: 'Quantity Added Line' },
+    { key: 'stockalert_total', label: 'Total Stock Now Line' },
+    { key: 'stockalert_price', label: 'Price Line' },
+    { key: 'stockalert_footer', label: 'Footer Icon (Buy Now nudge)' }
   ] },
-  { id: 'maintenance', label: '🛠️ Mode Maintenance', items: [
-    { key: 'maintenance_wrench', label: 'Ikon Kunci Inggris (Judul, kiri-kanan)' },
-    { key: 'maintenance_sparkle', label: 'Ikon Sparkle (Pembuka Kalimat)' },
-    { key: 'maintenance_bolt', label: 'Ikon Petir (Penutup Kalimat Pertama)' },
-    { key: 'maintenance_clock', label: 'Ikon Jam (Baris Mohon Bersabar)' },
-    { key: 'maintenance_heart', label: 'Ikon Hati (Baris Ucapan Terima Kasih)' },
-    { key: 'maintenance_finished_rocket', label: '🚀 [Broadcast Selesai] Ikon Roket (Judul, kiri-kanan)' },
-    { key: 'maintenance_finished_sparkle', label: '🚀 [Broadcast Selesai] Ikon Sparkle (Pembuka Kalimat)' },
-    { key: 'maintenance_finished_check', label: '🚀 [Broadcast Selesai] Ikon Centang (Kata "SELESAI")' },
-    { key: 'maintenance_finished_bolt', label: '🚀 [Broadcast Selesai] Ikon Petir (Penutup Kalimat Pertama)' },
-    { key: 'maintenance_finished_gift', label: '🚀 [Broadcast Selesai] Ikon Gift (Baris Ajakan Order)' },
-    { key: 'maintenance_finished_heart', label: '🚀 [Broadcast Selesai] Ikon Hati (Baris Ucapan Terima Kasih)' }
+  { id: 'maintenance', label: '🛠️ Maintenance Mode', items: [
+    { key: 'maintenance_wrench', label: 'Wrench Icon (Heading, both sides)' },
+    { key: 'maintenance_sparkle', label: 'Sparkle Icon (Sentence Opener)' },
+    { key: 'maintenance_bolt', label: 'Bolt Icon (End of First Sentence)' },
+    { key: 'maintenance_clock', label: 'Clock Icon ("Please Be Patient" Line)' },
+    { key: 'maintenance_heart', label: 'Heart Icon (Thank You Line)' },
+    { key: 'maintenance_finished_rocket', label: '🚀 [Finished Broadcast] Rocket Icon (Heading, both sides)' },
+    { key: 'maintenance_finished_sparkle', label: '🚀 [Finished Broadcast] Sparkle Icon (Sentence Opener)' },
+    { key: 'maintenance_finished_check', label: '🚀 [Finished Broadcast] Tick Icon (the word "DONE")' },
+    { key: 'maintenance_finished_bolt', label: '🚀 [Finished Broadcast] Bolt Icon (End of First Sentence)' },
+    { key: 'maintenance_finished_gift', label: '🚀 [Finished Broadcast] Gift Icon (Order Nudge Line)' },
+    { key: 'maintenance_finished_heart', label: '🚀 [Finished Broadcast] Heart Icon (Thank You Line)' }
   ] }
 ];
 function findTeksItemLabel(key) {
