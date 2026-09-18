@@ -15,46 +15,45 @@ const canboso = require('./supplierCanboso');
 const backup = require('./backup');
 const totp = require('./totp');
 const lang = require('./lang');
-const userbot = require('./userbot'); // fitur "🎁 Buy Gift" / "💌 Confess Gift" - lihat userbot.js
+const userbot = require('./userbot'); // the "🎁 Buy Gift" / "💌 Confess Gift" features - see userbot.js
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// ===== PATCH v4: helper log error ringkas =====
-// Sebelumnya beberapa catch block pakai console.error(err) langsung, yang
-// nge-dump SELURUH object error dari library `request-promise` (ratusan
-// baris: raw HTTP request, socket, header, dst) ke log tiap kali ada 1 saja
-// error - termasuk error SEPELE & sering terjadi seperti "user memblokir
-// bot" (Telegram balikin 403 Forbidden pas bot coba sendMessage ke user
-// yang sudah block). Ini bikin log jadi penuh sampah dan susah nyari
-// error yang BENERAN penting pas ada masalah.
-// logError() di bawah ini nampilin cuma pesan errornya (bukan whole
-// object), dan untuk error 403 "blocked by user"/"user is deactivated"
-// (dua penyebab paling umum & tidak perlu ditindaklanjuti admin) malah
-// tidak dicetak sama sekali - itu bagian normal dari operasional bot
-// dengan banyak user, bukan bug.
-const errorNotifyCooldown = new Map(); // "context|pesan" -> timestamp notifikasi terakhir
-const ERROR_NOTIFY_COOLDOWN_MS = 10 * 60 * 1000; // 10 menit
+// ===== PATCH v4: concise error logging helper =====
+// Several catch blocks used to call console.error(err) directly, which dumps the
+// ENTIRE error object from the `request-promise` library (hundreds of lines: the
+// raw HTTP request, socket, headers, and so on) into the log for every single
+// error - including trivial, frequent ones such as "user blocked the bot"
+// (Telegram returns 403 Forbidden when the bot tries to sendMessage to a user who
+// has blocked it). That filled the log with noise and made it hard to find the
+// errors that genuinely matter when something goes wrong.
+// logError() below prints only the error message (not the whole object), and for
+// 403 "blocked by user"/"user is deactivated" errors (the two most common cases,
+// neither needing any admin action) it prints nothing at all - those are a normal
+// part of running a bot with many users, not a bug.
+const errorNotifyCooldown = new Map(); // "context|message" -> timestamp of the last notification
+const ERROR_NOTIFY_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
 function logError(context, err) {
   const msg = (err && err.message) || String(err);
-  // ⚠️ Ditambahkan "message is not modified" - error umum & tidak berbahaya
-  // dari Telegram Bot API waktu editMessageText/editMessageReplyMarkup dengan
-  // isi yang PERSIS SAMA dengan pesan yang sudah tampil (mis. user klik
-  // tombol yang sama 2x cepat). Tidak merusak apa-apa, jadi tidak perlu
-  // spam notifikasi 🚨 ke admin - cukup di-skip di sini seperti noise lain.
+  // ⚠️ "message is not modified" was added - a common and harmless Telegram Bot
+  // API error when editMessageText/editMessageReplyMarkup is called with content
+  // IDENTICAL to what is already displayed (a user tapping the same button twice
+  // quickly, say). Nothing breaks, so there is no need to spam a 🚨 notification
+  // to admins - it is skipped here like the other noise.
   const isHarmlessTelegramNoise = /blocked by the user|user is deactivated|chat not found|message is not modified/i.test(msg);
-  if (isHarmlessTelegramNoise) return; // noise biasa, tidak perlu di-log
+  if (isHarmlessTelegramNoise) return; // ordinary noise, no need to log it
   console.error(`[${context}]`, msg);
 
-  // ---- Monitoring 24 jam: forward error penting ke admin via Telegram ----
-  // Sebelumnya error cuma nongol di `pm2 logs` dan admin baru sadar kalau
-  // kebetulan buka terminal (lihat insiden Buy Gift/Binance Pay sebelumnya).
-  // Sekarang logError() ini (dipanggil dari HAMPIR SEMUA catch block di
-  // bot.js + process.on('unhandledRejection'/'uncaughtException') di atas)
-  // otomatis broadcast ke ADMIN_IDS. Dikasih cooldown PER context+pesan
-  // (bukan global) supaya kalau ada error yang keulang tiap beberapa detik
-  // (mis. polling gagal terus-menerus) admin tidak dispam ratusan notif
-  // identik - cukup 1 notif per 10 menit untuk error yang sama persis.
+  // ---- 24-hour monitoring: forward important errors to admins via Telegram ----
+  // Errors used to appear only in `pm2 logs`, so an admin noticed them only if
+  // they happened to open a terminal (see the earlier Buy Gift/Binance Pay
+  // incidents). Now this logError() (called from ALMOST EVERY catch block in
+  // bot.js plus process.on('unhandledRejection'/'uncaughtException') above)
+  // broadcasts to ADMIN_IDS automatically. It is rate-limited PER context+message
+  // (not globally) so that an error repeating every few seconds (polling failing
+  // continuously, say) does not spam admins with hundreds of identical
+  // notifications - just one per 10 minutes for the exact same error.
   try {
     const key = `${context}|${msg}`;
     const now = Date.now();
@@ -65,9 +64,9 @@ function logError(context, err) {
       notifyAdmins(
         `🚨 <b>Bot Error</b>\n\n` +
         `Context: <code>${escapeHtml(context)}</code>\n` +
-        `Pesan: <code>${escapeHtml(msg)}</code>` +
+        `Message: <code>${escapeHtml(msg)}</code>` +
         (stack ? `\n\n<pre>${escapeHtml(stack)}</pre>` : '') +
-        `\n\n<i>Notifikasi ini di-cooldown 10 menit per jenis error yang sama.</i>`
+        `\n\n<i>This notification is rate-limited to once per 10 minutes per error type.</i>`
       );
     }
   } catch (notifyErr) {
@@ -75,33 +74,33 @@ function logError(context, err) {
   }
 }
 
-// Anti double-spend guard buat alur 'confirm:' (place order). Tanpa ini,
-// user yang double-tap tombol "Place Order" (atau Telegram retry callback-nya
-// sendiri saat koneksi lambat) bisa memicu 2+ handler 'confirm:' JALAN
-// BERSAMAAN untuk chatId yang sama. Keduanya bisa lolos pengecekan saldo
-// (line "user.balance < total") SEBELUM salah satu sempat memotong saldo -
-// khusus order yang lewat Supplier API ini celahnya makin lebar karena ada
-// `await supplier.placeOrder()` (panggilan network) di antara cek saldo dan
-// potong saldo. Hasilnya: saldo user bisa jadi negatif dan toko rugi ganda
-// (bayar ke Supplier 2x untuk saldo yang cuma cukup 1x). Set ini menahan
-// confirm KEDUA (dan seterusnya) untuk chatId yang sama selagi confirm
-// PERTAMA masih diproses.
+// An anti double-spend guard for the 'confirm:' (place order) flow. Without it, a
+// user double-tapping "Place Order" (or Telegram retrying the callback itself on
+// a slow connection) could trigger 2+ 'confirm:' handlers running AT THE SAME
+// TIME for the same chatId. Both could pass the balance check (the
+// "user.balance < total" line) BEFORE either deducted the balance - and for
+// orders going through the Supplier API the window is even wider, because there
+// is an `await supplier.placeOrder()` (a network call) between checking and
+// deducting. The result: a user's balance could go negative and the store loses
+// twice over (paying the supplier twice for a balance that only covered one).
+// This set holds back the SECOND (and any later) confirm for the same chatId
+// while the FIRST is still being processed.
 const pendingOrderConfirms = new Set();
 
 // ================= GLOBAL ERROR SAFETY NET =================
-// Tanpa ini, SATU promise reject yang tidak ke-catch di manapun (mis. fetch
-// API luar gagal aneh, error dari library pihak ketiga) bisa bikin SELURUH
-// proses Node crash total (perilaku default Node modern) - bot mati mendadak
-// dan butuh di-Start manual lewat panel. Sekarang cukup di-log, bot tetap hidup.
+// Without these, ONE promise rejection not caught anywhere (an external API fetch
+// failing oddly, an error from a third-party library) could crash the WHOLE Node
+// process (modern Node's default behaviour) - the bot dying suddenly and needing
+// a manual Start from the panel. Now it is simply logged and the bot stays alive.
 process.on('unhandledRejection', (reason) => {
   logError('unhandledRejection', reason);
 });
 process.on('uncaughtException', (err) => {
   logError('uncaughtException', err);
 });
-// Kalau koneksi polling ke Telegram putus (mis. internet server sempat drop),
-// library ini emit event 'polling_error' - tanpa listener di sini, error-nya
-// cuma hilang diam-diam tanpa log sama sekali, susah didiagnosis.
+// When the polling connection to Telegram drops (the server's internet blipping,
+// say), this library emits a 'polling_error' event - without a listener here the
+// error would vanish silently with no log at all, making it hard to diagnose.
 bot.on('polling_error', (err) => {
   console.error('⚠️ Telegram polling error:', err.message);
 });
@@ -115,26 +114,26 @@ const usd = (n, _chatId) => {
 };
 const rupiah = (n) => 'Rp' + Math.round(Number(n)).toLocaleString('id-ID');
 
-// Kurs USD -> IDR dipakai HANYA untuk pembayaran QRIS (QRIS di Indonesia
-// cuma bisa nominal Rupiah). Toko tetap pakai USD sebagai mata uang utama
-// (saldo wallet, harga produk, dll). Kursnya diambil OTOMATIS dari harga
-// live USDT/IDR di CoinGecko (lihat getUsdToIdrRate() di payment.js, di-cache
-// 5 menit) - nilai USD_TO_IDR_RATE di .env cuma dipakai sebagai FALLBACK
-// kalau API kurs live-nya lagi down/timeout, jadi tidak wajib diupdate manual
-// tiap hari.
+// The USD -> IDR rate is used ONLY for QRIS payments (QRIS in Indonesia only
+// supports Rupiah amounts). The store still uses USD as its main currency (wallet
+// balance, product prices, and so on). The rate is fetched AUTOMATICALLY from the
+// live USDT/IDR price on CoinGecko (see getUsdToIdrRate() in payment.js, cached
+// for 5 minutes) - the USD_TO_IDR_RATE value in .env is only a FALLBACK for when
+// the live rate API is down or times out, so it does not need updating by hand
+// every day.
 const USD_TO_IDR_RATE_FALLBACK = Number(process.env.USD_TO_IDR_RATE) || 17750;
-// Kurs TON -> USD dipakai untuk hitung berapa TON yang setara nominal USD
-// yang diminta user saat topup TON. Diambil live (lihat getTonToUsdRate() di
-// payment.js, di-cache 5 menit) - nilai TON_TO_USD_RATE di .env cuma fallback
-// kalau API kurs live-nya lagi down/timeout DAN belum pernah berhasil fetch
-// sama sekali sejak bot nyala.
+// The TON -> USD rate is used to work out how much TON matches the USD amount a
+// user requests when topping up with TON. Fetched live (see getTonToUsdRate() in
+// payment.js, cached for 5 minutes) - the TON_TO_USD_RATE value in .env is only a
+// fallback for when the live rate API is down or times out AND no fetch has ever
+// succeeded since the bot started.
 const TON_TO_USD_RATE_FALLBACK = Number(process.env.TON_TO_USD_RATE) || 5;
-// Nominal minimum pembayaran QRIS dalam Rupiah - di bawah ini biasanya
-// ditolak provider QRIS (ShopeePay/GoPay/dst).
+// Minimum QRIS payment amount in Rupiah - below this, QRIS providers
+// (ShopeePay/GoPay/etc.) usually reject the payment.
 const MIN_QRIS_IDR = 1000;
-// Hitung ulang minimum USD berdasarkan kurs LIVE saat itu juga (dibulatkan ke
-// atas per sen), supaya user cukup mikir dalam USD saja saat mengetik - tidak
-// perlu itung-itung ke Rupiah, dan otomatis nyesuaiin kalau kurs naik/turun.
+// Recalculate the USD minimum from the LIVE rate at that moment (rounded up to
+// the cent), so the user only has to think in USD while typing - no mental
+// conversion to Rupiah, and it adjusts automatically as the rate moves.
 async function getMinQrisUsd() {
   const rate = await payment.getUsdToIdrRate(USD_TO_IDR_RATE_FALLBACK);
   return Math.ceil((MIN_QRIS_IDR / rate) * 100) / 100;
@@ -142,41 +141,41 @@ async function getMinQrisUsd() {
 
 // ================= WALLET TOPUP (QRIS & USDT BEP20 - OTOMATIS) =================
 
-const QRIS_POLL_INTERVAL_MS = 7000;         // cek status tiap 7 detik
-const QRIS_EXPIRE_MS = 10 * 60 * 1000;      // QR berlaku 10 menit
-const USDT_POLL_INTERVAL_MS = 20000;        // cek mutasi on-chain tiap 20 detik
-const USDT_EXPIRE_MS = 30 * 60 * 1000;      // alamat/nominal berlaku 30 menit
-const TON_POLL_INTERVAL_MS = 15000;         // cek mutasi on-chain tiap 15 detik
-const TON_EXPIRE_MS = 30 * 60 * 1000;       // alamat/nominal berlaku 30 menit
-const BINANCE_POLL_INTERVAL_MS = 20000;     // cek histori Binance Pay tiap 20 detik
-const BINANCE_EXPIRE_MS = 30 * 60 * 1000;   // Binance ID/nominal berlaku 30 menit
-const MIN_TOPUP_AMOUNT = 1;                 // nominal topup minimum (USD) - dipakai QRIS
-const MIN_TOPUP_USDT_AMOUNT = 0.1;          // nominal topup minimum khusus USDT (BEP20)
+const QRIS_POLL_INTERVAL_MS = 7000;         // check the status every 7 seconds
+const QRIS_EXPIRE_MS = 10 * 60 * 1000;      // the QR is valid for 10 minutes
+const USDT_POLL_INTERVAL_MS = 20000;        // check on-chain activity every 20 seconds
+const USDT_EXPIRE_MS = 30 * 60 * 1000;      // the address/amount is valid for 30 minutes
+const TON_POLL_INTERVAL_MS = 15000;         // check on-chain activity every 15 seconds
+const TON_EXPIRE_MS = 30 * 60 * 1000;       // the address/amount is valid for 30 minutes
+const BINANCE_POLL_INTERVAL_MS = 20000;     // check Binance Pay history every 20 seconds
+const BINANCE_EXPIRE_MS = 30 * 60 * 1000;   // the Binance ID/amount is valid for 30 minutes
+const MIN_TOPUP_AMOUNT = 1;                 // minimum topup amount (USD) - used by QRIS
+const MIN_TOPUP_USDT_AMOUNT = 0.1;          // minimum topup amount specific to USDT (BEP20)
 const MIN_TOPUP_TON_AMOUNT = 0.1;           // nominal topup minimum khusus TON
 const MIN_TOPUP_BINANCE_AMOUNT = 0.1;       // nominal topup minimum khusus Binance Pay
 
-// Pesan "🛒 Buy Product" TERAKHIR yang lagi dibuka tiap user (chatId ->
-// messageId) - dipakai scheduleProductListRepaint() untuk repaint ULANG
-// warna tombol (hijau/merah, lihat productListKeyboard()) kalau stok
-// berubah SETELAH pesan itu terkirim, tanpa perlu user manual buka-tutup
-// menunya lagi. In-memory saja (bukan disimpan ke db.json) - cukup untuk
-// UI nicety ini, dan otomatis "kosong" lagi kalau bot restart (user cukup
-// buka ulang menu sekali biar ke-track lagi, tidak ada dampak fungsional).
+// The LAST "🛒 Buy Product" message each user has open (chatId -> messageId) -
+// used by scheduleProductListRepaint() to repaint the button colours
+// (green/red, see productListKeyboard()) when stock changes AFTER that message
+// was sent, without the user having to close and reopen the menu. In memory only
+// (not stored in db.json) - enough for this UI nicety, and it simply empties
+// again on a bot restart (the user just reopens the menu once to be tracked
+// again, with no functional impact).
 const openProductListMsg = new Map();
-// ===== PATCH v4: tracking halaman DETAIL produk (bukan cuma daftar) =====
-// Sama konsepnya kaya openProductListMsg di atas, tapi buat halaman detail
-// (descKeyboard, tombol "Buy Now") - supaya warna tombol "Buy Now" juga
-// ikut auto-repaint tiap PRODUCT_LIST_REPAINT_INTERVAL_MS selama buyer
-// masih membuka halaman detail itu, bukan cuma sekali pas halaman pertama
-// dibuka. Value-nya simpan productId+variantId (bukan cuma messageId) -
-// beda dari daftar produk yang keyboard-nya sama untuk semua orang,
-// halaman detail ini spesifik per produk/varian yang lagi dilihat buyer.
+// ===== PATCH v4: tracking the product DETAIL page (not just the list) =====
+// The same idea as openProductListMsg above, but for the detail page
+// (descKeyboard, the "Buy Now" button) - so the "Buy Now" button colour also
+// auto-repaints every PRODUCT_LIST_REPAINT_INTERVAL_MS while the buyer still has
+// that detail page open, rather than only once when the page first opened. The
+// value stores productId+variantId (not just messageId) - unlike the product
+// list, whose keyboard is the same for everyone, this detail page is specific to
+// the product/variant the buyer is looking at.
 const openProductDescMsg = new Map(); // chatId -> { messageId, productId, variantId }
-const MAX_TOPUP_AMOUNT = 10000;             // nominal topup maksimum (USD) - sesuaikan kalau perlu
-// Ambang batas saldo Stars userbot - kalau sisa Stars di bawah ini SETELAH
-// sebuah gift berhasil dikirim, semua admin dapat notifikasi 1x (lihat
-// maybeNotifyLowStars() di dekat executeGiftSend()) supaya bisa top up
-// sebelum buyer berikutnya kena "Stars habis, order tertunda".
+const MAX_TOPUP_AMOUNT = 10000;             // maximum topup amount (USD) - adjust if needed
+// Threshold for the userbot's Stars balance - when the remaining Stars fall below
+// this AFTER a gift is sent successfully, every admin gets a one-off notification
+// (see maybeNotifyLowStars() near executeGiftSend()) so they can top up before the
+// next buyer hits "out of Stars, order delayed".
 const GIFT_LOW_STARS_THRESHOLD = 100;
 
 function topupMethodKeyboard(chatId) {
@@ -234,8 +233,8 @@ async function startQrisTopup(chatId, amountUsd) {
   const reference = 'DEP-' + Date.now() + '-' + chatId;
   let order;
   try {
-    // PayKita/QRIS cuma menerima nominal Rupiah, jadi base_amount di sini
-    // sudah dalam IDR (hasil konversi dari nominal USD yang diminta user).
+    // PayKita/QRIS only accepts Rupiah amounts, so base_amount here is already in
+    // IDR (converted from the USD amount the user requested).
     order = await payment.paykitaCreateOrder(amountIdr, reference);
   } catch (err) {
     console.error('PayKita create order error:', err.message);
@@ -257,8 +256,8 @@ async function startQrisTopup(chatId, amountUsd) {
     orderId: deposit.id,
     amount: usd(amountUsd, chatId),
     total: rupiah(order.finalAmount),
-    // Emoji per-baris diambil lewat teksEmoji() supaya custom emoji yang
-    // di-set admin di "🎨 Kelola Emoji ID" -> "Tagihan QRIS (Topup)" berlaku.
+    // Per-line emoji come from teksEmoji() so the custom emoji an admin sets in
+    // "🎨 Manage Emoji ID" -> "QRIS Invoice (Topup)" take effect.
     title_icon: teksEmoji('qris_title', '🪙'),
     rocket_icon: teksEmoji('qris_rocket', '🚀'),
     orderid_icon: teksEmoji('qris_orderid', '🧾'),
@@ -287,7 +286,7 @@ async function startQrisTopup(chatId, amountUsd) {
     }
     db.updateDeposit(deposit.id, { qrChatId: chatId, qrMessageId: sentMsg.message_id });
   } catch (err) {
-    console.error('Gagal kirim QR:', err.message);
+    console.error('Failed to send the QR:', err.message);
     await bot.sendMessage(chatId, caption + lang.t(chatId, 'qris_qr_send_failed'), { parse_mode: 'HTML', reply_markup: replyMarkup });
   }
 
@@ -295,10 +294,10 @@ async function startQrisTopup(chatId, amountUsd) {
 }
 
 function pollQrisDeposit(depositId) {
-  // Guard supaya tick BERIKUTNYA tidak mulai selagi tick SEBELUMNYA masih
-  // nunggu response API (mis. API lambat/hang) - tanpa ini, 2 tick bisa
-  // overlap, sama-sama nemu status "paid", dan sama-sama nge-credit saldo
-  // user -> DOUBLE CREDIT dari 1 pembayaran yang sama. Lihat juga USDT/TON.
+  // A guard so the NEXT tick does not start while the PREVIOUS one is still
+  // waiting on an API response (a slow or hanging API) - without it two ticks
+  // could overlap, both find the status "paid", and both credit the user's
+  // balance -> a DOUBLE CREDIT from one payment. See USDT/TON as well.
   let busy = false;
   const timer = setInterval(async () => {
     if (busy) return;
@@ -307,24 +306,24 @@ function pollQrisDeposit(depositId) {
       const deposit = db.getDeposit(depositId);
       if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
 
-      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): SEBELUMNYA
-      // urutan cek-nya expired DULU baru match. Kalau buyer transfer mepet
-      // menjelang batas waktu (atau ada delay konfirmasi PayKita), pada tick
-      // TERAKHIR bot langsung declare "expired" dan return TANPA sempat cek
-      // status paid sama sekali - padahal pembayarannya sebenarnya valid.
-      // Sekarang match/status SELALU dicek dulu di setiap tick (termasuk
-      // tick yang kebetulan sudah lewat expiresAt) - baru declare expired
-      // kalau memang belum ketemu match sama sekali.
+      // ===== BUG FIX (the "paid but not credited" complaint): PREVIOUSLY the
+      // order of checks was expiry FIRST, then matching. If a buyer transferred
+      // close to the deadline (or PayKita's confirmation was delayed), on the
+      // LAST tick the bot declared "expired" and returned WITHOUT ever checking
+      // the paid status at all - even though the payment was genuinely valid.
+      // Now the match/status is ALWAYS checked first on every tick (including a
+      // tick that happens to be past expiresAt), and expiry is only declared when
+      // no match was found at all.
       try {
         const result = await payment.paykitaGetOrderStatus(deposit.paykitaOrderId);
         if (result && result.paid) {
-          // Baca ulang deposit SETELAH await, lalu cek lagi statusnya - jaga-jaga
-          // kalau selama nunggu response PayKita di atas, deposit ini sudah
-          // keburu dibatalkan/expired dari tempat lain (mis. user pencet
-          // "❌ Batalkan QRIS" pas di saat yang bersamaan). Tanpa ini, status
-          // 'cancelled' bisa ketiban balik jadi 'paid' dan saldo tetap
-          // dikreditkan meski user sudah membatalkan. Sama seperti pola yang
-          // sudah dipakai di pollUsdtDeposit()/pollTonDeposit().
+          // Re-read the deposit AFTER the await, then check its status again - in
+          // case, while waiting on PayKita's response above, this deposit was
+          // cancelled or expired elsewhere (the user pressing "❌ Cancel QRIS" at
+          // the same moment, say). Without this a 'cancelled' status could be
+          // overwritten back to 'paid' and the balance credited even though the
+          // user had cancelled. The same pattern is already used in
+          // pollUsdtDeposit()/pollTonDeposit().
           const fresh = db.getDeposit(depositId);
           if (!fresh || fresh.status !== 'pending') return;
           db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString() });
@@ -333,25 +332,25 @@ function pollQrisDeposit(depositId) {
             bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: fresh.qrChatId, message_id: fresh.qrMessageId }).catch(() => {});
           }
           const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
-          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: check and credit the referral reward if this is the user's first deposit
           bot.sendMessage(
             fresh.chatId,
             lang.t(fresh.chatId, 'qris_paid', { amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
             { parse_mode: 'Markdown' }
           ).catch(() => {});
-          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          // Automatic channel notification: "💳 New Wallet Top-Up!" (when the feature is on).
           sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'qris', fresh.requestedAmount));
           return;
         }
       } catch (err) {
-        console.error(`Cek status QRIS (${depositId}) error:`, err.message);
+        console.error(`QRIS status check (${depositId}) error:`, err.message);
       }
 
       if (Date.now() > new Date(deposit.expiresAt).getTime()) {
-        // Re-check sekali lagi status terkini sebelum benar-benar expire -
-        // jaga-jaga kalau match di atas SEBENARNYA berhasil tapi paid-branch
-        // di atas gagal nulis ke DB gara-gara error lain (defensif, harusnya
-        // jarang kejadian).
+        // Check the current status once more before really expiring it - in case
+        // the match above ACTUALLY succeeded but the paid branch failed to write
+        // to the DB because of some other error (defensive; this should rarely
+        // happen).
         const fresh = db.getDeposit(depositId);
         if (!fresh || fresh.status !== 'pending') return;
         db.updateDeposit(depositId, { status: 'expired' });
@@ -368,7 +367,7 @@ function pollQrisDeposit(depositId) {
 }
 
 async function startUsdtTopup(chatId, usdAmount) {
-  // Toko sudah pakai USD, dan USDT dipatok ~1:1 ke USD, jadi tidak perlu kurs konversi lagi.
+  // The store already prices in USD and USDT is pegged ~1:1 to USD, so no conversion is needed.
   const baseUsdt = usdAmount;
   const usedAmounts = db.getUsedUsdtAmounts();
   const uniqueAmount = payment.generateUniqueUsdtAmount(baseUsdt, usedAmounts);
@@ -388,8 +387,8 @@ async function startUsdtTopup(chatId, usdAmount) {
     orderId: deposit.id,
     uniqueAmount,
     address: payment.USDT_BEP20_ADDRESS,
-    // Emoji per-baris diambil lewat teksEmoji() supaya custom emoji yang
-    // di-set admin di "🎨 Kelola Emoji ID" -> "Deposit USDT (BEP20)" berlaku.
+    // Per-line emoji come from teksEmoji() so the custom emoji an admin sets in
+    // "🎨 Manage Emoji ID" -> "USDT Deposit (BEP20)" take effect.
     title_icon: teksEmoji('usdt_title', '🪙'),
     min_icon: teksEmoji('usdt_min', '🈷️'),
     max_icon: teksEmoji('usdt_max', '🈷️'),
@@ -410,9 +409,9 @@ async function startUsdtTopup(chatId, usdAmount) {
 }
 
 function pollUsdtDeposit(depositId) {
-  // Lihat komentar "busy" di pollQrisDeposit() - guard yang sama di sini
-  // krusial karena panggilan ke Etherscan API sering lambat/error, jadi
-  // peluang overlap antar tick jauh lebih besar daripada QRIS.
+  // See the "busy" comment in pollQrisDeposit() - the same guard is crucial here,
+  // because calls to the on-chain API are often slow or fail, so the chance of
+  // ticks overlapping is far higher than with QRIS.
   let busy = false;
   const timer = setInterval(async () => {
     if (busy) return;
@@ -421,39 +420,39 @@ function pollUsdtDeposit(depositId) {
       const deposit = db.getDeposit(depositId);
       if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
 
-      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): urutan cek
-      // dibalik - match SELALU dicek dulu di tiap tick (termasuk tick yang
-      // waktunya sudah lewat expiresAt), baru declare expired kalau memang
-      // belum ketemu. Lihat komentar lebih lengkap di pollQrisDeposit().
+      // ===== BUG FIX (the "paid but not credited" complaint): the order of
+      // checks is reversed - a match is ALWAYS looked for first on every tick
+      // (including one already past expiresAt), and expiry is only declared when
+      // none is found. See the fuller comment in pollQrisDeposit().
       try {
         const transfers = await payment.fetchIncomingUsdtTransfers();
-        // Baca ulang deposit SETELAH await, lalu cek lagi statusnya - jaga-jaga
-        // kalau selama nunggu API di atas, deposit ini sudah keburu ditandai
-        // 'paid'/'expired' dari tempat lain (mis. tick sebelumnya yang telat selesai).
+        // Re-read the deposit AFTER the await, then check its status again - in
+        // case, while waiting on the API above, this deposit was already marked
+        // 'paid'/'expired' elsewhere (by a previous tick finishing late, say).
         const fresh = db.getDeposit(depositId);
         if (!fresh || fresh.status !== 'pending') return;
         const createdAtMs = new Date(fresh.createdAt).getTime();
         const match = transfers.find(tx =>
           Math.abs(tx.amount - fresh.usdtAmount) < 0.00005 &&
-          tx.timestamp >= createdAtMs - 60000 && // toleransi 1 menit untuk selisih jam block
-          !db.isTxHashUsed(tx.hash) // cegah 1 tx on-chain dipakai kredit 2 deposit (lihat komentar isTxHashUsed di db.js)
+          tx.timestamp >= createdAtMs - 60000 && // 1 minute of tolerance for block clock skew
+          !db.isTxHashUsed(tx.hash) // stop one on-chain tx crediting two deposits (see the isTxHashUsed comment in db.js)
         );
         if (match) {
           db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString(), txHash: match.hash });
           clearInterval(timer);
           const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
-          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: check and credit the referral reward if this is the user's first deposit
           bot.sendMessage(
             fresh.chatId,
             lang.t(fresh.chatId, 'usdt_paid', { hash: match.hash, amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
             { parse_mode: 'Markdown' }
           ).catch(() => {});
-          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          // Automatic channel notification: "💳 New Wallet Top-Up!" (when the feature is on).
           sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'usdt_bep20', fresh.requestedAmount));
           return;
         }
       } catch (err) {
-        console.error(`Cek mutasi USDT (${depositId}) error:`, err.message);
+        console.error(`USDT transfer check (${depositId}) error:`, err.message);
       }
 
       if (Date.now() > new Date(deposit.expiresAt).getTime()) {
@@ -462,23 +461,22 @@ function pollUsdtDeposit(depositId) {
         db.updateDeposit(depositId, { status: 'expired' });
         clearInterval(timer);
         bot.sendMessage(fresh.chatId, lang.t(fresh.chatId, 'usdt_expired', { id: depositId }), { parse_mode: 'Markdown' }).catch(() => {});
-        // ===== BUG FIX (jaring pengaman): deposit yang expired TANPA match
-        // sebelumnya cuma diam-diam hilang - kalau ternyata buyer SUDAH
-        // transfer on-chain (mis. gara-gara RPC publik sempat down/telat pas
-        // window deposit-nya, lihat catatan RANGE_BLOCKS di payment.js),
-        // tidak ada satu pun pihak (admin) yang tahu ada dana masuk yang
-        // belum ke-credit. Sekarang admin dikasih notifikasi tiap kali ini
-        // terjadi, sertakan nominal unik & alamat wallet, supaya admin bisa
-        // cek manual di block explorer (BscScan) dan kredit manual kalau
-        // ternyata memang sudah dibayar.
+        // ===== BUG FIX (a safety net): a deposit that expired WITHOUT a match
+        // used to just vanish quietly - so if the buyer HAD in fact transferred
+        // on-chain (because the public RPC was down or lagging during the deposit
+        // window, say - see the RANGE_BLOCKS notes in payment.js), nobody (no
+        // admin) would know money had arrived without being credited. Admins now
+        // get a notification every time this happens, including the unique amount
+        // and wallet address, so they can check manually on a block explorer
+        // (BscScan) and credit it by hand if it really was paid.
         notifyAdmins(
-          `⚠️ <b>Deposit USDT BEP20 expired (tidak ketemu)</b>\n\n` +
+          `⚠️ <b>USDT BEP20 deposit expired (no match found)</b>\n\n` +
           `Deposit ID: <code>${escapeHtml(depositId)}</code>\n` +
           `User ID: ${escapeHtml(String(fresh.chatId))}\n` +
           `Nominal unik: <code>${escapeHtml(String(fresh.usdtAmount))} USDT</code>\n` +
           `Alamat: <code>${escapeHtml(fresh.walletAddress || '-')}</code>\n` +
-          `Dibuat: ${escapeHtml(fresh.createdAt)}\n\n` +
-          `ℹ️ Kalau buyer klaim sudah transfer, cek manual di BscScan (transfer USDT ke alamat di atas, nominal persis di atas, dalam rentang waktu dibuat s/d sekarang). Kalau memang ketemu & valid, kredit saldo user secara manual.`
+          `Created: ${escapeHtml(fresh.createdAt)}\n\n` +
+          `ℹ️ If the buyer claims they transferred, check manually on BscScan (a USDT transfer to the address above, the exact amount above, between the creation time and now). If you find a valid one, credit the user's balance manually.`
         );
       }
     } finally {
@@ -508,8 +506,8 @@ async function startTonTopup(chatId, usdAmount) {
     orderId: deposit.id,
     uniqueAmount,
     address: payment.TON_ADDRESS,
-    // Emoji per-baris diambil lewat teksEmoji() supaya custom emoji yang
-    // di-set admin di "🎨 Kelola Emoji ID" -> "Deposit TON" berlaku.
+    // Per-line emoji come from teksEmoji() so the custom emoji an admin sets in
+    // "🎨 Manage Emoji ID" -> "TON Deposit" take effect.
     title_icon: teksEmoji('ton_title', '💎'),
     min_icon: teksEmoji('ton_min', '🈷️'),
     max_icon: teksEmoji('ton_max', '🈷️'),
@@ -530,7 +528,7 @@ async function startTonTopup(chatId, usdAmount) {
 }
 
 function pollTonDeposit(depositId) {
-  // Lihat komentar "busy" di pollQrisDeposit()/pollUsdtDeposit().
+  // See the "busy" comment in pollQrisDeposit()/pollUsdtDeposit().
   let busy = false;
   const timer = setInterval(async () => {
     if (busy) return;
@@ -539,9 +537,9 @@ function pollTonDeposit(depositId) {
       const deposit = db.getDeposit(depositId);
       if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
 
-      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): match SELALU
-      // dicek dulu tiap tick sebelum declare expired - lihat komentar
-      // lengkap di pollQrisDeposit().
+      // ===== BUG FIX (the "paid but not credited" complaint): a match is ALWAYS
+      // looked for on every tick before declaring expiry - see the fuller comment
+      // in pollQrisDeposit().
       try {
         const transfers = await payment.fetchIncomingTonTransfers();
         const fresh = db.getDeposit(depositId);
@@ -549,25 +547,25 @@ function pollTonDeposit(depositId) {
         const createdAtMs = new Date(fresh.createdAt).getTime();
         const match = transfers.find(tx =>
           Math.abs(tx.amount - fresh.tonAmount) < 0.000005 &&
-          tx.timestamp >= createdAtMs - 60000 && // toleransi 1 menit untuk selisih jam block
-          !db.isTxHashUsed(tx.hash) // cegah 1 tx on-chain dipakai kredit 2 deposit (lihat komentar isTxHashUsed di db.js)
+          tx.timestamp >= createdAtMs - 60000 && // 1 minute of tolerance for block clock skew
+          !db.isTxHashUsed(tx.hash) // stop one on-chain tx crediting two deposits (see the isTxHashUsed comment in db.js)
         );
         if (match) {
           db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString(), txHash: match.hash });
           clearInterval(timer);
           const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
-          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: check and credit the referral reward if this is the user's first deposit
           bot.sendMessage(
             fresh.chatId,
             lang.t(fresh.chatId, 'ton_paid', { amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
             { parse_mode: 'Markdown' }
           ).catch(() => {});
-          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          // Automatic channel notification: "💳 New Wallet Top-Up!" (when the feature is on).
           sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'ton', fresh.requestedAmount));
           return;
         }
       } catch (err) {
-        console.error(`Cek mutasi TON (${depositId}) error:`, err.message);
+        console.error(`TON transfer check (${depositId}) error:`, err.message);
       }
 
       if (Date.now() > new Date(deposit.expiresAt).getTime()) {
@@ -576,15 +574,15 @@ function pollTonDeposit(depositId) {
         db.updateDeposit(depositId, { status: 'expired' });
         clearInterval(timer);
         bot.sendMessage(fresh.chatId, lang.t(fresh.chatId, 'ton_expired', { id: depositId }), { parse_mode: 'Markdown' }).catch(() => {});
-        // Sama seperti safety-net di pollUsdtDeposit() - lihat komentar di sana.
+        // The same safety net as in pollUsdtDeposit() - see the comment there.
         notifyAdmins(
-          `⚠️ <b>Deposit TON expired (tidak ketemu)</b>\n\n` +
+          `⚠️ <b>TON deposit expired (no match found)</b>\n\n` +
           `Deposit ID: <code>${escapeHtml(depositId)}</code>\n` +
           `User ID: ${escapeHtml(String(fresh.chatId))}\n` +
           `Nominal unik: <code>${escapeHtml(String(fresh.tonAmount))} TON</code>\n` +
           `Alamat: <code>${escapeHtml(fresh.walletAddress || '-')}</code>\n` +
-          `Dibuat: ${escapeHtml(fresh.createdAt)}\n\n` +
-          `ℹ️ Kalau buyer klaim sudah transfer, cek manual di TON explorer. Kalau memang ketemu & valid, kredit saldo user secara manual.`
+          `Created: ${escapeHtml(fresh.createdAt)}\n\n` +
+          `ℹ️ If the buyer claims they transferred, check manually on a TON explorer. If you find a valid one, credit the user's balance manually.`
         );
       }
     } finally {
@@ -594,8 +592,8 @@ function pollTonDeposit(depositId) {
 }
 
 async function startBinanceTopup(chatId, usdAmount) {
-  // Binance Pay dipatok 1:1 ke USD/USDT (buyer transfer nominal dalam USDT
-  // lewat menu "Pay" di app Binance), sama seperti USDT BEP20 di atas.
+  // Binance Pay is pegged 1:1 to USD/USDT (the buyer transfers the amount in USDT
+  // via the "Pay" menu in the Binance app), just like USDT BEP20 above.
   const baseAmount = usdAmount;
   const usedAmounts = db.getUsedBinanceAmounts();
   const uniqueAmount = payment.generateUniqueBinanceAmount(baseAmount, usedAmounts);
@@ -635,7 +633,7 @@ async function startBinanceTopup(chatId, usdAmount) {
 }
 
 function pollBinanceDeposit(depositId) {
-  // Lihat komentar "busy" di pollQrisDeposit()/pollUsdtDeposit()/pollTonDeposit().
+  // See the "busy" comment in pollQrisDeposit()/pollUsdtDeposit()/pollTonDeposit().
   let busy = false;
   const timer = setInterval(async () => {
     if (busy) return;
@@ -644,49 +642,49 @@ function pollBinanceDeposit(depositId) {
       const deposit = db.getDeposit(depositId);
       if (!deposit || deposit.status !== 'pending') return clearInterval(timer);
 
-      // ===== BUG FIX (payment "sudah bayar tapi tidak masuk"): match SELALU
-      // dicek dulu tiap tick sebelum declare expired - lihat komentar
-      // lengkap di pollQrisDeposit().
+      // ===== BUG FIX (the "paid but not credited" complaint): a match is ALWAYS
+      // looked for on every tick before declaring expiry - see the fuller comment
+      // in pollQrisDeposit().
       try {
         const transactions = await payment.fetchIncomingBinancePayTransactions();
-        // Baca ulang deposit SETELAH await - lihat komentar sama di pollUsdtDeposit().
+        // Re-read the deposit AFTER the await - see the same comment in pollUsdtDeposit().
         const fresh = db.getDeposit(depositId);
         if (!fresh || fresh.status !== 'pending') return;
         const createdAtMs = new Date(fresh.createdAt).getTime();
-        // ===== BUG FIX (SECURITY - kredit gratis): dulu match cuma cocokkan
-        // `tx.amount` (angka mentah) tanpa PERNAH cek `tx.currency`. Binance
-        // Pay C2C bisa kirim ASET APAPUN yang dipilih pengirim (USDT, BNB,
-        // SHIB, dst - bukan cuma USDT), dan invoice-nya sendiri cuma minta
-        // "kirim PERSIS jumlah ini" tanpa sebut aset. Karena nominal unik
-        // dibuat dari angka desimal biasa (mis. 5.0037), BUYER BISA kirim
-        // 5.0037 dari aset receh (mis. SHIB senilai < 1 sen) alih-alih 5.0037
-        // USDT senilai $5 - match tetap "berhasil" murni dari angkanya SAJA,
-        // dan buyer dapat kredit Wallet PENUH walau transfer aslinya nyaris
-        // tidak bernilai. Sekarang WAJIB currency-nya juga cocok dengan
-        // BINANCE_EXPECTED_CURRENCY ('USDT') - transfer aset lain dengan
-        // angka yang sama sekalipun TIDAK akan pernah match.
+        // ===== BUG FIX (SECURITY - free credit): matching used to compare only
+        // `tx.amount` (the raw number) and NEVER checked `tx.currency`. Binance
+        // Pay C2C can send ANY ASSET the sender picks (USDT, BNB, SHIB, and so
+        // on - not only USDT), and the invoice itself only says "send EXACTLY
+        // this amount" without naming an asset. Because the unique amount is
+        // built from an ordinary decimal number (5.0037, say), a BUYER COULD send
+        // 5.0037 of a worthless asset (SHIB worth under a cent) instead of 5.0037
+        // USDT worth $5 - the match would still "succeed" purely on the NUMBER,
+        // and the buyer would get the FULL Wallet credit even though the actual
+        // transfer was nearly worthless. The currency MUST now also match
+        // BINANCE_EXPECTED_CURRENCY ('USDT') - a transfer of any other asset will
+        // NEVER match, whatever the number.
         const match = transactions.find(tx =>
           tx.currency === payment.BINANCE_EXPECTED_CURRENCY &&
           Math.abs(tx.amount - fresh.binanceAmount) < 0.00005 &&
-          tx.timestamp >= createdAtMs - 60000 && // toleransi 1 menit
-          !db.isTxHashUsed(`binance:${tx.id}`) // cegah 1 transaksi Binance dipakai kredit 2 deposit
+          tx.timestamp >= createdAtMs - 60000 && // 1 minute of tolerance
+          !db.isTxHashUsed(`binance:${tx.id}`) // stop one Binance transaction crediting two deposits
         );
         if (match) {
           db.updateDeposit(depositId, { status: 'paid', paidAt: new Date().toISOString(), txHash: `binance:${match.id}` });
           clearInterval(timer);
           const newBalance = db.updateBalance(fresh.chatId, fresh.requestedAmount);
-          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: cek & kreditkan reward referral kalau ini deposit pertama user ini
+          triggerReferralRewardIfEligible(fresh.chatId); // PATCH v7: check and credit the referral reward if this is the user's first deposit
           bot.sendMessage(
             fresh.chatId,
             lang.t(fresh.chatId, 'binance_paid', { id: match.id, amount: usd(fresh.requestedAmount, fresh.chatId), balance: usd(newBalance, fresh.chatId) }),
             { parse_mode: 'Markdown' }
           ).catch(() => {});
-          // Notifikasi Channel Otomatis: "💳 New Wallet Top-Up!" (kalau fitur aktif).
+          // Automatic channel notification: "💳 New Wallet Top-Up!" (when the feature is on).
           sendChannelNotif('topup', buildChannelTopupText(fresh.chatId, 'binance', fresh.requestedAmount));
           return;
         }
       } catch (err) {
-        console.error(`Cek histori Binance Pay (${depositId}) error:`, err.message);
+        console.error(`Binance Pay history check (${depositId}) error:`, err.message);
       }
 
       if (Date.now() > new Date(deposit.expiresAt).getTime()) {
@@ -695,13 +693,13 @@ function pollBinanceDeposit(depositId) {
         db.updateDeposit(depositId, { status: 'expired' });
         clearInterval(timer);
         bot.sendMessage(fresh.chatId, lang.t(fresh.chatId, 'binance_expired', { id: depositId }), { parse_mode: 'Markdown' }).catch(() => {});
-        // ⚠️ PATCH diagnostik: sebelumnya notifikasi expired ini cuma kasih
-        // tahu "tidak ketemu" tanpa data apapun buat cari tahu KENAPA - admin
-        // wajib buka app Binance manual dulu. Sekarang tarik ulang transaksi
-        // mentah (tanpa filter ketat currency/orderType) di rentang waktu
-        // deposit ini, dan sertakan di notifikasi kalau ada - supaya langsung
-        // kelihatan misalnya currency-nya bukan USDT, orderType-nya bukan
-        // C2C, atau nominalnya beda tipis dari yang diminta.
+        // ⚠️ Diagnostic patch: this expiry notification used to say only "not
+        // found", with nothing to work out WHY - forcing the admin to open the
+        // Binance app manually. It now re-fetches the raw transactions (without
+        // the strict currency/orderType filters) for this deposit's time window
+        // and includes them in the notification when there are any - so it is
+        // immediately obvious if, say, the currency was not USDT, the orderType
+        // was not C2C, or the amount differed slightly from the one requested.
         let rawTxDetail = '';
         try {
           const rawTx = await payment.fetchRawBinancePayTransactionsInRange(
@@ -712,22 +710,22 @@ function pollBinanceDeposit(depositId) {
             const lines = rawTx.map(tx =>
               `• ${tx.amount} ${tx.currency || '?'} (orderType: ${tx.orderType || '?'}, id: ${tx.id})`
             ).join('\n');
-            rawTxDetail = `\n\n<b>Transaksi Binance Pay di rentang waktu ini (tidak match otomatis, cek manual):</b>\n${escapeHtml(lines)}`;
+            rawTxDetail = `\n\n<b>Binance Pay transactions in this time window (no automatic match, check manually):</b>\n${escapeHtml(lines)}`;
           } else {
             rawTxDetail = `\n\n<i>Tidak ada transaksi Binance Pay sama sekali di rentang waktu ini - kemungkinan buyer belum benar-benar transfer, salah kirim ke ID lain, atau transfer belum settle.</i>`;
           }
         } catch (rawErr) {
-          rawTxDetail = `\n\n<i>Gagal ambil data diagnostik transaksi: ${escapeHtml(rawErr.message)}</i>`;
+          rawTxDetail = `\n\n<i>Failed to fetch transaction diagnostics: ${escapeHtml(rawErr.message)}</i>`;
         }
         notifyAdmins(
-          `⚠️ <b>Deposit Binance Pay expired (tidak ketemu)</b>\n\n` +
+          `⚠️ <b>Binance Pay deposit expired (no match found)</b>\n\n` +
           `Deposit ID: <code>${escapeHtml(depositId)}</code>\n` +
           `User ID: ${escapeHtml(String(fresh.chatId))}\n` +
           `Nominal unik: <code>${escapeHtml(String(fresh.binanceAmount))}</code>\n` +
           `Binance ID tujuan: <code>${escapeHtml(fresh.binancePayId || '-')}</code>\n` +
           `Dibuat: ${escapeHtml(fresh.createdAt)}` +
           rawTxDetail +
-          `\n\nℹ️ Kalau buyer klaim sudah transfer, cek manual di app Binance -> Pay -> History. Kalau memang ketemu & valid, kredit saldo user secara manual.`
+          `\n\nℹ️ If the buyer claims they transferred, check manually in the Binance app -> Pay -> History. If you find a valid one, credit the user's balance manually.`
         );
       }
     } finally {
@@ -736,9 +734,9 @@ function pollBinanceDeposit(depositId) {
   }, BINANCE_POLL_INTERVAL_MS);
 }
 
-// Lanjutkan pantau semua deposit yang masih 'pending' saat bot baru di-restart
-// (mis. abis update kode / server reboot), supaya topup yang belum selesai
-// tetap kedeteksi otomatis begitu bot nyala lagi.
+// Keep monitoring every deposit still 'pending' when the bot restarts (after a
+// code update or server reboot, say), so an unfinished topup is still detected
+// automatically once the bot comes back up.
 function resumePendingDeposits() {
   const pending = db.getPendingDeposits();
   pending.forEach(d => {
@@ -749,30 +747,30 @@ function resumePendingDeposits() {
   });
 }
 
-// Ada 2 sumber custom emoji premium yang beda mekanismenya:
+// There are 2 sources of premium custom emoji, with different mechanisms:
 //
-// 1) boltEmojiMenu() / boltEmojiText() -> 1 ID yang di-hardcode manual di
-//    emoji-id-teks.js, dipakai untuk bullet "⚡" bawaan bot: {e} di deskripsi/
-//    how-to-use, dan teks menu/notifikasi (welcome, order berhasil, dll).
+// 1) boltEmojiMenu() / boltEmojiText() -> a single ID hardcoded by hand in
+//    emoji-id-teks.js, used for the bot's built-in "⚡" bullet: {e} in
+//    descriptions/how-to-use, and in menu/notification text (welcome, order
+//    success, and so on).
+// 2) embedOwnerCustomEmoji() -> needs NO manual ID at all. When the OWNER (who
+//    genuinely has Telegram Premium) types free text for a description/how-to-use
+//    and PICKS a premium emoji straight from their own Telegram emoji panel
+//    (rather than just typing plain unicode), Telegram automatically includes
+//    that emoji's REAL custom_emoji_id in message.entities when the message
+//    reaches the bot. The bot simply reads those entities and reinserts them as
+//    <tg-emoji emoji-id="..."> tags, then stores it in the database as HTML - so
+//    the moment the owner types it, that emoji becomes permanently premium in
+//    that description/how-to-use, without touching any emoji-id file. (See its
+//    use in the 'addproduct_desc' and 'sethowto_text' handlers under TEXT MESSAGES.)
 //
-// 2) embedOwnerCustomEmoji() -> TANPA perlu isi ID manual sama sekali. Kalau
-//    OWNER (yang beneran punya Telegram Premium) ngetik teks bebas untuk
-//    deskripsi/how-to-use dan MEMILIH emoji premium langsung dari emoji panel
-//    Telegram-nya sendiri (bukan cuma ngetik unicode biasa), Telegram otomatis
-//    menyertakan custom_emoji_id ASLI emoji tsb di message.entities saat pesan
-//    itu sampai ke bot. Bot tinggal baca entities itu & sisipkan balik jadi tag
-//    <tg-emoji emoji-id="...">, lalu simpan ke database sebagai HTML - jadi
-//    begitu owner ketik, emoji itu LANGSUNG jadi premium permanen di deskripsi/
-//    how-to-use tsb, tanpa sentuh file emoji-id manapun. (Lihat pemakaiannya di
-//    handler 'addproduct_desc' & 'sethowto_text' di bagian TEXT MESSAGES.)
-//
-// Sesuai Bot API 9.4 (rilis 9 Feb 2026, core.telegram.org/bots/api-changelog#february-9-2026):
-// bot BOLEH kirim custom emoji di teks pesan asal akun PEMILIK BOT (bukan bot-nya)
-// punya langganan Telegram Premium aktif - baik lewat mekanisme (1) maupun (2) di
-// atas. Kalau ID kosong / owner belum Premium, otomatis fallback ke unicode biasa,
-// tidak ada error dari Telegram.
-// Prioritas ID: (1) hasil "tangkap otomatis" via admin "🎨 Kelola Emoji ID"
-// (persisten di data/db.json), lalu (2) ID statis di emoji-id-teks.js.
+// Per Bot API 9.4 (released 9 Feb 2026, core.telegram.org/bots/api-changelog#february-9-2026):
+// a bot MAY send custom emoji in message text as long as the BOT OWNER's account
+// (not the bot itself) has an active Telegram Premium subscription - via either
+// mechanism (1) or (2) above. When the ID is empty or the owner is not Premium,
+// it falls back to plain unicode automatically, with no error from Telegram.
+// ID priority: (1) the "automatic capture" result from admin "🎨 Manage Emoji ID"
+// (persisted in data/db.json), then (2) the static ID in emoji-id-teks.js.
 const boltEmojiMenu = () => {
   const id = db.getEmojiId('teks:menu_notif') || BOLT_EMOJI_ID_MENU;
   return id ? `<tg-emoji emoji-id="${id}">⚡</tg-emoji>` : '⚡';
@@ -782,22 +780,21 @@ const boltEmojiText = () => {
   return id ? `<tg-emoji emoji-id="${id}">⚡</tg-emoji>` : '⚡';
 };
 
-// Versi UMUM dari mekanisme di atas: dipakai untuk emoji APA SAJA di dalam
-// teks pesan (bukan cuma placeholder "⚡"), key-nya masing-masing punya slot
-// sendiri di admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan". Prioritas
-// ID: (1) hasil "tangkap otomatis" di data/db.json, lalu (2) backup statis
-// EMOJI_ID_TEKS_BACKUP di emoji-id-teks.js. Kalau dua-duanya kosong,
-// otomatis fallback ke emoji unicode biasa (parameter kedua), TIDAK ERROR.
+// A GENERAL version of the mechanism above: used for ANY emoji inside message
+// text (not just the "⚡" placeholder), where each key has its own slot under
+// admin "🎨 Manage Emoji ID" -> "✍️ Emoji in Message Text". ID priority:
+// (1) the "automatic capture" result in data/db.json, then (2) the static
+// EMOJI_ID_TEKS_BACKUP fallback in emoji-id-teks.js. When both are empty it falls
+// back to the plain unicode emoji (the second parameter), with NO ERROR.
 function teksEmoji(key, fallback) {
   const id = db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEKS_BACKUP[key];
   return id ? `<tg-emoji emoji-id="${id}">${fallback}</tg-emoji>` : fallback;
 }
 
-// Teks welcome (/start) - dipakai di 6 tempat berbeda (start pertama kali,
-// ganti bahasa, dll), jadi disatukan di 1 helper supaya kalau mau ubah lagi
-// nanti cukup edit di sini saja. Tiap baris fitur punya slot ikon sendiri
-// (teksEmoji) supaya bisa di-custom lewat admin "🎨 Kelola Emoji ID" ->
-// "✍️ Emoji di Teks Pesan" -> "👋 Pesan Welcome (/start)".
+// The welcome text (/start) - used in several places, so it lives in one helper
+// and only needs editing here. Each feature line has its own icon slot
+// (teksEmoji) so it can be customised via admin "🎨 Manage Emoji ID" ->
+// "✍️ Emoji in Message Text" -> "👋 Welcome Message (/start)".
 function buildWelcomeText(chatId) {
   return `${teksEmoji('welcome_wave', '👋')} ${lang.t(chatId, 'welcome', {
     store: escapeHtml(STORE_NAME),
@@ -809,16 +806,15 @@ function buildWelcomeText(chatId) {
   })}`;
 }
 
-// Teks Mode Maintenance (/admin -> 🛠️ Maintenance Bot). Kalau admin sudah
-// isi pesan CUSTOM (lewat "✏️ Set Pesan Custom"), pakai itu apa adanya
-// (sudah termasuk tag <tg-emoji> hasil embedOwnerCustomEmoji() kalau admin
-// pilih emoji premium langsung saat ngetik - sama mekanismenya dengan
-// Broadcast). Kalau belum diisi (null/kosong), fallback ke teks default
-// "keren" yang tiap ikonnya lewat teksEmoji() -> otomatis pakai emoji
-// Premium yang SUDAH ADA di file (dipinjam dari slot lain, lihat komentar
-// di emoji-id-teks.js), dan tetap bisa di-custom lewat admin "🎨 Kelola
-// Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "🛠️ Mode Maintenance" TANPA
-// perlu ubah kode sama sekali.
+// Maintenance Mode text (/admin -> 🛠️ Bot Maintenance). When the admin has set a
+// CUSTOM message (via "✏️ Set Custom Message"), it is used as is (already
+// including any <tg-emoji> tags from embedOwnerCustomEmoji() if the admin picked
+// a premium emoji while typing - the same mechanism as Broadcast). When it is
+// unset (null/empty), it falls back to the default "nice" text, whose icons all
+// go through teksEmoji() -> automatically using the Premium emoji ALREADY in the
+// file (borrowed from other slots, see the comments in emoji-id-teks.js), and
+// still customisable via admin "🎨 Manage Emoji ID" -> "✍️ Emoji in Message
+// Text" -> "🛠️ Maintenance Mode" WITHOUT touching any code.
 function buildMaintenanceText(chatId) {
   const { message } = db.getMaintenanceSettings();
   if (message) return message;
@@ -835,17 +831,16 @@ function buildMaintenanceText(chatId) {
   return `${title}\n\n${desc}`;
 }
 
-// Teks broadcast "Maintenance SELESAI" - dikirim otomatis ke SEMUA user
-// begitu admin nonaktifkan Mode Maintenance lewat "🔴 Nonaktifkan" (lihat
-// handler 'maintenance_toggle' di bawah). Sama pola dengan
-// buildMaintenanceText() di atas: tiap ikon lewat teksEmoji() supaya
-// otomatis pakai emoji Premium yang SUDAH ADA di file (dipinjam dari slot
-// lain, lihat catatan di emoji-id-teks.js), dan tetap bisa di-custom lewat
-// admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "🛠️ Mode
-// Maintenance" TANPA perlu ubah kode sama sekali. Beda dari
-// buildMaintenanceText(), teks ini SELALU pakai template default (bukan
-// pesan custom admin) karena memang khusus 1 kali kirim saat maintenance
-// baru saja selesai, bukan status yang ditampilkan berulang.
+// The "Maintenance FINISHED" broadcast text - sent automatically to ALL users as
+// soon as an admin turns Maintenance Mode off via "🔴 Disable" (see the
+// 'maintenance_toggle' handler below). The same pattern as buildMaintenanceText()
+// above: every icon goes through teksEmoji() so it automatically uses the Premium
+// emoji ALREADY in the file (borrowed from other slots, see the notes in
+// emoji-id-teks.js), and stays customisable via admin "🎨 Manage Emoji ID" ->
+// "✍️ Emoji in Message Text" -> "🛠️ Maintenance Mode" WITHOUT touching any
+// code. Unlike buildMaintenanceText(), this text ALWAYS uses the default
+// template (never the admin's custom message), because it is a one-off send when
+// maintenance has just finished, not a status shown repeatedly.
 function buildMaintenanceFinishedText(chatId) {
   const title = lang.t(chatId, 'maintenance_finished_title', {
     rocket_icon: teksEmoji('maintenance_finished_rocket', '🚀')
@@ -861,26 +856,26 @@ function buildMaintenanceFinishedText(chatId) {
   return `${title}\n\n${desc}`;
 }
 
-// ================= WAJIB JOIN CHANNEL/GRUP (Force Subscribe) =================
-// Cek status join 1 user ke 1 channel ATAU grup/supergroup lewat getChatMember
-// - mekanismenya SAMA untuk keduanya, Telegram tidak membedakan cara cek
-// member-nya berdasarkan tipe chat. chatRef boleh @username (channel/grup
-// publik) atau chat id numerik (wajib buat channel/grup PRIVATE - bot harus
-// jadi admin di situ dulu supaya bisa baca statusnya). Kalau API error apapun
-// (bot bukan admin, channel/grup sudah dihapus, dll), dianggap BELUM join -
-// lebih aman daripada diam-diam meloloskan semua orang.
+// ================= FORCE JOIN CHANNEL/GROUP (Force Subscribe) =================
+// Check whether a user has joined a channel OR group/supergroup via getChatMember
+// - the mechanism is THE SAME for both; Telegram does not vary how membership is
+// checked by chat type. chatRef may be an @username (a public channel/group) or a
+// numeric chat id (required for a PRIVATE channel/group - the bot must be an
+// admin there first to read the status). On any API error (the bot not being an
+// admin, the channel/group having been deleted, etc.) the user is treated as NOT
+// joined - safer than silently letting everyone through.
 async function isUserMemberOfChannel(chatRef, userId) {
   try {
     const member = await bot.getChatMember(chatRef, userId);
     return ['creator', 'administrator', 'member'].includes(member.status);
   } catch (err) {
-    console.error(`⚠️ Gagal cek status join channel ${chatRef}:`, err.message);
+    console.error(`⚠️ Failed to check join status for channel ${chatRef}:`, err.message);
     return false;
   }
 }
 
-// Return array channel yang BELUM di-join user (subset dari seluruh channel
-// wajib-join yang aktif). Array kosong = user sudah join semuanya.
+// Return the array of channels the user has NOT joined (a subset of all active
+// force-join channels). An empty array means they have joined everything.
 async function getUnjoinedChannels(userId) {
   const { enabled, channels } = db.getForceJoinSettings();
   if (!enabled || !channels.length) return [];
@@ -918,11 +913,11 @@ function forceJoinText(chatId, unjoinedChannels, allChannels) {
   return `${title}\n\n${desc}\n\n${lines.join('\n')}`;
 }
 
-// Gerbang utama: kalau fitur wajib-join aktif & user masih ada channel yang
-// belum di-join, tampilkan layar join (kirim pesan baru ATAU edit pesan yang
-// ada, tergantung `messageId`) lalu return false (caller WAJIB berhenti di
-// sini, jangan lanjut ke menu). Return true kalau aman lanjut (fitur nonaktif,
-// tidak ada channel, atau user sudah join semuanya).
+// The main gate: when the force-join feature is on and the user still has an
+// unjoined channel, show the join screen (sending a new message OR editing the
+// existing one, depending on `messageId`) and return false (the caller MUST stop
+// there and not continue to the menu). Returns true when it is safe to continue
+// (the feature is off, there are no channels, or the user has joined them all).
 async function checkForceJoinAndPrompt(chatId, messageId) {
   const { enabled, channels } = db.getForceJoinSettings();
   if (!enabled || !channels.length) return true;
@@ -939,15 +934,15 @@ async function checkForceJoinAndPrompt(chatId, messageId) {
   return false;
 }
 
-// Ambil teks pesan APA ADANYA (msg.text, belum di-trim) plus entity-nya, cari
-// entity bertipe "custom_emoji" (ini muncul kalau pengirim beneran memilih
-// custom emoji dari panel Telegram Premium-nya - beda dari sekadar ngetik
-// karakter unicode biasa), lalu sisipkan balik posisinya sebagai tag
-// <tg-emoji emoji-id="...">. Diproses dari belakang (offset terbesar dulu)
-// supaya offset entity yang lebih awal tidak ikut bergeser oleh tag yang
-// baru disisipkan. Offset/length dari Telegram dalam UTF-16 code unit, sama
-// persis dengan representasi native string JavaScript, jadi slicing di bawah
-// aman dipakai langsung tanpa konversi tambahan.
+// Take the message text EXACTLY as sent (msg.text, untrimmed) plus its entities,
+// find the entities of type "custom_emoji" (which appear when the sender really
+// picked a custom emoji from their Telegram Premium panel - as opposed to simply
+// typing a plain unicode character), and reinsert them in place as
+// <tg-emoji emoji-id="..."> tags. Processed from the end backwards (largest
+// offset first) so that earlier entity offsets are not shifted by the tags just
+// inserted. Telegram's offset/length are in UTF-16 code units, exactly matching
+// JavaScript's native string representation, so the slicing below is safe to use
+// directly with no extra conversion.
 function embedOwnerCustomEmojiFrom(text, entities) {
   const raw = text || '';
   const customEmojiEntities = (entities || [])
@@ -966,11 +961,11 @@ function embedOwnerCustomEmoji(msg) {
   return embedOwnerCustomEmojiFrom(msg.text, msg.entities);
 }
 
-// Render deskripsi produk / how-to-use untuk ditampilkan ke user: satu-satunya
-// hal yang perlu diganti di sini adalah placeholder legacy "{e}". Emoji premium
-// lain yang diketik owner sudah berupa tag <tg-emoji> valid sejak disimpan
-// (lewat embedOwnerCustomEmoji() di atas), jadi tidak perlu diproses lagi -
-// diproses ulang di sini justru bisa bikin tag ke-nest dobel.
+// Render a product description / how-to-use for display to the user: the only
+// thing that needs replacing here is the legacy "{e}" placeholder. Other premium
+// emoji the owner typed are already valid <tg-emoji> tags from the moment they
+// were saved (via embedOwnerCustomEmoji() above), so they need no further
+// processing - reprocessing them here could actually double-nest the tags.
 const renderDescription = (text) => (text || '').split('{e}').join(boltEmojiText());
 
 // Shared prompt shown on every admin "Set Description" screen.
@@ -979,13 +974,13 @@ const DESC_INPUT_PROMPT =
   'If you pick a premium emoji straight from your own Telegram Premium panel, it is saved as premium ' +
   'automatically - no manual ID setup needed). Type `-` to clear it, or /cancel to abort.';
 
-// Buang 1 emoji unicode (+ spasi setelahnya) di AWAL sebuah teks. Dipakai
-// begitu icon_custom_emoji_id dipasang ke tombol, supaya emoji tidak tampil
-// DUA KALI - sekali sebagai ikon tombol (custom, premium) dan sekali lagi
-// sebagai karakter unicode biasa yang masih nempel di teks labelnya.
-// Regex ini cover emoji dasar, emoji+variation selector (️), dan emoji ZWJ
-// sequence (👨‍👩‍👧 dkk) supaya seluruh cluster emoji-nya kebuang, bukan cuma
-// separuh.
+// Strip one unicode emoji (plus any following space) from the START of a text.
+// Used once icon_custom_emoji_id is attached to a button, so the emoji does not
+// appear TWICE - once as the button icon (custom, premium) and again as the plain
+// unicode character still sitting in the label text.
+// This regex covers basic emoji, emoji + variation selector (️), and emoji ZWJ
+// sequences (👨‍👩‍👧 and friends) so the whole emoji cluster is removed rather
+// than just part of it.
 function stripLeadingEmoji(text) {
   return String(text || '').replace(
     /^\s*\p{Extended_Pictographic}(?:\uFE0F)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F)?)*\s*/u,
@@ -993,26 +988,26 @@ function stripLeadingEmoji(text) {
   );
 }
 
-// Sisipkan icon_custom_emoji_id ke sebuah tombol inline keyboard (Bot API 9.4+).
-// "key" merujuk ke salah satu key di object EMOJI_IDS pada emoji-id-menu-inline.js,
-// jadi tiap tombol bisa punya ikon custom emoji yang BEDA-BEDA, bukan cuma 1 ID
-// yang sama untuk semua tombol. Kalau ID untuk key itu tidak diisi (atau owner
-// belum Telegram Premium), field ini otomatis tidak disisipkan sama sekali ->
-// tombol tampil normal tanpa ikon, tidak ada error dari Telegram.
+// Attach an icon_custom_emoji_id to an inline keyboard button (Bot API 9.4+).
+// "key" refers to one of the keys in the EMOJI_IDS object in
+// emoji-id-menu-inline.js, so every button can have a DIFFERENT custom emoji
+// icon, rather than a single ID shared by all of them. When the ID for that key
+// is empty (or the owner is not Telegram Premium), the field is simply omitted ->
+// the button renders normally without an icon, with no error from Telegram.
 function withButtonIcon(button, key) {
   const id = iconFor(key);
   if (!id) return button;
   return { ...button, text: stripLeadingEmoji(button.text), icon_custom_emoji_id: id };
 }
 
-// Sama seperti withButtonIcon(), tapi PRIORITASKAN emoji premium milik produk
-// itu sendiri (product.emojiId, mis. logo/ikon khas Netflix/Spotify/Gemini
-// yang owner pilih sendiri saat produk itu dibuat - lihat productEmojiHtml())
-// kalau ada, baru fallback ke ID global "key" (mis. tombol "buy_now" biasa)
-// kalau produk itu belum punya emojiId sendiri. Dipakai di tombol-tombol
-// yang tampil PER PRODUK (mis. "✅ Buy Now" di halaman deskripsi, "🛒 Order
-// Sekarang" di notifikasi channel) supaya ikonnya "sesuai aplikasi" yang
-// dibeli, bukan cuma 1 ikon generik yang sama untuk semua produk.
+// Like withButtonIcon(), but PREFERRING the product's own premium emoji
+// (product.emojiId - the Netflix/Spotify/Gemini logo the owner picked when
+// creating that product, see productEmojiHtml()) when it has one, falling back to
+// the global "key" ID (an ordinary "buy_now" button, say) when the product has no
+// emojiId of its own. Used on buttons rendered PER PRODUCT (the "✅ Buy Now"
+// button on the description page, "🛒 Order Now" in a channel notification) so
+// the icon matches the app being bought, rather than one generic icon for every
+// product.
 function withButtonIconPreferProduct(button, key, product) {
   if (product && product.emojiId) {
     return { ...button, text: stripLeadingEmoji(button.text), icon_custom_emoji_id: product.emojiId };
@@ -1020,26 +1015,26 @@ function withButtonIconPreferProduct(button, key, product) {
   return withButtonIcon(button, key);
 }
 
-// Beri warna latar ke tombol inline keyboard lewat field "style" (Bot API 9.4+,
-// rilis 9 Feb 2026). Nilai valid: 'primary' (biru), 'success' (hijau), 'danger'
-// (merah). Kalau tidak diisi, Telegram pakai tampilan default (transparan/putih).
-// Berbeda dari icon_custom_emoji_id, style TIDAK butuh Telegram Premium sama
-// sekali - berlaku untuk semua bot, jadi aman dipakai langsung tanpa fallback.
+// Give an inline keyboard button a background colour via the "style" field (Bot
+// API 9.4+, released 9 Feb 2026). Valid values: 'primary' (blue), 'success'
+// (green), 'danger' (red). When unset, Telegram uses the default transparent
+// look. Unlike icon_custom_emoji_id, style does NOT require Telegram Premium at
+// all - it works for every bot, so it is safe to use with no fallback.
 function withStyle(button, style) {
   return { ...button, style };
 }
 
-// ===== Emoji premium PER PRODUK (beda lagi dari 2 mekanisme di atas) =====
-// Sumbernya BUKAN file emoji-id-teks.js / emoji-id-menu-inline.js (yang isinya
-// manual & global untuk 1 nilai/1 key), tapi emoji premium yang owner pilih
-// SENDIRI langsung dari panel Telegram Premium-nya saat ngetik nama produk di
-// alur "➕ Tambah Produk" (lihat handler 'addproduct_name'). Begitu diketik,
-// Telegram sudah kasih custom_emoji_id ASLI-nya lewat message.entities -> ID
-// itu disimpan per-produk sebagai product.emojiId (+ product.emoji sebagai
-// fallback karakter unicode-nya). Tidak perlu isi ID manual di file manapun.
+// ===== PER-PRODUCT premium emoji (different again from the 2 mechanisms above) =====
+// The source is NOT emoji-id-teks.js / emoji-id-menu-inline.js (which hold manual,
+// global values per key), but the premium emoji the owner picks THEMSELVES
+// straight from their Telegram Premium panel while typing the product name in the
+// "➕ Add Product" flow (see the 'addproduct_name' handler). As soon as it is
+// typed, Telegram supplies the REAL custom_emoji_id via message.entities -> that
+// ID is stored per product as product.emojiId (plus product.emoji as the unicode
+// fallback character). No manual ID needs entering in any file.
 
-// Untuk teks dengan parse_mode 'HTML' -> render sebagai <tg-emoji> asli kalau
-// produk itu punya emojiId, kalau tidak fallback ke emoji unicode biasa / 📦.
+// For text with parse_mode 'HTML' -> render it as a real <tg-emoji> when the
+// product has an emojiId, otherwise fall back to the plain unicode emoji / 📦.
 function productEmojiHtml(product) {
   if (!product) return '📦';
   return product.emojiId
@@ -1047,106 +1042,106 @@ function productEmojiHtml(product) {
     : (product.emoji || '📦');
 }
 
-// Untuk tombol inline keyboard -> teks tombol tetap pakai emoji unicode biasa
-// (Telegram tidak bisa render custom emoji DI DALAM teks tombol), tapi kalau
-// produk punya emojiId, tambahkan juga sebagai ICON tombol (Bot API 9.4+)
-// supaya tetap kelihatan premium di sebelah teksnya.
+// For inline keyboard buttons -> the button text still uses the plain unicode
+// emoji (Telegram cannot render a custom emoji INSIDE button text), but when the
+// product has an emojiId it is also attached as the button ICON (Bot API 9.4+) so
+// it still looks premium beside the text.
 function withProductIcon(button, product) {
   return product && product.emojiId ? { ...button, icon_custom_emoji_id: product.emojiId } : button;
 }
 
-// ===== Emoji premium PER GIFT (🎁 Buy Gift / 💌 Confess Gift) =====
-// Beda gift Telegram (Snoop Cigar, Vintage Cigar, dll) bisa aja harganya
-// SAMA (mis. sama-sama 50⭐) tapi bentuknya beda - jadi key-nya PER GIFT ID
-// (g.id), BUKAN per nominal stars, supaya 2 gift beda yang kebetulan
-// harganya sama tetap bisa dikasih ikon beda-beda.
+// ===== PER-GIFT premium emoji (🎁 Buy Gift / 💌 Confess Gift) =====
+// Two different Telegram gifts (Snoop Cigar, Vintage Cigar, and so on) may well
+// cost THE SAME (both 50⭐, say) while looking completely different - so the key
+// is PER GIFT ID (g.id), NOT per star amount, so two different gifts that happen
+// to cost the same can still have different icons.
 //
-// Prioritas ID ikon (dari yang paling diutamakan):
-//   1. Override manual admin lewat "🎁 Kelola Emoji Gift" (db key
-//      `gift:<giftId>`) - paling reliable, karena banyak sticker gift asli
-//      dari Telegram TIDAK terdaftar sebagai custom emoji (lihat
-//      giftStickerEmojiId() di userbot.js), jadi live detection sering null.
-//   2. custom_emoji_id ASLI dari sticker gift itu sendiri (live dari
-//      Telegram, kalau kebetulan terdaftar sebagai custom emoji).
-//   3. Fallback 1 ikon global "gift" (emoji-id-menu-inline.js / "🎨 Kelola
-//      Emoji ID" -> kategori "🎁 Tombol Pilihan Gift").
-// Balikin null kalau ketiganya kosong (tombol/teks tampil normal tanpa
-// ikon premium, tidak error).
+// Icon ID priority (most preferred first):
+//   1. A manual admin override via "🎁 Manage Gift Emoji" (db key
+//      `gift:<giftId>`) - the most reliable, because many real Telegram gift
+//      stickers are NOT registered as custom emoji (see giftStickerEmojiId() in
+//      userbot.js), so live detection is often null.
+//   2. The REAL custom_emoji_id from the gift's own sticker (live from Telegram,
+//      when it happens to be registered as a custom emoji).
+//   3. A fallback to the single global "gift" icon (emoji-id-menu-inline.js /
+//      "🎨 Manage Emoji ID" -> the "🎁 Gift Selection Buttons" category).
+// Returns null when all three are empty (the button/text renders normally without
+// a premium icon, with no error).
 function giftIconId(gift) {
   if (!gift) return null;
   return db.getEmojiId(`gift:${gift.id}`) || gift.emojiId || iconFor('gift') || null;
 }
 
-// Untuk teks dengan parse_mode 'HTML' -> render sebagai <tg-emoji> asli kalau
-// gift itu (lewat giftIconId()) punya ID, kalau tidak fallback ke 🎁 biasa.
+// For text with parse_mode 'HTML' -> render it as a real <tg-emoji> when the gift
+// has an ID (via giftIconId()), otherwise fall back to a plain 🎁.
 function giftEmojiHtml(gift) {
   const id = giftIconId(gift);
   return id ? `<tg-emoji emoji-id="${id}">🎁</tg-emoji>` : '🎁';
 }
 
-// Sama seperti withProductIcon() tapi untuk gift - dipakai di tombol list
-// "🎁 Buy Gift" / "💌 Confess Gift" supaya tiap gift bisa tampil dengan ikon
-// yang "sesuai" gift aslinya (bukan cuma 1 ikon generik yang sama semua).
+// Like withProductIcon() but for gifts - used on the "🎁 Buy Gift" / "💌 Confess
+// Gift" list buttons so each gift can appear with an icon matching the real gift
+// (rather than one generic icon for all of them).
 function withGiftIcon(button, gift) {
   const id = giftIconId(gift);
   return id ? { ...button, icon_custom_emoji_id: id } : button;
 }
 
-// ===== Logo produk PER PRODUK (mis. logo resmi Netflix/Spotify/Gemini) =====
-// Diisi admin sendiri lewat /admin -> "🖼️ Set Logo Produk" (URL gambar https,
-// disimpan sebagai product.logoUrl). Ini TERPISAH dari emoji premium (emojiId)
-// di atas - emoji tetap tampil di teks (via <tg-emoji>), sedangkan logo ini
-// dipakai sebagai GAMBAR pada notifikasi channel (dikirim lewat sendPhoto,
-// caption tetap pakai tag HTML yang sama seperti teks biasa). Kalau belum
-// diisi -> null, pemanggilnya otomatis fallback ke sendMessage teks biasa
-// (emoji tetap tampil normal), tidak ada error/bug dari sini.
+// ===== PER-PRODUCT logo (the official Netflix/Spotify/Gemini logo, say) =====
+// Set by the admin via /admin -> "🖼️ Set Product Logo" (an https image URL,
+// stored as product.logoUrl). This is SEPARATE from the premium emoji (emojiId)
+// above - the emoji still appears in text (via <tg-emoji>), while this logo is
+// used as the IMAGE in channel notifications (sent via sendPhoto, with the
+// caption still using the same HTML tags as ordinary text). When unset -> null,
+// and the caller falls back automatically to a plain sendMessage (the emoji still
+// showing normally), with no error or bug from here.
 function productLogoUrl(product) {
   const url = product && product.logoUrl;
   return (typeof url === 'string' && /^https?:\/\//i.test(url.trim())) ? url.trim() : null;
 }
 
-// Aman dipakai di dalam parse_mode: 'HTML' (link redeem yang diinput admin
-// bisa saja mengandung karakter & < > secara tidak sengaja -> wajib di-escape
-// dulu supaya Telegram tidak menolak pesan / bot tidak error).
+// Safe to use inside parse_mode: 'HTML' (a redeem link entered by an admin may
+// accidentally contain & < > characters -> they must be escaped first so Telegram
+// does not reject the message and the bot does not error).
 const escapeHtml = (s) => String(s)
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;');
 
-// Kirim 1 pesan (HTML) ke SEMUA admin di ADMIN_IDS - dipakai untuk notifikasi
-// yang bukan "order baru" biasa (mis. kegagalan order Supplier API), supaya
-// tidak duplikasi pola ADMIN_IDS.forEach(...) di banyak tempat.
+// Send one (HTML) message to EVERY admin in ADMIN_IDS - used for notifications
+// that are not an ordinary "new order" (a Supplier API order failure, say), so
+// the ADMIN_IDS.forEach(...) pattern is not duplicated in many places.
 function notifyAdmins(text) {
   ADMIN_IDS.forEach(adminId => {
     bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
   });
 }
 
-// Kirim 1 pesan (HTML) ke GROUP TELEGRAM yang sama dipakai fitur "💾 Auto
-// Backup" (Group ID di db.settings.backup.groupId, diatur lewat /admin ->
-// 💾 Auto Backup -> ganti Group ID - lihat db.getBackupSettings()). Dipakai
-// untuk notifikasi order (mis. Buy Gift/Confess sukses) yang admin mau
-// tembus ke group, bukan cuma DM pribadi ke ADMIN_IDS. Sengaja pakai ulang
-// group yang sama (bukan bikin GROUP_ID terpisah) - bot memang sudah jadi
-// member di situ untuk keperluan backup. Silent-fail (di-skip) kalau
-// groupId belum pernah di-set, supaya tidak ganggu jalannya order utama.
+// Send one (HTML) message to the same TELEGRAM GROUP used by the "💾 Auto Backup"
+// feature (the Group ID in db.settings.backup.groupId, set via /admin ->
+// 💾 Auto Backup -> change Group ID - see db.getBackupSettings()). Used for order
+// notifications (a successful Buy Gift/Confess, say) that the admin wants pushed
+// to the group rather than only as a private DM to ADMIN_IDS. It deliberately
+// reuses the same group (rather than introducing a separate GROUP_ID) - the bot
+// is already a member there for backups. It fails silently (is skipped) when no
+// groupId has ever been set, so it never disrupts the main order flow.
 function notifyOrderGroup(text) {
   const groupId = db.getBackupSettings().groupId;
-  if (!groupId) return; // belum di-set, skip diam-diam (order tetap jalan normal)
+  if (!groupId) return; // not set yet, skip quietly (the order still runs normally)
   bot.sendMessage(groupId, text, { parse_mode: 'HTML' }).catch(err => {
-    logError('notifyOrderGroup', err); // biar ketahuan di log kalau bot ternyata bukan member/di-kick dari group
+    logError('notifyOrderGroup', err); // so the log shows it if the bot is not a member / was kicked from the group
   });
 }
 
-// ===== Deteksi error "saldo supplier habis" dari pesan error API luar =====
-// Dipakai supaya buyer TIDAK melihat pesan generik "stok tidak tersedia"
-// (menyesatkan - kesannya stok remote-nya kosong) padahal penyebab
-// sebenarnya adalah saldo wallet TOKO KITA di sisi supplier (AIVerse Hub
-// atau Canboso) yang habis/belum di-top-up. Cukup dicek dari kata kunci
-// umum yang lazim dipakai di pesan error semacam ini (balance/saldo/
-// insufficient/top up/fund dsb) - TANPA pernah menyebut nama brand
-// supplier ke buyer (lihat supplier_balance_empty di lang.js), karena
-// buyer tidak perlu tahu supplier mana yang dipakai di belakang layar.
+// ===== Detecting a "supplier balance empty" error from an external API message =====
+// Used so the buyer does NOT see the generic "stock unavailable" message
+// (misleading - it implies the remote stock is empty) when the real cause is OUR
+// STORE's wallet balance on the supplier's side (AIVerse Hub or Canboso) being
+// empty or not yet topped up. It is detected from the keywords commonly used in
+// error messages like this (balance/saldo/insufficient/top up/fund and so on) -
+// WITHOUT ever naming the supplier brand to the buyer (see supplier_balance_empty
+// in lang.js), because buyers do not need to know which supplier is used behind
+// the scenes.
 function isSupplierBalanceError(message) {
   if (!message) return false;
   const m = String(message).toLowerCase();
@@ -1155,26 +1150,26 @@ function isSupplierBalanceError(message) {
   return balanceWord && emptyWord;
 }
 
-// ===== BUG FIX: alert admin saat live stock Canboso GAGAL diparse =====
-// Sebelumnya, kalau canboso.getLiveStock() balik stock = NaN (nama field
-// stok di response Canboso belum dikenali oleh pick() di supplierCanboso.js)
-// atau produk sudah tidak ketemu di Canboso, bot cuma console.error() -
-// TIDAK ada yang memberi tahu admin. Akibatnya variant.stock lokal
-// (mis. 0 dari awal link) tidak pernah ter-update selamanya, buyer selalu
-// lihat "Stok tersedia: 0" walau stok sebenarnya di Canboso ADA, dan admin
-// baru sadar kalau kebetulan buka 🔄 Refresh Harga & Stok manual. Sekarang
-// dialert otomatis begitu buyer pertama kali kena kondisi ini, dengan
-// cooldown 30 menit PER varian supaya tidak spam admin tiap buyer buka
-// halaman produk yang sama.
-const canbosoStockAlertCooldown = new Map(); // canbosoProductId -> timestamp alert terakhir
+// ===== BUG FIX: alert admins when the Canboso live stock FAILS to parse =====
+// Previously, when canboso.getLiveStock() returned stock = NaN (the stock field
+// name in Canboso's response not yet recognised by pick() in supplierCanboso.js)
+// or the product was no longer found on Canboso, the bot only called
+// console.error() - NOBODY told the admin. As a result the local variant.stock
+// (0 from the moment it was linked, say) was never updated again, buyers always
+// saw "Available stock: 0" even though stock really did exist on Canboso, and the
+// admin only noticed if they happened to open 🔄 Refresh Price & Stock manually.
+// An alert is now sent automatically the first time a buyer hits this condition,
+// with a 30-minute cooldown PER variant so admins are not spammed every time a
+// buyer opens the same product page.
+const canbosoStockAlertCooldown = new Map(); // canbosoProductId -> timestamp of the last alert
 function alertCanbosoStockIssue(variant, reason) {
   const key = String(variant.canbosoProductId);
   const now = Date.now();
   const last = canbosoStockAlertCooldown.get(key) || 0;
-  if (now - last < 30 * 60 * 1000) return; // masih dalam cooldown, skip
+  if (now - last < 30 * 60 * 1000) return; // still within the cooldown, skip
   canbosoStockAlertCooldown.set(key, now);
   notifyAdmins(
-    `⚠️ <b>Live stock Canboso gagal disinkron</b>\n\n` +
+    `⚠️ <b>Canboso live stock failed to sync</b>\n\n` +
     `Product ID: <code>${escapeHtml(key)}</code>\n` +
     `Alasan: ${escapeHtml(reason)}\n\n` +
     `Buyer akan tetap melihat stok LOKAL lama (bisa saja salah/basi) sampai ini diperbaiki. ` +
