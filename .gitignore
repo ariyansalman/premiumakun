@@ -18,3 +18,8 @@ session.txt
 *.log
 npm-debug.log*
 .DS_Store
+
+# Local database runtime artifacts
+data/db.json.bak
+data/db.json.tmp
+*.bak
