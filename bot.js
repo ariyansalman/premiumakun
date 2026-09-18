@@ -5016,12 +5016,12 @@ function adminEmojiTeksGroupKeyboard() {
   return { inline_keyboard: rows };
 }
 
-// Cek apakah 1 key emoji "terisi" - baik lewat hasil tangkap otomatis di
-// database (prioritas 1, lihat teksEmoji()/iconFor()) MAUPUN lewat default
-// yang sudah ditempel langsung di kode (EMOJI_ID_TEKS_BACKUP / EMOJI_IDS).
-// Tanpa cek kode ini, checklist admin bisa nampilin ⚪ (belum diisi) padahal
-// emoji-nya SUDAH tampil premium di pesan asli - bikin admin salah sangka
-// kirain belum ke-set padahal sebenarnya sudah aktif dari kode.
+// Check whether an emoji key is "filled" - either from an automatic capture in
+// the database (priority 1, see teksEmoji()/iconFor()) OR from a default pasted
+// straight into the code (EMOJI_ID_TEKS_BACKUP / EMOJI_IDS).
+// Without checking the code too, the admin checklist could show ⚪ (not set)
+// while the emoji ALREADY renders as premium in the real message - leaving the
+// admin thinking it was unset when it is in fact active from the code.
 function isTeksEmojiFilled(key) {
   return !!(db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEKS_BACKUP[key]);
 }
@@ -5065,10 +5065,10 @@ function adminProductPickKeyboard(action, productsOverride) {
   return { inline_keyboard: rows };
 }
 
-// parentTarget: callback_data tujuan tombol "‹ Kembali" - default 'admin:menu'
-// (menu utama) kalau tidak diisi. Kalau parentTarget BUKAN menu utama, ikut
-// ditambahkan 1 tombol lagi "🏠 Menu Utama" di bawahnya supaya admin tetap
-// bisa lompat langsung ke menu utama tanpa harus mundur selangkah-selangkah.
+// parentTarget: the callback_data the "‹ Back" button points at - defaults to
+// 'admin:menu' (the main menu) when omitted. When parentTarget is NOT the main
+// menu, an extra "🏠 Main Menu" button is added below it so admins can still jump
+// straight to the main menu instead of stepping back one level at a time.
 function adminBackKeyboard(parentTarget) {
   const target = parentTarget || 'admin:menu';
   const rows = [[withButtonIcon({ text: '‹ Back', callback_data: target }, 'back')]];
@@ -5078,57 +5078,57 @@ function adminBackKeyboard(parentTarget) {
   return { inline_keyboard: rows };
 }
 
-// ===== Data buat fitur "🔐 Wajib Join Channel/Grup" =====
-// Daftar "channels" di bawah ini boleh dicampur bebas: entri channel ATAU
-// entri group/supergroup, dua-duanya dicek dengan mekanisme yang SAMA persis
-// (isUserMemberOfChannel() cuma pakai getChatMember, tidak peduli tipe chat-
-// nya) - jadi 1 user bisa diwajibkan join beberapa channel SEKALIGUS beberapa
-// group cukup dengan menambahkan semuanya lewat "➕ Tambah Channel/Grup" di
-// bawah, tanpa perlu menu/kode terpisah untuk group.
+// ===== Data for the "🔐 Force Join Channel/Group" feature =====
+// The "channels" list below can freely mix channel entries AND group/supergroup
+// entries - both are checked by EXACTLY the same mechanism
+// (isUserMemberOfChannel() only uses getChatMember, which does not care about the
+// chat type) - so one user can be required to join several channels AND several
+// groups simply by adding them all via "➕ Add Channel/Group" below, with no
+// separate menu or code needed for groups.
 function adminForceJoinText() {
   const { enabled, channels } = db.getForceJoinSettings();
-  const statusLine = enabled ? '🟢 *AKTIF* - user wajib join semua channel/grup di bawah sebelum bisa pakai bot.' : '🔴 *NONAKTIF* - user bebas pakai bot tanpa perlu join channel/grup apapun.';
+  const statusLine = enabled ? '🟢 *ACTIVE* - users must join every channel/group below before they can use the bot.' : '🔴 *INACTIVE* - users can use the bot freely without joining any channel/group.';
   const list = channels.length
     ? channels.map((c, i) => `${i + 1}. *${c.title}*\n   🔗 ${c.link}\n   🆔 \`${c.chatRef}\``).join('\n\n')
-    : '_Belum ada channel/grup yang ditambahkan._';
-  return `🔐 *Wajib Join Channel/Grup*\n\nStatus: ${statusLine}\n\n📋 *Daftar Channel/Grup:*\n${list}`;
+    : '_No channel/group has been added yet._';
+  return `🔐 *Force Join Channel/Group*\n\nStatus: ${statusLine}\n\n📋 *Channel/Group List:*\n${list}`;
 }
 
 function adminForceJoinKeyboard() {
   const { enabled, channels } = db.getForceJoinSettings();
   const rows = [];
   rows.push([withButtonIcon(
-    { text: enabled ? '🔴 Nonaktifkan Wajib Join' : '🟢 Aktifkan Wajib Join', callback_data: 'admin:forcejoin_toggle' },
+    { text: enabled ? '🔴 Disable Force Join' : '🟢 Enable Force Join', callback_data: 'admin:forcejoin_toggle' },
     'admin_forcejoin'
   )]);
-  rows.push([withButtonIcon({ text: '➕ Tambah Channel/Grup', callback_data: 'admin:forcejoin_add' }, 'admin_tambah_produk')]);
+  rows.push([withButtonIcon({ text: '➕ Add Channel/Group', callback_data: 'admin:forcejoin_add' }, 'admin_tambah_produk')]);
   channels.forEach(c => {
-    rows.push([{ text: `🗑️ Hapus: ${c.title}`, callback_data: `admin:forcejoin_remove:${c.id}` }]);
+    rows.push([{ text: `🗑️ Remove: ${c.title}`, callback_data: `admin:forcejoin_remove:${c.id}` }]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
   rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
-// ===== Admin: 📣 Set Notifikasi Channel (New Purchase / New Wallet Top-Up) =====
+// ===== Admin: 📣 Set Channel Notifications (New Purchase / New Wallet Top-Up) =====
 function adminChannelNotifText() {
   const { enabled, chatRef, title, notifyPurchase, notifyTopup, notifyReferral, notifyMaintenance } = db.getChannelNotifSettings();
   const statusLine = enabled
-    ? '🟢 *AKTIF* - tiap ada pembelian/topup/referral sukses, bot otomatis kirim notifikasi ke channel tujuan.'
-    : '🔴 *NONAKTIF* - belum ada notifikasi yang dikirim ke channel manapun.';
+    ? '🟢 *ACTIVE* - on every successful purchase/topup/referral, the bot automatically posts a notification to the destination channel.'
+    : '🔴 *INACTIVE* - no notification is being sent to any channel.';
   const targetLine = chatRef
     ? `📢 *${title || chatRef}*\n🆔 \`${chatRef}\``
-    : '_Belum diatur - klik "🆔 Set Channel Tujuan" di bawah._';
+    : '_Not set yet - tap "🆔 Set Destination Channel" below._';
   return (
-    `📣 *Set Notifikasi Channel*\n\n` +
+    `📣 *Set Channel Notifications*\n\n` +
     `Status: ${statusLine}\n\n` +
-    `*Channel Tujuan:*\n${targetLine}\n\n` +
-    `*Jenis notifikasi:*\n` +
-    `${notifyPurchase ? '🟢' : '🔴'} 🎉 New Purchase (pembelian produk)\n` +
-    `${notifyTopup ? '🟢' : '🔴'} 💳 New Wallet Top-Up (topup QRIS/USDT/TON)\n` +
-    `${notifyReferral ? '🟢' : '🔴'} 🎁 New Referral Success (referral baru masuk)\n` +
-    `${notifyMaintenance ? '🟢' : '🔴'} 🛠️ Maintenance Dimulai/Selesai (aktif/nonaktifkan Mode Maintenance)\n\n` +
-    `_Tiap ikon di pesan notifikasi bisa diganti lewat "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "📢 Notifikasi Channel"._`
+    `*Destination Channel:*\n${targetLine}\n\n` +
+    `*Notification types:*\n` +
+    `${notifyPurchase ? '🟢' : '🔴'} 🎉 New Purchase (a product purchase)\n` +
+    `${notifyTopup ? '🟢' : '🔴'} 💳 New Wallet Top-Up (a QRIS/USDT/TON topup)\n` +
+    `${notifyReferral ? '🟢' : '🔴'} 🎁 New Referral Success (a new referral came in)\n` +
+    `${notifyMaintenance ? '🟢' : '🔴'} 🛠️ Maintenance Started/Finished (enabling/disabling Maintenance Mode)\n\n` +
+    `_Every icon in a notification message can be changed via "🎨 Manage Emoji ID" -> "✍️ Emoji in Message Text" -> "📢 Channel Notifications"._`
   );
 }
 
@@ -5136,10 +5136,10 @@ function adminChannelNotifKeyboard() {
   const { enabled, chatRef, notifyPurchase, notifyTopup, notifyReferral, notifyMaintenance } = db.getChannelNotifSettings();
   const rows = [];
   rows.push([withButtonIcon(
-    { text: enabled ? '🔴 Nonaktifkan Notifikasi' : '🟢 Aktifkan Notifikasi', callback_data: 'admin:channelnotif_toggle' },
+    { text: enabled ? '🔴 Disable Notifications' : '🟢 Enable Notifications', callback_data: 'admin:channelnotif_toggle' },
     'admin_channel_notif'
   )]);
-  rows.push([{ text: '🆔 Set Channel Tujuan', callback_data: 'admin:channelnotif_setchannel' }]);
+  rows.push([{ text: '🆔 Set Destination Channel', callback_data: 'admin:channelnotif_setchannel' }]);
   rows.push([
     { text: `${notifyPurchase ? '🟢' : '🔴'} New Purchase`, callback_data: 'admin:channelnotif_toggle_purchase' },
     { text: `${notifyTopup ? '🟢' : '🔴'} New Top-Up`, callback_data: 'admin:channelnotif_toggle_topup' }
@@ -5150,8 +5150,8 @@ function adminChannelNotifKeyboard() {
   ]);
   if (chatRef) {
     rows.push([
-      { text: '🧪 Contoh Purchase', callback_data: 'admin:channelnotif_test' },
-      { text: '🧪 Contoh Referral', callback_data: 'admin:channelnotif_test_referral' }
+      { text: '🧪 Sample Purchase', callback_data: 'admin:channelnotif_test' },
+      { text: '🧪 Sample Referral', callback_data: 'admin:channelnotif_test_referral' }
     ]);
   }
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
@@ -5160,39 +5160,38 @@ function adminChannelNotifKeyboard() {
 }
 
 function adminVariantPickKeyboard(product, action, backCallback) {
-  // Pakai index varian (bukan v.id) di callback_data - v.id biasanya sudah
-  // mengandung product.id sebagai prefix (mis. "gemini-pro-18-bulan-18"),
-  // jadi kalau ditulis lagi utuh di sini callback_data gampang lewat batas
-  // 64 byte Telegram dan bikin error "Bad Request: BUTTON_DATA_INVALID".
+  // Use the variant index (not v.id) in callback_data - v.id usually already
+  // contains product.id as a prefix ("gemini-pro-18-months-18", say), so writing
+  // it out in full here easily pushes callback_data past Telegram's 64-byte limit
+  // and triggers a "Bad Request: BUTTON_DATA_INVALID" error.
   const rows = product.variants.map((v, i) => ([
-    { text: `${v.label} (stok saat ini: ${db.getTotalStock(v)})`, callback_data: `admin:${action}:${product.id}:${i}` }
+    { text: `${v.label} (current stock: ${db.getTotalStock(v)})`, callback_data: `admin:${action}:${product.id}:${i}` }
   ]));
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: backCallback || 'admin:addstock' }, 'back')]);
   rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
-// Sama seperti adminVariantPickKeyboard() di atas, tapi HANYA tampilkan
-// varian yang sudah terhubung Supplier API (v.supplierServiceId terisi) -
-// dipakai oleh alur standalone "📊 Atur Markup 3-Tier" (lihat handler
-// 'suppliertiermarkuppick_pick') supaya admin tidak salah pilih varian
-// manual yang tidak punya modal Supplier untuk dihitung tier-nya. Index
-// callback_data tetap index ASLI ke product.variants (bukan index dalam
-// daftar yang sudah difilter), supaya handler tujuan tinggal langsung pakai
-// product.variants[i] tanpa perlu mapping ulang.
+// Like adminVariantPickKeyboard() above, but showing ONLY variants already linked
+// to the Supplier API (v.supplierServiceId set) - used by the standalone
+// "📊 Set 3-Tier Markup" flow (see the 'suppliertiermarkuppick_pick' handler) so
+// an admin cannot mistakenly pick a manual variant that has no supplier cost to
+// compute tiers from. The callback_data index stays the ORIGINAL index into
+// product.variants (not the index within the filtered list), so the target
+// handler can use product.variants[i] directly with no remapping.
 function adminSupplierVariantPickKeyboard(product, action, backCallback) {
   const rows = [];
   product.variants.forEach((v, i) => {
     if (!v.supplierServiceId) return;
     const costLabel = typeof v.supplierCost === 'number' ? usd(v.supplierCost) : '?';
-    rows.push([{ text: `${v.label} (modal: ${costLabel})`, callback_data: `admin:${action}:${product.id}:${i}` }]);
+    rows.push([{ text: `${v.label} (cost: ${costLabel})`, callback_data: `admin:${action}:${product.id}:${i}` }]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: backCallback || 'admin:supplier' }, 'back')]);
   rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
-// ===== Helper untuk fitur "Supplier API" =====
+// ===== Helpers for the "Supplier API" feature =====
 
 function supplierBackKeyboard() {
   return {
