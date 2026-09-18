@@ -1172,18 +1172,18 @@ function alertCanbosoStockIssue(variant, reason) {
     `⚠️ <b>Canboso live stock failed to sync</b>\n\n` +
     `Product ID: <code>${escapeHtml(key)}</code>\n` +
     `Alasan: ${escapeHtml(reason)}\n\n` +
-    `Buyer akan tetap melihat stok LOKAL lama (bisa saja salah/basi) sampai ini diperbaiki. ` +
-    `Cek <b>/admin → 🔌 Canboso API → 🐞 Lihat Raw Response</b> untuk lihat nama field stok yang sebenarnya dipakai Canboso, lalu sesuaikan daftar kandidat di <code>supplierCanboso.js</code>.`
+    `Buyers will keep seeing the old LOCAL stock (which may be wrong or stale) until this is fixed. ` +
+    `Check <b>/admin → 🔌 Canboso API → 🐞 View Raw Response</b> to see the stock field name Canboso actually uses, then add it to the candidate list in supplierCanboso.js.`
   );
 }
 
-// ===== Bug fix: diagnostik raw response dulu kepotong duluan sama field
-// panjang (mis. "description") sebelum sempat sampai ke field price/stock -
-// jadi admin tidak pernah benar-benar lihat nama field yang dicari. Sekarang
-// diringkas jadi daftar "key=value" per field (bukan JSON.stringify utuh),
-// dengan value string panjang (>40 char, misal description) dipotong supaya
-// field pendek seperti price/stock/qty tetap ikut kebawa & tidak keburu
-// kena limit potongan pesan Telegram.
+// ===== Bug fix: the raw response diagnostic used to be truncated by a long field
+// ("description", say) before ever reaching the price/stock fields - so the admin
+// never actually saw the field name they were looking for. It is now condensed
+// into a "key=value" list per field (rather than a full JSON.stringify), with
+// long string values (>40 chars, such as description) truncated so short fields
+// like price/stock/qty are still included and do not fall past Telegram's message
+// length limit.
 function describeRawFields(raw, maxLen = 600) {
   if (!raw || typeof raw !== 'object') return String(raw);
   const parts = [];
@@ -1198,32 +1198,32 @@ function describeRawFields(raw, maxLen = 600) {
   return joined.length > maxLen ? joined.slice(0, maxLen) + '…' : joined;
 }
 
-// ================= NOTIFIKASI CHANNEL OTOMATIS =================
-// Fitur: /admin -> 📢 Set Notifikasi Channel. Tiap ada pembelian produk sukses
-// ATAU topup Wallet sukses (QRIS/USDT/TON), bot otomatis kirim 1 pesan teks +
-// menu inline ke channel/group tujuan yang diatur admin (data/db.json ->
-// settings.channelNotif). Semua ikon di pesan ini WAJIB pakai custom emoji
-// premium yang sudah ada (lewat teksEmoji()/withButtonIcon() - prioritas ID
-// dari admin "🎨 Kelola Emoji ID", fallback ke ID yang sudah dipakai di
-// halaman lain - lihat komentar grup "channelnotif_*" di emoji-id-teks.js),
-// bukan ID baru yang belum tentu ke-capture. Admin tetap bisa ganti emoji
-// manapun di sini kapan saja lewat "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks
-// Pesan" -> "📢 Notifikasi Channel".
+// ================= AUTOMATIC CHANNEL NOTIFICATIONS =================
+// Feature: /admin -> 📢 Set Channel Notifications. On every successful product
+// purchase OR successful Wallet topup (QRIS/USDT/TON), the bot automatically
+// sends one text message plus an inline menu to the destination channel/group the
+// admin configured (data/db.json -> settings.channelNotif). Every icon in this
+// message MUST use a premium custom emoji that already exists (via
+// teksEmoji()/withButtonIcon() - ID priority from admin "🎨 Manage Emoji ID",
+// falling back to an ID already used on another page - see the "channelnotif_*"
+// group comments in emoji-id-teks.js), not a new ID that may never have been
+// captured. Admins can still change any emoji here at any time via "🎨 Manage
+// Emoji ID" -> "✍️ Emoji in Message Text" -> "📢 Channel Notifications".
 
-// Mask sebagian ID (chatId user / Order ID / Deposit ID) sebelum ditampilkan
-// ke channel PUBLIK - supaya tetap ada jejak identifikasi (buat verifikasi
-// manual admin) tapi tidak membocorkan ID utuh user ke publik. Contoh:
-// "6148372901107" -> "6148***107". Kalau ID terlalu pendek untuk dipotong
-// aman (<= 7 karakter), tampilkan apa adanya.
+// Mask part of an ID (a user's chatId / Order ID / Deposit ID) before showing it
+// in a PUBLIC channel - so there is still an identifying trace (for the admin's
+// manual verification) without leaking a user's full ID publicly. For example:
+// "6148372901107" -> "6148***107". When an ID is too short to truncate safely
+// (7 characters or fewer), it is shown as is.
 function maskChannelId(raw) {
   const str = String(raw);
   if (str.length <= 7) return str;
   return `${str.slice(0, 4)}***${str.slice(-3)}`;
 }
 
-// Format waktu WIB (Asia/Jakarta) gaya "31-Aug-2026 01:41 AM WIB" - dipakai
-// khusus di notifikasi channel supaya konsisten & mudah dibaca publik,
-// terpisah dari format tanggal lain di bot yang pakai lang.js/locale user.
+// Format a time in WIB (Asia/Jakarta) as "31-Aug-2026 01:41 AM WIB" - used
+// specifically in channel notifications so they are consistent and easy for the
+// public to read, separate from the other date formats in the bot.
 function formatChannelTime() {
   const now = new Date();
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -1234,13 +1234,13 @@ function formatChannelTime() {
   return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod')} WIB`;
 }
 
-// Menu inline yang menempel di SETIAP notifikasi channel (baik New Purchase
-// maupun New Wallet Top-Up) - ajakan aksi buat orang yang lihat channel-nya:
-// order sekarang / hubungi admin. Kedua tombol otomatis disembunyikan kalau
-// data yang dibutuhkan belum diisi di .env (BOT_USERNAME / ADMIN_IDS).
-// "product" opsional - kalau diisi (notifikasi kind 'purchase') DAN produk
-// itu punya emojiId sendiri, ikon tombol "Order Now" pakai emoji premium
-// PRODUK itu (sesuai aplikasi yang baru dibeli), bukan cuma ikon 🛒 generik.
+// The inline menu attached to EVERY channel notification (both New Purchase and
+// New Wallet Top-Up) - a call to action for people watching the channel: order
+// now / contact the admin. Both buttons are hidden automatically when the data
+// they need is not set in .env (BOT_USERNAME / ADMIN_IDS).
+// "product" is optional - when supplied (a 'purchase' notification) AND that
+// product has its own emojiId, the "Order Now" button icon uses THAT PRODUCT's
+// premium emoji (matching the app just bought) rather than a generic 🛒 icon.
 function channelNotifKeyboard(product) {
   const row = [];
   if (BOT_USERNAME) {
@@ -1253,8 +1253,8 @@ function channelNotifKeyboard(product) {
   return row.length ? { inline_keyboard: [row] } : undefined;
 }
 
-// Teks "🎉 New Purchase!" - dikirim setelah 1 order berhasil (auto-delivery
-// ATAU manual, sama saja - channel cuma nampilin ringkasan transaksinya).
+// The "🎉 New Purchase!" text - sent after a successful order (auto-delivery OR
+// manual, it makes no difference - the channel only shows a transaction summary).
 function buildChannelPurchaseText(chatId, product, variant, qty, total) {
   const border = teksEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
@@ -1275,8 +1275,8 @@ function buildChannelPurchaseText(chatId, product, variant, qty, total) {
   );
 }
 
-// Teks "💳 New Wallet Top-Up!" - dikirim setelah 1 deposit Wallet sukses
-// (QRIS / USDT BEP20 / TON), network label disesuaikan otomatis dari method-nya.
+// The "💳 New Wallet Top-Up!" text - sent after a successful Wallet deposit
+// (QRIS / USDT BEP20 / TON), with the network label derived from the method.
 function buildChannelTopupText(chatId, method, amount) {
   const border = teksEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
@@ -1300,29 +1300,28 @@ function buildChannelTopupText(chatId, method, amount) {
   );
 }
 
-// Format nominal reward referral gaya "+$0.0500" (4 desimal + tanda "+") -
-// dipakai KHUSUS di notifikasi channel referral supaya nominal reward yang
-// biasanya kecil (mis. $0.05) tetap kelihatan presisi & jelas ini reward
-// MASUK (bukan potongan). Nilai selalu diambil LANGSUNG dari REFERRAL_REWARD
-// di .env, jadi otomatis ngikut kalau admin ganti.
+// Format a referral reward as "+$0.0500" (4 decimals plus a "+" sign) - used
+// SPECIFICALLY in referral channel notifications so a reward amount, usually small
+// ($0.05, say), still reads precisely and clearly as money coming IN (not a
+// deduction). The value always comes STRAIGHT from REFERRAL_REWARD in .env, so it
+// follows automatically when an admin changes it.
 //
-// CATATAN: sengaja TIDAK dikasih suffix "USDT" - reward ini nambah SALDO
-// WALLET internal toko (unit generik "$", sama seperti di seluruh bagian
-// bot lain), BUKAN transfer token USDT asli. Saldo itu sendiri bisa terisi
-// dari QRIS/USDT BEP20/TON manapun, jadi label "USDT" di sini berpotensi
-// bikin member channel mengira dapat kripto USDT beneran padahal cuma
-// saldo toko. Kalau suatu saat pakai reward berbasis token asli, ganti
-// suffix di bawah sesuai kebutuhan.
+// NOTE: a "USDT" suffix is deliberately NOT added - this reward increases the
+// store's internal WALLET BALANCE (the generic "$" unit used everywhere else in
+// the bot), NOT a real USDT token transfer. That balance itself can be funded
+// from QRIS/USDT BEP20/TON alike, so a "USDT" label here could make channel
+// members think they received actual USDT crypto when it is only store credit.
+// If a real token-based reward is ever used, change the suffix below to suit.
 function formatReferralReward(amount) {
   return `+$${Number(amount).toFixed(4)}`;
 }
 
-// ===== PATCH v7: trigger reward referral - dipanggil dari 4 titik konfirmasi
-// deposit sukses (QRIS/USDT/TON/Binance) setelah saldo user dikreditkan, alih-
-// alih langsung di /start (lihat penjelasan lengkap di db.registerReferral()
-// & db.creditReferralOnFirstDeposit() kenapa dipindah). Aman dipanggil untuk
-// SETIAP deposit sukses - fungsi db-nya sendiri yang mastiin reward cuma
-// diberikan SEKALI (deposit pertama), pemanggil tidak perlu cek apa-apa lagi.
+// ===== PATCH v7: the referral reward trigger - called from the 4 successful
+// deposit confirmation points (QRIS/USDT/TON/Binance) after the user's balance
+// is credited, rather than directly from /start (see db.registerReferral() and
+// db.creditReferralOnFirstDeposit() for the full explanation of why it moved).
+// Safe to call for EVERY successful deposit - the db function itself ensures the
+// reward is granted only ONCE (on the first deposit), so callers need no checks.
 function triggerReferralRewardIfEligible(newUserChatId) {
   const result = db.creditReferralOnFirstDeposit(newUserChatId, REFERRAL_REWARD);
   if (!result) return;
@@ -1334,12 +1333,12 @@ function triggerReferralRewardIfEligible(newUserChatId) {
   sendChannelNotif('referral', buildChannelReferralText(newUserChatId, result.referrerChatId, REFERRAL_REWARD));
 }
 
-// Teks "🎉 New Referral Success!" - dikirim setiap ada reward referral yang
-// BERHASIL dikreditkan (lihat triggerReferralRewardIfEligible() di atas),
-// yaitu saat user yang diundang BENERAN top-up saldo pertama kalinya.
-// User & referrer sama-sama ditampilkan dalam bentuk ID tersamar (lihat
-// maskChannelId) supaya tetap ada jejak verifikasi tanpa membocorkan ID
-// utuh ke publik. Reward yang ditampilkan = REFERRAL_REWARD dari .env.
+// The "🎉 New Referral Success!" text - sent whenever a referral reward is
+// credited SUCCESSFULLY (see triggerReferralRewardIfEligible() above), which is
+// when an invited user REALLY tops up their balance for the first time.
+// Both the user and the referrer are shown as masked IDs (see maskChannelId) so
+// there is still a verification trace without leaking full IDs publicly. The
+// reward shown is REFERRAL_REWARD from .env.
 function buildChannelReferralText(newUserChatId, referrerChatId, reward) {
   const border = teksEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
@@ -1359,11 +1358,11 @@ function buildChannelReferralText(newUserChatId, referrerChatId, reward) {
   );
 }
 
-// Teks notifikasi channel "🛠️ MAINTENANCE DIMULAI!" / "🚀 MAINTENANCE
-// SELESAI!" - dikirim ke channel/group tujuan (settings.channelNotif) tiap
-// admin aktif/nonaktifkan Mode Maintenance (lihat handler
-// 'maintenance_toggle' di bawah), supaya member channel juga tahu tanpa
-// perlu buka bot langsung. status: 'start' | 'finish'.
+// The "🛠️ MAINTENANCE STARTED!" / "🚀 MAINTENANCE FINISHED!" channel
+// notification text - sent to the destination channel/group (settings.channelNotif)
+// whenever an admin enables or disables Maintenance Mode (see the
+// 'maintenance_toggle' handler below), so channel members know without opening the
+// bot. status: 'start' | 'finish'.
 function buildChannelMaintenanceText(status) {
   const border = teksEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
@@ -1372,13 +1371,13 @@ function buildChannelMaintenanceText(status) {
   const title = isStart
     ? teksEmoji('channelnotif_maintenance_start_title', '🛠️')
     : teksEmoji('channelnotif_maintenance_finish_title', '🚀');
-  const titleText = isStart ? 'MAINTENANCE DIMULAI!' : 'MAINTENANCE SELESAI!';
+  const titleText = isStart ? 'MAINTENANCE STARTED!' : 'MAINTENANCE FINISHED!';
   const statusIcon = isStart
     ? teksEmoji('channelnotif_maintenance_start_status', '⏳')
     : teksEmoji('channelnotif_maintenance_finish_status', '✅');
   const statusLabel = isStart
-    ? 'Bot sementara tidak bisa dipakai user, sedang di-upgrade'
-    : 'Bot sudah kembali normal, semua fitur bisa dipakai lagi';
+    ? 'The bot is temporarily unavailable to users while it is being upgraded'
+    : 'The bot is back to normal, every feature is usable again';
   return (
     `${line}\n` +
     `${title} <b>${titleText}</b> ${title}\n` +
@@ -1391,24 +1390,23 @@ function buildChannelMaintenanceText(status) {
   );
 }
 
-// Kirim 1 pesan notifikasi ke channel tujuan (kalau fitur aktif & chatRef
-// sudah diisi). kind: 'purchase' | 'topup' | 'referral' - dicek terhadap
-// toggle notifyPurchase/notifyTopup/notifyReferral masing-masing supaya
-// admin bisa matikan salah satu jenis notifikasi tanpa mematikan semuanya.
-// Gagal kirim (mis. bot belum jadi admin di channel) di-log saja, TIDAK
-// boleh sampai mengganggu alur utama (user tetap harus dapat produk/
-// saldo/reward-nya biarpun notif channel gagal).
-// "product" opsional - kalau diisi DAN produk itu punya logoUrl (lihat
-// productLogoUrl() di atas), notifikasi dikirim sebagai FOTO (logo aplikasi
-// asli, mis. Netflix/Spotify/Gemini) dengan teksnya jadi caption (tetap HTML,
-// tag <tg-emoji> premium & <b>/<code> tetap tampil sama seperti di teks
-// biasa). Caption Telegram dibatasi 1024 karakter (beda dari teks biasa yang
-// sampai 4096) - kalau teksnya kepanjangan untuk jadi caption, otomatis
-// fallback kirim teks biasa TANPA logo supaya tidak pernah gagal kirim gara-
-// gara limit itu. Kalau logoUrl-nya ternyata rusak/tidak bisa diakses,
-// sendPhoto juga otomatis fallback ke sendMessage teks biasa - jadi
-// notifikasi TETAP terkirim di kedua kasus, tidak ada error yang bikin
-// notifikasi hilang total.
+// Send one notification message to the destination channel (when the feature is
+// on and chatRef is set). kind: 'purchase' | 'topup' | 'referral' - checked
+// against the notifyPurchase/notifyTopup/notifyReferral toggles respectively, so
+// an admin can turn off one kind of notification without disabling them all.
+// A send failure (the bot not yet being an admin in the channel, say) is only
+// logged and must NEVER disrupt the main flow (the user must still get their
+// product/balance/reward even if the channel notification fails).
+// "product" is optional - when supplied AND that product has a logoUrl (see
+// productLogoUrl() above), the notification is sent as a PHOTO (the real app logo,
+// Netflix/Spotify/Gemini and so on) with the text as its caption (still HTML, so
+// premium <tg-emoji> tags and <b>/<code> render exactly as in ordinary text).
+// Telegram caps captions at 1024 characters (unlike ordinary text at 4096) - when
+// the text is too long for a caption, it falls back automatically to an ordinary
+// text message WITHOUT the logo, so it never fails because of that limit. And if
+// the logoUrl turns out to be broken or unreachable, sendPhoto also falls back to
+// sendMessage - so the notification IS delivered in both cases, with no error
+// that could make it vanish entirely.
 function sendChannelNotif(kind, text, product) {
   const settings = db.getChannelNotifSettings();
   if (!settings.enabled || !settings.chatRef) return;
@@ -1419,11 +1417,11 @@ function sendChannelNotif(kind, text, product) {
   const logoUrl = productLogoUrl(product);
   const keyboard = channelNotifKeyboard(product);
   const sendAsText = () => bot.sendMessage(settings.chatRef, text, { parse_mode: 'HTML', reply_markup: keyboard })
-    .catch(err => console.error('Gagal kirim notifikasi channel:', err.message));
+    .catch(err => console.error('Failed to send the channel notification:', err.message));
   if (logoUrl && text.length <= 1024) {
     bot.sendPhoto(settings.chatRef, logoUrl, { caption: text, parse_mode: 'HTML', reply_markup: keyboard })
       .catch(err => {
-        console.error('Gagal kirim notifikasi channel (foto logo), fallback ke teks biasa:', err.message);
+        console.error('Failed to send the channel notification (logo photo), falling back to plain text:', err.message);
         sendAsText();
       });
   } else {
@@ -1431,24 +1429,24 @@ function sendChannelNotif(kind, text, product) {
   }
 }
 
-// Format 1 item stok untuk ditampilkan (ke buyer maupun admin). Sebuah item
-// bisa berupa 2 bentuk, dibedakan lewat karakter pemisah "|":
-//   - Link/kode polos (tidak ada "|")            -> ditampilkan apa adanya
-//   - Kombo akun "email|password|2fa|link"       -> ditampilkan per-field rapi
-// Posisi field kombo SELALU tetap (Email, Password, Kode 2FA, Link) mengikuti
-// STOCK_COMBO_LABELS di bawah - kalau Kode 2FA tidak ada, segmennya tetap
-// harus dikosongkan di antara 2 tanda "|" (mis. "email|password||link"),
-// BUKAN dihapus, supaya "link" tidak ketuker posisi jadi "Kode 2FA". Baris
-// yang segmennya kosong otomatis tidak ditampilkan ke buyer.
+// Format one stock item for display (to buyers and admins alike). An item can
+// take 2 forms, distinguished by the "|" separator:
+//   - A plain link/code (no "|")                 -> shown as is
+//   - An account combo "email|password|2fa|link" -> shown neatly field by field
+// The combo field positions are ALWAYS fixed (Email, Password, 2FA Code, Link)
+// following STOCK_COMBO_LABELS below - when there is no 2FA code, its segment
+// must still be left EMPTY between two "|" marks ("email|password||link"), NOT
+// removed, so that "link" is not shifted into the "2FA Code" position. Lines
+// whose segment is empty are automatically hidden from the buyer.
 //
-// Field Kode 2FA (index 2) khusus: kalau isinya adalah TOTP secret base32
-// (format yang sama dipakai situs https://2fa.cn/ / Google Authenticator -
-// boleh pakai spasi, boleh huruf kecil), bot HITUNG SENDIRI kode 6 digit
-// yang aktif SEKARANG (live, bukan statis) pakai algoritma standar TOTP
-// (RFC 6238) di totp.js - hasilnya identik dengan yang ditampilkan 2fa.cn
-// untuk secret yang sama. Kalau isinya bukan secret (mis. kode digit statis
-// gaya lama), ditampilkan apa adanya seperti sebelumnya.
-const STOCK_COMBO_LABELS = ['📧 Email', '🔑 Password', '🔐 Kode 2FA', '🔗 Link'];
+// The 2FA Code field (index 2) is special: when its content is a base32 TOTP
+// secret (the same format used by https://2fa.cn/ and Google Authenticator -
+// spaces and lowercase allowed), the bot COMPUTES the currently valid 6-digit
+// code ITSELF (live, not static) using the standard TOTP algorithm (RFC 6238) in
+// totp.js - producing exactly what 2fa.cn shows for the same secret. When the
+// content is not a secret (an old-style static digit code, say), it is shown as
+// is, as before.
+const STOCK_COMBO_LABELS = ['📧 Email', '🔑 Password', '🔐 2FA Code', '🔗 Link'];
 function formatStockItem(raw, index, chatId) {
   const num = index != null ? `${index + 1}. ` : '';
   const str = String(raw);
@@ -1476,9 +1474,9 @@ function formatStockItem(raw, index, chatId) {
   return `${num}<b>${lang.t(chatId, 'account_label')}:</b>\n${fieldLines}`;
 }
 
-// Cek apakah salah satu item di deliveredItems punya field Kode 2FA berupa
-// TOTP secret (bukan kode statis) - dipakai untuk memunculkan tombol
-// "🔄 Refresh Kode 2FA" karena kodenya berubah tiap 30 detik.
+// Check whether any item in deliveredItems has a 2FA Code field holding a TOTP
+// secret (rather than a static code) - used to decide whether to show the
+// "🔄 Refresh 2FA Code" button, since the code changes every 30 seconds.
 function hasLiveTotpSecret(deliveredItems) {
   if (!deliveredItems || !deliveredItems.length) return false;
   return deliveredItems.some(raw => {
@@ -1487,8 +1485,8 @@ function hasLiveTotpSecret(deliveredItems) {
   });
 }
 
-// Bangun teks "Order Berhasil" full-premium + lampirkan produk (link redeem
-// dkk) kalau tersedia dari stok auto-delivery.
+// Build the full-premium "Order Successful" text and attach the product (redeem
+// links and so on) when it is available from auto-delivery stock.
 function buildSuccessText(product, variant, qty, total, orderId, deliveredItems, chatId) {
   const bolt = boltEmojiMenu();
   const border = teksEmoji('success_border', '✨');
@@ -1516,8 +1514,8 @@ function buildSuccessText(product, variant, qty, total, orderId, deliveredItems,
   return text;
 }
 
-// Format 1 entri audit log pengiriman otomatis - dipakai untuk admin:deliverylog
-// (daftar terbaru) dan admin:checkorder (cari 1 order spesifik by ID).
+// Format one auto-delivery audit log entry - used by admin:deliverylog (the
+// recent list) and admin:checkorder (looking up one specific order by ID).
 function formatDeliveryLogEntry(order) {
   const product = db.findProduct(order.productId);
   const variant = product && product.variants.find(v => v.id === order.variantId);
@@ -1534,7 +1532,7 @@ function formatDeliveryLogEntry(order) {
   if (order.delivered && order.deliveredItems && order.deliveredItems.length) {
     text += `🔗 Item terkirim:\n` + order.deliveredItems.map((item, i) => formatStockItem(item, i)).join('\n\n');
   } else {
-    text += `📦 Dikirim manual oleh admin (bukan auto-delivery).`;
+    text += `📦 Sent manually by an admin (not auto-delivery).`;
   }
   return text;
 }
@@ -1542,8 +1540,8 @@ function formatDeliveryLogEntry(order) {
 // ================= MENU BUILDERS =================
 
 function mainMenuKeyboard(chatId) {
-  // Menu utama dibagi 2 kolom penuh (bukan 1 tombol per baris lagi), supaya
-  // lebih ringkas dan tidak makan banyak scroll di layar HP.
+  // The main menu is laid out in 2 full columns (rather than one button per row),
+  // so it is more compact and takes less scrolling on a phone screen.
   return {
     inline_keyboard: [
       [
@@ -1569,15 +1567,15 @@ function mainMenuKeyboard(chatId) {
   };
 }
 
-// ================= GIFT (Buy Gift / Confess Gift, via userbot GramJS) =================
-// mode: 'buy'     -> gift dikirim atas nama akun userbot, TANPA pesan.
-//       'confess' -> gift + pesan anonim yang diketik buyer, identitas
-//                     pengirim disembunyikan (hideName: true di userbot.js).
+// ================= GIFT (Buy Gift / Confess Gift, via the GramJS userbot) =================
+// mode: 'buy'     -> the gift is sent on behalf of the userbot account, with NO message.
+//       'confess' -> the gift plus an anonymous message typed by the buyer, with
+//                    the sender's identity hidden (hideName: true in userbot.js).
 
-// Harga jual gift = modal (stars x kurs) + markup%. Kurs & markup-nya BISA
-// di-override admin live lewat menu "💲 Atur Harga Gift" (db.settings.
-// giftPricing, lihat db.js) - kalau belum pernah diisi (masih null), pakai
-// default dari .env (GIFT_MARKUP_PCT / STARS_TO_USD_RATE di config.js).
+// Gift sale price = cost (stars x rate) + markup%. The rate and markup CAN be
+// overridden live by an admin via the "💲 Set Gift Pricing" menu
+// (db.settings.giftPricing, see db.js) - when never set (still null), the
+// defaults from .env are used (GIFT_MARKUP_PCT / STARS_TO_USD_RATE in config.js).
 function giftPriceUsd(stars) {
   const pricing = db.getGiftPricingSettings();
   const rate = pricing.starsToUsdRate != null ? pricing.starsToUsdRate : STARS_TO_USD_RATE;
@@ -1586,16 +1584,16 @@ function giftPriceUsd(stars) {
   return modal * (1 + markupPct / 100);
 }
 
-// Grid 3 kolom per baris (bukan 1 kolom kayak sebelumnya) - rapi & lebih
-// banyak muat kelihatan tanpa scroll panjang, niru layout toko gift Telegram
-// pada umumnya. Teks tombol TIDAK dikasih emoji 🎁 lagi di depan harga -
-// ikon gift-nya sudah terwakili lewat icon_custom_emoji_id (withGiftIcon()),
-// jadi 🎁 generik di teks cuma bikin dobel & menuh-menuhin tombol yang
-// kecil. Gift limited dikasih style 'success' (hijau) biar menonjol beda
-// dari gift reguler (default/tanpa style - transparan sesuai tema client).
-// cols default 2 (bukan 3) - dengan 3 kolom, layar HP kecil bikin teks harga
-// kepotong (mis. "Rp5.000" jadi "Rp5" doang). 2 kolom kasih ruang lebih
-// lebar per tombol supaya harga penuh kelihatan.
+// A grid of 3 columns per row (rather than a single column as before) - tidier
+// and fitting more on screen without long scrolling, mirroring the usual Telegram
+// gift shop layout. The button text no longer carries a 🎁 emoji before the
+// price - the gift icon is already represented by icon_custom_emoji_id
+// (withGiftIcon()), so a generic 🎁 in the text would only duplicate it and crowd
+// a small button. Limited gifts get the 'success' style (green) so they stand out
+// from regular gifts (default/no style - transparent, following the client theme).
+// cols defaults to 2 (not 3) - with 3 columns, a small phone screen truncates the
+// price text ("Rp5.000" becoming just "Rp5"). 2 columns give each button enough
+// width for the full price to show.
 function giftGridRows(items, buttonForItem, cols = 2) {
   const rows = [];
   let row = [];
@@ -1616,10 +1614,10 @@ async function giftListKeyboard(chatId, mode) {
     const items = catalog.slice(0, 30);
     const gridRows = giftGridRows(items, g => {
       const priceLabel = usd(giftPriceUsd(g.stars), chatId);
-      // Ikon tombol pakai giftIconId() - prioritas: override manual admin
-      // per-gift ("🎁 Kelola Emoji Gift") > custom_emoji_id ASLI dari sticker
-      // gift itu sendiri (kalau Telegram kebetulan expose) > 1 ikon fallback
-      // global "gift". Lihat komentar lengkap di definisi giftIconId().
+      // The button icon uses giftIconId() - priority: a manual per-gift admin
+      // override ("🎁 Manage Gift Emoji") > the REAL custom_emoji_id from the
+      // gift's own sticker (when Telegram happens to expose it) > a single global
+      // "gift" fallback icon. See the full comment on giftIconId().
       const button = { text: `${priceLabel}`, callback_data: `gift:pick:${mode}:${g.id}` };
       const withIcon = withGiftIcon(button, g);
       return g.limited ? withStyle(withIcon, 'success') : withIcon;
@@ -1652,11 +1650,11 @@ function giftCancelKeyboard(chatId) {
   return { inline_keyboard: [[withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:main' }, 'batal'), 'danger')]] };
 }
 
-// Tampilkan layar konfirmasi terakhir (harga, target, preview pesan kalau
-// confess) sebelum saldo dipotong & gift beneran dikirim. confirmToken acak
-// dipakai supaya tombol "✅ Kirim" di bawah cuma valid untuk SATU pending
-// action yang lagi aktif ini (bukan orderId asli - order baru benar-benar
-// dibuat di handler 'gift:confirm:' setelah tombol ini ditekan).
+// Show the final confirmation screen (price, target, and a message preview for
+// confess) before the balance is deducted and the gift actually sent. A random
+// confirmToken is used so the "✅ Send" button below is valid only for THIS one
+// active pending action (it is not the real orderId - the order is created in the
+// 'gift:confirm:' handler after this button is pressed).
 async function showGiftConfirmation(chatId, { mode, giftId, stars, target, message }) {
   const priceUsd = giftPriceUsd(stars);
   const confirmToken = crypto.randomBytes(6).toString('hex');
@@ -1685,13 +1683,12 @@ async function showGiftConfirmation(chatId, { mode, giftId, stars, target, messa
   });
 }
 
-// Notifikasi ke SEMUA admin kalau saldo Stars userbot sudah di bawah ambang
-// batas (GIFT_LOW_STARS_THRESHOLD). Dikasih cooldown 6 jam supaya admin
-// TIDAK di-spam notifikasi yang sama tiap kali ada 1 gift order baru masuk
-// selama Stars belum sempat di-top up (bukan re-notify tiap order, cukup
-// sekali per periode).
+// Notify ALL admins when the userbot's Stars balance drops below the threshold
+// (GIFT_LOW_STARS_THRESHOLD). It has a 6-hour cooldown so admins are NOT spammed
+// with the same notification on every new gift order while the Stars have yet to
+// be topped up (rather than re-notifying per order, once per period is plenty).
 let lastLowStarsNotifyAt = 0;
-const LOW_STARS_NOTIFY_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 jam
+const LOW_STARS_NOTIFY_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 async function maybeNotifyLowStars(chatIdForLangFallback) {
   try {
@@ -1701,7 +1698,7 @@ async function maybeNotifyLowStars(chatIdForLangFallback) {
     if (now - lastLowStarsNotifyAt < LOW_STARS_NOTIFY_COOLDOWN_MS) return;
     lastLowStarsNotifyAt = now;
 
-    const text = `⚠️ <b>Saldo Stars userbot menipis!</b>\n\n🌟 Sisa: ${stars}⭐ (ambang batas: ${GIFT_LOW_STARS_THRESHOLD}⭐)\n\nBuyer bisa mulai kena "Stok Stars habis" untuk order 🎁 Buy Gift / 💌 Confess Gift. Top up segera lewat Settings > Stars di akun userbot.`;
+    const text = `⚠️ <b>The userbot's Stars balance is running low!</b>\n\n🌟 Remaining: ${stars}⭐ (threshold: ${GIFT_LOW_STARS_THRESHOLD}⭐)\n\nBuyers may start hitting "Stars out of stock" on 🎁 Buy Gift / 💌 Confess Gift orders. Top up soon via Settings > Stars on the userbot account.`;
     for (const adminId of ADMIN_IDS) {
       bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(err => logError('maybeNotifyLowStars', err));
     }
@@ -1710,27 +1707,27 @@ async function maybeNotifyLowStars(chatIdForLangFallback) {
   }
 }
 
-// Eksekusi pengiriman gift (dipanggil setelah buyer konfirmasi & saldo
-// sudah dipotong di muka). Kalau gagal, saldo DIKEMBALIKAN otomatis - buyer
-// tidak pernah rugi karena kegagalan teknis (target tidak ditemukan, gift
-// sold out, dsb).
-// Admin SELALU dapat notifikasi per order (sukses maupun gagal-refund).
+// Send the gift (called after the buyer confirms and the balance has already been
+// deducted up front). On failure the balance is REFUNDED automatically - a buyer
+// never loses out because of a technical failure (target not found, gift sold out,
+// and so on).
+// Admins ALWAYS get a notification per order (both success and failure-refund).
 async function executeGiftSend(chatId, order) {
   const who = order.username ? `@${escapeHtml(order.username)}` : `ID ${order.chatId}`;
   const modeLabel = order.mode === 'confess' ? '💌 Confess Gift' : '🎁 Buy Gift';
 
-  // ===== BUG FIX (notif sukses "hilang" ke group + refund ganda):
-  // SEBELUMNYA pengiriman gift DAN langkah notifikasi (pesan ke buyer,
-  // notif admin, notif group) ada di dalam try/catch YANG SAMA. Kalau
-  // gift-nya SUDAH berhasil terkirim tapi kirim pesan konfirmasi ke buyer
-  // gagal (mis. buyer blokir bot / akun nonaktif / "chat not found"),
-  // exception itu ketangkep catch block yang sama -> order yang SUDAH
-  // SUKSES salah ditandai 'failed_refunded', buyer dapat REFUND GANDA
-  // (gift + saldo balik), dan notif sukses ke admin/GROUP TIDAK PERNAH
-  // terkirim - malah kekirim notif "GAGAL". Sekarang pengiriman gift
-  // (yang menentukan sukses/gagal + refund) dipisah TOTAL dari langkah
-  // notifikasi sesudahnya - kegagalan kirim notifikasi tidak akan pernah
-  // bisa mengubah status order yang sudah sukses lagi.
+  // ===== BUG FIX (a "lost" success notification to the group + a double refund):
+  // PREVIOUSLY the gift send AND the notification steps (the message to the buyer,
+  // the admin notification, the group notification) sat inside THE SAME try/catch.
+  // If the gift HAD been sent successfully but sending the confirmation message to
+  // the buyer failed (the buyer blocking the bot / a deactivated account / "chat
+  // not found"), that exception was caught by the same catch block -> an order
+  // that had ALREADY SUCCEEDED was wrongly marked 'failed_refunded', the buyer got
+  // a DOUBLE REFUND (the gift plus their balance back), and the success
+  // notification to the admin/GROUP was NEVER sent - a "FAILED" notice went out
+  // instead. The gift send (which decides success/failure and refunding) is now
+  // COMPLETELY separated from the notification steps that follow - a notification
+  // failure can never again change the status of an order that already succeeded.
   let sendError = null;
   try {
     await userbot.sendGiftToUser({
@@ -1745,60 +1742,60 @@ async function executeGiftSend(chatId, order) {
 
   if (!sendError) {
     db.updateGiftOrder(order.id, { status: 'sent' });
-    maybeNotifyLowStars(chatId); // cek & notif admin kalau Stars mulai menipis (non-blocking)
-    // .catch(() => {}) sengaja - gagal kirim notif ke BUYER tidak boleh
-    // dianggap sebagai kegagalan ORDER (gift-nya sudah pasti terkirim).
+    maybeNotifyLowStars(chatId); // check and alert admins if Stars run low (non-blocking)
+    // The .catch(() => {}) is deliberate - failing to notify the BUYER must not be
+    // treated as an ORDER failure (the gift has definitely been sent).
     bot.sendMessage(chatId,
-      `✅ Gift berhasil dikirim ke <b>${escapeHtml(order.target)}</b>!\n` +
-      `🧾 ID Order: <code>${order.id}</code>`,
+      `✅ Gift sent successfully to <b>${escapeHtml(order.target)}</b>!\n` +
+      `🧾 Order ID: <code>${order.id}</code>`,
       { parse_mode: 'HTML' }
     ).catch(() => {});
     notifyAdmins(
-      `${modeLabel} - <b>BERHASIL</b>\n\n` +
+      `${modeLabel} - <b>SUCCESSFUL</b>\n\n` +
       `👤 Buyer: ${who} (${order.chatId})\n` +
       `🎁 Gift ID: <code>${escapeHtml(String(order.giftId))}</code> (${order.stars} Stars)\n` +
       `🎯 Target: <code>${escapeHtml(order.target)}</code>\n` +
-      `💰 Harga: ${usd(order.priceUsd)}\n` +
-      (order.mode === 'confess' && order.message ? `💬 Pesan: ${escapeHtml(order.message)}\n` : '') +
+      `💰 Price: ${usd(order.priceUsd)}\n` +
+      (order.mode === 'confess' && order.message ? `💬 Message: ${escapeHtml(order.message)}\n` : '') +
       `🧾 Order ID: <code>${order.id}</code>`
     );
-    // Sesuai permintaan: notif ke GROUP WAJIB cuma untuk order "Buy Gift"
-    // (mode !== 'confess') yang BERHASIL. Confess Gift TIDAK dikirim ke
-    // group (pesan anonimnya tidak ikut ke-expose ke grup), dan order
-    // GAGAL juga TIDAK dikirim ke group (cukup DM admin di atas).
+    // As requested: the GROUP notification is ONLY for SUCCESSFUL "Buy Gift"
+    // orders (mode !== 'confess'). Confess Gift is NOT sent to the group (so its
+    // anonymous message is never exposed there), and FAILED orders are NOT sent to
+    // the group either (the admin DM above is enough).
     if (order.mode !== 'confess') {
       notifyOrderGroup(
-        `${modeLabel} - <b>BERHASIL</b> ✅\n\n` +
+        `${modeLabel} - <b>SUCCESSFUL</b> ✅\n\n` +
         `👤 Buyer: ${who}\n` +
         `🎁 Gift ID: <code>${escapeHtml(String(order.giftId))}</code> (${order.stars} Stars)\n` +
         `🎯 Target: <code>${escapeHtml(order.target)}</code>\n` +
-        `💰 Harga: ${usd(order.priceUsd)}\n` +
+        `💰 Price: ${usd(order.priceUsd)}\n` +
         `🧾 Order ID: <code>${order.id}</code>`
       );
     }
   } else {
     const err = sendError;
     logError('executeGiftSend', err);
-    // Refund otomatis - INI WAJIB, jangan pernah biarkan saldo buyer
-    // hilang gara-gara kegagalan pengiriman gift.
+    // Automatic refund - THIS IS MANDATORY; never let a buyer's balance vanish
+    // because a gift send failed.
     db.updateBalance(chatId, order.priceUsd);
     db.updateGiftOrder(order.id, { status: 'failed_refunded', error: String(err.message || err) });
     bot.sendMessage(chatId,
-      `❌ Gift gagal dikirim (${escapeHtml(String(err.message || err))}).\n` +
-      `💰 Saldo <b>${usd(order.priceUsd, chatId)}</b> sudah dikembalikan otomatis ke wallet kamu.`,
+      `❌ The gift could not be sent (${escapeHtml(String(err.message || err))}).\n` +
+      `💰 Your <b>${usd(order.priceUsd, chatId)}</b> has been refunded automatically to your wallet.`,
       { parse_mode: 'HTML' }
     ).catch(() => {});
     notifyAdmins(
-      `${modeLabel} - <b>GAGAL (refund otomatis)</b>\n\n` +
+      `${modeLabel} - <b>FAILED (automatic refund)</b>\n\n` +
       `👤 Buyer: ${who} (${order.chatId})\n` +
       `🎁 Gift ID: <code>${escapeHtml(String(order.giftId))}</code> (${order.stars} Stars)\n` +
       `🎯 Target: <code>${escapeHtml(order.target)}</code>\n` +
-      `💰 Harga (dikembalikan): ${usd(order.priceUsd)}\n` +
+      `💰 Price (refunded): ${usd(order.priceUsd)}\n` +
       `🧾 Order ID: <code>${order.id}</code>\n` +
       `❌ Error: ${escapeHtml(String(err.message || err))}`
     );
-    // Sesuai permintaan: order GAGAL tidak dikirim ke group (cuma DM admin
-    // di atas) - group cuma untuk Buy Gift yang BERHASIL.
+    // As requested: FAILED orders are not sent to the group (only the admin DM
+    // above) - the group is only for SUCCESSFUL Buy Gift orders.
   }
 }
 
