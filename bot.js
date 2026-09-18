@@ -2597,21 +2597,21 @@ bot.on('callback_query', async (query) => {
         const starsBalance = await userbot.getUserbotStarsBalance();
         if (starsBalance < stars) {
           await bot.answerCallbackQuery(query.id, {
-            text: `⚠️ Stok Stars toko lagi habis. Saldo kamu TIDAK dipotong.`,
+            text: `⚠️ The store's Stars are out of stock. Your balance has NOT been charged.`,
             show_alert: true
           });
           await bot.sendMessage(chatId,
-            `⚠️ <b>Stok Stars toko lagi habis</b>, admin belum sempat top up.\n\n` +
-            `💰 Saldo wallet kamu <b>tidak dipotong sama sekali</b> - aman.\n` +
-            `🔁 Order kamu masih tersimpan, tinggal tap lagi <b>"✅ Kirim Sekarang"</b> di pesan konfirmasi sebelumnya kalau mau coba lagi nanti.`,
+            `⚠️ <b>The store's Stars are out of stock</b>, the admin has not topped up yet.\n\n` +
+            `💰 Your wallet balance was <b>not charged at all</b> - you are safe.\n` +
+            `🔁 Your order is still saved; just tap <b>"✅ Send Now"</b> again on the earlier confirmation message whenever you want to retry.`,
             { parse_mode: 'HTML' }
           );
           return;
         }
       } catch (err) {
-        // Kalau cek saldo sendiri gagal (mis. userbot lagi disconnect), jangan
-        // block buyer di sini - biarkan lanjut, kegagalan sebenarnya akan
-        // tetap ketangkep & di-refund otomatis di executeGiftSend() di bawah.
+        // If the balance check itself fails (the userbot being disconnected, say),
+        // do not block the buyer here - let it continue; a genuine failure will
+        // still be caught and refunded automatically in executeGiftSend() below.
         logError('gift:confirm pre-check stars balance', err);
       }
 
@@ -2622,10 +2622,10 @@ bot.on('callback_query', async (query) => {
         giftId: pending.data.giftId, stars: pending.data.stars, priceUsd,
         target: pending.data.target, message: pending.data.message
       });
-      await bot.editMessageText(`⏳ Mengirim gift ke <b>${escapeHtml(pending.data.target)}</b>...`, {
+      await bot.editMessageText(`⏳ Sending the gift to <b>${escapeHtml(pending.data.target)}</b>...`, {
         chat_id: chatId, message_id: messageId, parse_mode: 'HTML'
       });
-      executeGiftSend(chatId, order); // async, tidak di-await - hasil dikirim sbg pesan baru
+      executeGiftSend(chatId, order); // async, deliberately not awaited - the result arrives as a new message
       } finally {
         pendingOrderConfirms.delete(chatId);
       }
@@ -2676,16 +2676,16 @@ bot.on('callback_query', async (query) => {
     else if (data.startsWith('qris:cancel:')) {
       const depositId = data.slice('qris:cancel:'.length);
       const deposit = db.getDeposit(depositId);
-      // Fix: cegah user LAIN membatalkan deposit pending milik user lain
-      // (callback_data bisa dikirim manual lewat client custom, tidak boleh
-      // dipercaya begitu saja tanpa verifikasi kepemilikan).
+      // Fix: stop ANOTHER user cancelling someone else's pending deposit
+      // (callback_data can be sent by hand from a custom client, so it must not be
+      // trusted without verifying ownership).
       if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
         db.updateDeposit(depositId, { status: 'cancelled' });
       }
       try {
         await bot.deleteMessage(chatId, messageId);
       } catch (err) {
-        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+        // the message may already be deleted or resent - safe to ignore
       }
       await bot.sendMessage(
         chatId,
@@ -2698,14 +2698,14 @@ bot.on('callback_query', async (query) => {
     else if (data.startsWith('usdt:cancel:')) {
       const depositId = data.slice('usdt:cancel:'.length);
       const deposit = db.getDeposit(depositId);
-      // Fix: cegah user LAIN membatalkan deposit pending milik user lain.
+      // Fix: stop ANOTHER user cancelling someone else's pending deposit.
       if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
         db.updateDeposit(depositId, { status: 'cancelled' });
       }
       try {
         await bot.deleteMessage(chatId, messageId);
       } catch (err) {
-        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+        // the message may already be deleted or resent - safe to ignore
       }
       await bot.sendMessage(
         chatId,
@@ -2732,14 +2732,14 @@ bot.on('callback_query', async (query) => {
     else if (data.startsWith('ton:cancel:')) {
       const depositId = data.slice('ton:cancel:'.length);
       const deposit = db.getDeposit(depositId);
-      // Fix: cegah user LAIN membatalkan deposit pending milik user lain.
+      // Fix: stop ANOTHER user cancelling someone else's pending deposit.
       if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
         db.updateDeposit(depositId, { status: 'cancelled' });
       }
       try {
         await bot.deleteMessage(chatId, messageId);
       } catch (err) {
-        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+        // the message may already be deleted or resent - safe to ignore
       }
       await bot.sendMessage(
         chatId,
@@ -2766,14 +2766,14 @@ bot.on('callback_query', async (query) => {
     else if (data.startsWith('binance:cancel:')) {
       const depositId = data.slice('binance:cancel:'.length);
       const deposit = db.getDeposit(depositId);
-      // Fix: cegah user LAIN membatalkan deposit pending milik user lain.
+      // Fix: stop ANOTHER user cancelling someone else's pending deposit.
       if (deposit && deposit.status === 'pending' && deposit.chatId === chatId) {
         db.updateDeposit(depositId, { status: 'cancelled' });
       }
       try {
         await bot.deleteMessage(chatId, messageId);
       } catch (err) {
-        // pesan mungkin sudah kehapus/kekirim ulang, aman diabaikan
+        // the message may already be deleted or resent - safe to ignore
       }
       await bot.sendMessage(
         chatId,
@@ -2797,11 +2797,11 @@ bot.on('callback_query', async (query) => {
       }
     }
 
-    // ---- Quick topup (tombol QRIS/USDT/TON di halaman Order Confirmation
-    // atau di pesan "saldo kurang") - beda dari topup:qris/usdt/ton biasa,
-    // ini SKIP layar pilih nominal - nominalnya sudah ditentukan di muka
-    // (dikirim di callback_data, dalam SEN) sesuai kekurangan saldo order
-    // yang lagi diproses, jadi user tidak perlu ngitung/ketik manual lagi.
+    // ---- Quick topup (the QRIS/USDT/TON buttons on the Order Confirmation
+    // page, or in the "balance short" message) - unlike the ordinary
+    // topup:qris/usdt/ton, this SKIPS the choose-amount screen: the amount is
+    // decided up front (sent in callback_data, in CENTS) to match the shortfall on
+    // the order being processed, so the user need not work it out or type it again.
     else if (data.startsWith('qtopup:')) {
       const [, method, centsStr] = data.split(':');
       const amountUsd = Number(centsStr) / 100;
@@ -2906,7 +2906,7 @@ bot.on('callback_query', async (query) => {
       try {
         await bot.deleteMessage(chatId, messageId);
       } catch (err) {
-        // pesan mungkin sudah kehapus, aman diabaikan
+        // the message may already be deleted - safe to ignore
       }
       return bot.answerCallbackQuery(query.id).catch(() => {});
     }
@@ -2928,8 +2928,8 @@ bot.on('callback_query', async (query) => {
       });
     }
     else if (data === 'referral:copy') {
-      // Cabang ini SEKARANG cuma kepencet kalau BOT_USERNAME belum diisi
-      // (lihat referralKeyboard) - link referral belum valid untuk dibuat.
+      // This branch is NOW only reachable when BOT_USERNAME is unset (see
+      // referralKeyboard) - the referral link cannot be built yet.
       return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'referral_username_missing'), show_alert: true });
     }
 
@@ -2943,10 +2943,10 @@ bot.on('callback_query', async (query) => {
       if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_not_found') });
       const { productId, variantId } = resolved;
 
-      // Live-check stok Canboso di sini (sama pola seperti productListKeyboard()
-      // dan handler 'variant:') supaya warna tombol "Buy Now" di halaman ini
-      // juga segar, bukan cuma andalkan cache lama - getLiveStock() sendiri
-      // sudah di-cache 20 detik di supplierCanboso.js jadi aman dipanggil sini.
+      // Live-check Canboso stock here (the same pattern as productListKeyboard()
+      // and the 'variant:' handler) so the "Buy Now" button colour on this page is
+      // fresh too, rather than relying on a stale cache - getLiveStock() is itself
+      // cached for 20 seconds in supplierCanboso.js, so it is safe to call here.
       if (variant.canbosoProductId) {
         try {
           const live = await canboso.getLiveStock(variant.canbosoProductId);
@@ -2955,7 +2955,7 @@ bot.on('callback_query', async (query) => {
             variant.liveStock = live.stock;
           }
         } catch (err) {
-          console.error(`Canboso getLiveStock (desc) gagal (product_id=${variant.canbosoProductId}):`, err.message);
+          console.error(`Canboso getLiveStock (desc) failed (product_id=${variant.canbosoProductId}):`, err.message);
         }
       }
 
@@ -2969,21 +2969,21 @@ bot.on('callback_query', async (query) => {
         chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
         reply_markup: descKeyboard(productId, variantId, chatId, product, variant)
       });
-      // Catat halaman ini supaya scheduleProductListRepaint() ikut
-      // menyegarkan warna tombol "Buy Now"-nya juga selama buyer masih
-      // melihat halaman detail ini (lihat openProductDescMsg di atas).
+      // Register this page so scheduleProductListRepaint() also refreshes its
+      // "Buy Now" button colour while the buyer still has this detail page open
+      // (see openProductDescMsg above).
       openProductDescMsg.set(chatId, { messageId, productId, variantId });
     }
 
-    // ---- How to use page, dipanggil dari pesan "ORDER BERHASIL" (cuma
-    // bawa orderId, lihat catatan di successKeyboard() soal kenapa) ----
+    // ---- The How to Use page, opened from the "ORDER SUCCESSFUL" message (which
+    // carries only the orderId - see the note in successKeyboard() for why) ----
     else if (data.startsWith('howtoorder:')) {
       db.clearPendingAction(chatId);
       const orderId = data.slice('howtoorder:'.length);
       const order = db.getOrderById(orderId);
-      // Sama seperti "backtoorder:" - order ini WAJIB milik chatId yang
-      // mencet, supaya orang lain tidak bisa baca how-to-use pakai orderId
-      // hasil tebak/curi dari user lain.
+      // Like "backtoorder:" - this order MUST belong to the chatId pressing the
+      // button, so nobody else can read the how-to-use using an orderId guessed
+      // or stolen from another user.
       if (!order || order.chatId !== chatId) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'order_not_found') });
       const product = db.findProduct(order.productId);
       const variant = db.findVariant(order.productId, order.variantId);
@@ -3019,19 +3019,19 @@ bot.on('callback_query', async (query) => {
       });
     }
 
-    // ---- Back dari "How to Use" ke pesan "ORDER BERHASIL" asal (bukan ke
-    // halaman deskripsi produk) - rebuild teksnya dari data order tersimpan.
+    // ---- Back from "How to Use" to the original "ORDER SUCCESSFUL" message
+    // (rather than the product description page) - rebuilt from the stored order.
     else if (data.startsWith('backtoorder:')) {
       const [, orderId] = data.split(':');
       const order = db.getOrderById(orderId);
-      // PENTING - fix IDOR: order INI WAJIB milik chatId yang lagi mencet
-      // tombol, sama seperti pengecekan yang sudah ada di refresh2fa: dan
-      // refresh2fa:recover: di bawah. Tanpa cek ini, siapa pun yang bisa
-      // mengirim callback_query dengan data "backtoorder:<orderId>" milik
-      // order ID ORANG LAIN (mis. lewat client Telegram custom/modifikasi -
-      // callback_data TIDAK terikat kriptografis ke tombol aslinya, jadi
-      // tidak bisa dipercaya begitu saja) akan bisa membaca ulang detail
-      // akun/2FA hasil auto-delivery milik user lain lewat buildSuccessText().
+      // IMPORTANT - IDOR fix: THIS order MUST belong to the chatId pressing the
+      // button, the same check already present in refresh2fa: and
+      // refresh2fa:recover: below. Without it, anyone able to send a
+      // callback_query with data "backtoorder:<orderId>" for SOMEONE ELSE's order
+      // ID (via a custom or modified Telegram client - callback_data is NOT
+      // cryptographically bound to its original button, so it cannot be trusted)
+      // could re-read another user's auto-delivered account/2FA details through
+      // buildSuccessText().
       if (!order || order.chatId !== chatId) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'order_not_found') });
       const product = db.findProduct(order.productId);
       const variant = db.findVariant(order.productId, order.variantId);
@@ -3044,11 +3044,11 @@ bot.on('callback_query', async (query) => {
       });
     }
 
-    // ---- Refresh kode 2FA (TOTP live) - dipakai di pesan "ORDER BERHASIL"
-    // (refresh2fa:<orderId>) maupun di pesan "Recover Product"
-    // (refresh2fa:recover:<orderId>). Kode TOTP berubah tiap 30 detik, jadi
-    // tombol ini cuma render ulang pesan yang sama - buildSuccessText /
-    // formatStockItem menghitung kode TOTP fresh tiap kali dipanggil.
+    // ---- Refresh the 2FA code (live TOTP) - used both in the "ORDER SUCCESSFUL"
+    // message (refresh2fa:<orderId>) and in the "Recover Product" message
+    // (refresh2fa:recover:<orderId>). A TOTP code changes every 30 seconds, so
+    // this button simply re-renders the same message - buildSuccessText /
+    // formatStockItem compute a fresh TOTP code on every call.
     else if (data.startsWith('refresh2fa:recover:')) {
       const orderId = data.slice('refresh2fa:recover:'.length);
       const order = db.getOrderById(orderId);
@@ -3087,7 +3087,7 @@ bot.on('callback_query', async (query) => {
       return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'totp_refreshed') }).catch(() => {});
     }
 
-    // ---- Variant detail -> pilih jumlah ----
+    // ---- Variant detail -> choose quantity ----
     else if (data.startsWith('variant:')) {
       const [, ref] = data.split(':');
       const resolved = resolveProductRef(ref);
@@ -3095,37 +3095,37 @@ bot.on('callback_query', async (query) => {
       const variant = resolved && db.findVariant(resolved.productId, resolved.variantId);
       if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'variant_not_found') });
       const { productId, variantId } = resolved;
-      // Sekarang berlaku juga untuk varian Supplier API - variant.stock-nya
-      // sudah disinkron otomatis dari stok live Supplier (lihat
-      // refreshSupplierData()), jadi aman dipakai buat cek awal ini juga.
-      // (placeOrder() di handler 'confirm:' tetap jadi validasi FINAL.)
-      // ===== LIVE STOCK CHECK khusus varian Canboso API =====
-      // Berbeda dari Supplier API (auto-sync terjadwal), varian Canboso
-      // dicek LANGSUNG ke API tiap buyer buka halaman ini (di-cache 20
-      // detik di supplierCanboso.js supaya tidak spam API kalau banyak
-      // buyer buka produk yang sama nyaris bersamaan) - sekalian
-      // menyimpan angkanya ke variant.stock lokal supaya tampilan stok
-      // (stockLabel di bawah) & menu admin ikut ter-update. Kalau fetch-nya
-      // GAGAL (network/API down) atau produk sudah tidak ada di Canboso
-      // (getLiveStock return null), JANGAN block buyer di sini - biarkan
-      // canboso.purchase() di handler 'confirm:' jadi validasi FINAL,
-      // supaya gangguan sesaat ke API Canboso tidak bikin toko kelihatan
-      // "habis" padahal cuma gagal cek.
-      // ===== BUG FIX: variant.stock DIPAKAI BERSAMA oleh stok manual
-      // (stockItems.length, lihat db.addStockItems) DAN stok live remote
-      // (Supplier/Canboso, lewat db.setVariantStock dari sync terjadwal) -
-      // dua sumber ini saling timpa field yang SAMA. Kalau varian ini
-      // PERNAH dihubungkan ke Supplier/Canboso API tapi admin JUGA sudah
-      // isi stok manual, sync live berikutnya bisa nimpa variant.stock jadi
-      // 0/kosong (kalau saldo/stok di sisi API luar habis) padahal stok
-      // manual lokal masih ada dan siap kirim - buyer jadi salah kena
-      // "habis stok" walau sebenarnya bisa dilayani dari stok manual.
-      // Cek stok manual DULU di sini supaya itu tidak pernah memblokir
-      // buyer selama stok manual masih tersedia (lihat prioritas yang sama
-      // di handler 'confirm:' - localStockAvailable).
-      // ===== PATCH: variant.liveStock (bukan lagi variant.stock) yang
-      // dipakai buat simpan angka live Supplier/Canboso - lihat
-      // db.setVariantStock() untuk kronologi kenapa dipisah.
+      // This now applies to Supplier API variants too - their variant.stock is
+      // synced automatically from the supplier's live stock (see
+      // refreshSupplierData()), so it is safe for this initial check as well.
+      // (placeOrder() in the 'confirm:' handler remains the FINAL validation.)
+      // ===== LIVE STOCK CHECK specific to Canboso API variants =====
+      // Unlike the Supplier API (a scheduled auto-sync), Canboso variants are
+      // checked DIRECTLY against the API every time a buyer opens this page
+      // (cached for 20 seconds in supplierCanboso.js so the API is not spammed
+      // when many buyers open the same product at nearly the same moment) - while
+      // also storing the number in the local variant.stock so the stock display
+      // (stockLabel below) and the admin menu update too. When the fetch FAILS
+      // (network/API down) or the product no longer exists on Canboso
+      // (getLiveStock returns null), DO NOT block the buyer here - let
+      // canboso.purchase() in the 'confirm:' handler be the FINAL validation, so a
+      // brief Canboso API problem does not make the store look "sold out" when the
+      // check merely failed.
+      // ===== BUG FIX: variant.stock IS SHARED by manual stock
+      // (stockItems.length, see db.addStockItems) AND live remote stock
+      // (Supplier/Canboso, via db.setVariantStock from the scheduled sync) - two
+      // sources overwriting the SAME field. If this variant has EVER been linked
+      // to a Supplier/Canboso API but the admin has ALSO entered manual stock, the
+      // next live sync could overwrite variant.stock with 0/empty (whenever the
+      // external API's balance/stock ran out) even though local manual stock is
+      // still there and ready to deliver - wrongly showing the buyer "out of
+      // stock" when the order could have been filled from manual stock.
+      // Manual stock is therefore checked FIRST here, so it never blocks a buyer
+      // while manual stock remains (see the same priority in the 'confirm:'
+      // handler - localStockAvailable).
+      // ===== PATCH: variant.liveStock (no longer variant.stock) is what stores
+      // the live Supplier/Canboso number - see db.setVariantStock() for the
+      // history of why they were separated.
       const localCountForGate = db.getStockItemCount(productId, variantId);
       if (variant.canbosoProductId) {
         try {
@@ -3137,16 +3137,16 @@ bot.on('callback_query', async (query) => {
               return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'out_of_stock'), show_alert: true });
             }
           } else if (live) {
-            // Produk ketemu tapi field stok-nya gagal diparse (NaN) - beda
-            // dari "tidak ketemu sama sekali" di bawah, ini kasus paling
-            // sering bikin stok lokal basi/salah, alert admin.
-            alertCanbosoStockIssue(variant, `product ditemukan tapi field stok tidak dikenali (field tersedia: ${describeRawFields(live.raw)})`);
+            // The product was found but its stock field could not be parsed (NaN)
+            // - different from "not found at all" below. This is the most common
+            // cause of stale or wrong local stock, so alert the admin.
+            alertCanbosoStockIssue(variant, `product found but its stock field was not recognised (fields available: ${describeRawFields(live.raw)})`);
           } else {
-            alertCanbosoStockIssue(variant, 'product_id sudah tidak ditemukan di daftar produk Canboso');
+            alertCanbosoStockIssue(variant, 'product_id no longer found in the Canboso product list');
           }
         } catch (err) {
-          console.error(`Canboso getLiveStock gagal (product_id=${variant.canbosoProductId}):`, err.message);
-          alertCanbosoStockIssue(variant, `gagal fetch dari API Canboso: ${err.message}`);
+          console.error(`Canboso getLiveStock failed (product_id=${variant.canbosoProductId}):`, err.message);
+          alertCanbosoStockIssue(variant, `failed to fetch from the Canboso API: ${err.message}`);
         }
       } else if (db.getTotalStock(variant) <= 0) {
         return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'out_of_stock'), show_alert: true });
@@ -3184,9 +3184,9 @@ bot.on('callback_query', async (query) => {
 
     // ---- Confirm purchase (Place Order) ----
     else if (data.startsWith('confirm:')) {
-      // Cegah double-tap/duplikat callback memicu 2 order berjalan
-      // bersamaan buat chatId yang sama - lihat catatan di deklarasi
-      // pendingOrderConfirms di atas.
+      // Stop a double-tap or duplicate callback triggering 2 orders running at
+      // once for the same chatId - see the note on the pendingOrderConfirms
+      // declaration above.
       if (pendingOrderConfirms.has(chatId)) {
         return bot.answerCallbackQuery(query.id, { text: '⏳ Order sebelumnya masih diproses, tunggu sebentar...', show_alert: true }).catch(() => {});
       }
