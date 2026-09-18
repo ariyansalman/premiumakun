@@ -4009,41 +4009,41 @@ bot.on('message', async (msg) => {
     const newTiers = computeTiersFromCost(cost, newMarkup);
     db.setVariantTiers(productId, variantId, newTiers);
     bot.sendMessage(chatId,
-      `✅ Markup 3-tier *${label}* disimpan & langsung diterapkan!\n\n` +
-      `Modal: ${usd(cost)}\nMarkup: ${p1}% / ${p2}% / ${p3}%\nHarga baru: ${tierPricesSummary(newTiers)}\n\n` +
-      `Markup ini akan tetap dipakai di setiap sync berikutnya (menghitung ulang dari modal live tiap saat itu).`,
+      `✅ 3-tier markup for *${label}* saved and applied immediately!\n\n` +
+      `Cost: ${usd(cost)}\nMarkup: ${p1}% / ${p2}% / ${p3}%\nNew price: ${tierPricesSummary(newTiers)}\n\n` +
+      `This markup keeps applying on every subsequent sync (recalculating from the live cost each time).`,
       { parse_mode: 'Markdown' }
     );
   }
 
-  // Input angka persen markup gift ("💲 Atur Harga Gift" -> "📈 Ubah Markup %")
-  // - lihat giftPriceUsd() di atas untuk gimana ini dipakai (Buy Gift/Confess
-  // Gift DAN Jual Gift Koleksi, dua-duanya).
+  // A gift markup percentage ("💲 Set Gift Pricing" -> "📈 Change Markup %") -
+  // see giftPriceUsd() above for how it is used (by Buy Gift/Confess Gift AND
+  // Sell Collectible Gift alike).
   else if (pending.type === 'set_gift_markup') {
     const value = Number(msg.text.trim().replace(',', '.'));
     if (isNaN(value) || value < 0) {
-      return bot.sendMessage(chatId, '⚠️ Markup harus angka ≥ 0. Ketik ulang, contoh: `30`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ The markup must be a number ≥ 0. Type it again, for example: `30`. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     db.clearPendingAction(chatId);
     db.setGiftPricingSettings({ markupPct: value });
-    bot.sendMessage(chatId, `✅ Markup gift diubah jadi *${value}%*.`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `✅ The gift markup was changed to *${value}%*.`, { parse_mode: 'Markdown' });
   }
 
-  // Input angka kurs Stars->USD gift ("💲 Atur Harga Gift" -> "💱 Ubah Kurs
-  // Stars→USD") - dipakai buat hitung modal (stars x kurs) sebelum ditambah
-  // markup%, lihat giftPriceUsd().
+  // The Stars->USD gift rate ("💲 Set Gift Pricing" -> "💱 Change Stars→USD
+  // Rate") - used to work out the cost (stars x rate) before the markup% is
+  // added, see giftPriceUsd().
   else if (pending.type === 'set_gift_stars_rate') {
     const value = Number(msg.text.trim().replace(',', '.'));
     if (isNaN(value) || value <= 0) {
-      return bot.sendMessage(chatId, '⚠️ Kurs harus angka lebih besar dari 0. Ketik ulang, contoh: `0.015`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ The rate must be a number greater than 0. Type it again, for example: `0.015`. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     db.clearPendingAction(chatId);
     db.setGiftPricingSettings({ starsToUsdRate: value });
-    bot.sendMessage(chatId, `✅ Kurs Stars→USD gift diubah jadi *${value}* (1⭐ = $${value}).`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `✅ The gift Stars→USD rate was changed to *${value}* (1⭐ = $${value}).`, { parse_mode: 'Markdown' });
   }
 
-  // Input "0.65,0.69,0.65" -> harga JUAL langsung (bukan %) tier 1-49 /
-  // 50-499 / 500+ untuk 1 varian - lihat askSetTierPrice() untuk konteksnya.
+  // Input "0.65,0.69,0.65" -> direct SALE prices (not percentages) for tiers
+  // 1-49 / 50-499 / 500+ on one variant - see askSetTierPrice() for context.
   else if (pending.type === 'set_tier_price') {
     const { productId, variantId } = pending.data;
     const product = db.findProduct(productId);
@@ -4054,11 +4054,11 @@ bot.on('message', async (msg) => {
     }
     const parts = msg.text.split(',').map(s => s.trim());
     if (parts.length !== 3 || parts.some(p => p === '' || isNaN(Number(p)))) {
-      return bot.sendMessage(chatId, '⚠️ Format salah. Ketik 3 angka harga USD dipisah koma, contoh: `0.65,0.69,0.65`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ Wrong format. Type 3 USD prices separated by commas, for example: `0.65,0.69,0.65`. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     const [p1, p2, p3] = parts.map(Number);
     if ([p1, p2, p3].some(p => p <= 0)) {
-      return bot.sendMessage(chatId, '⚠️ Harga tidak boleh 0 atau negatif. Ketik ulang, contoh: `0.65,0.69,0.65`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ A price cannot be 0 or negative. Type it again, for example: `0.65,0.69,0.65`. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     db.clearPendingAction(chatId);
     const newTiers = [
@@ -4070,42 +4070,42 @@ bot.on('message', async (msg) => {
     const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
     const supplierNote = variant.supplierServiceId
       ? (variant.priceLocked
-          ? '\n\n🔒 Harga ini terkunci, jadi AMAN - sync Supplier berikutnya tidak akan menimpanya (modal & stok tetap ikut update seperti biasa).'
-          : '\n\n⚠️ Ingat: tier ini akan tertimpa lagi begitu sync Supplier berikutnya jalan. Buka menu ini lagi buat "🔒 Kunci Harga Manual" kalau tidak mau ketimpa.')
+          ? '\n\n🔒 This price is locked, so it is SAFE - the next Supplier sync will not overwrite it (cost and stock still update as usual).'
+          : '\n\n⚠️ Remember: these tiers will be overwritten again as soon as the next Supplier sync runs. Reopen this menu and use "🔒 Lock Manual Price" if you do not want that.')
       : '';
     bot.sendMessage(chatId,
-      `✅ Tier diskon grosir *${label}* berhasil diubah!\n\nTier baru: ${tierPricesSummary(newTiers)}${supplierNote}`,
+      `✅ The bulk discount tiers for *${label}* were updated!\n\nNew tiers: ${tierPricesSummary(newTiers)}${supplierNote}`,
       { parse_mode: 'Markdown' }
     );
   }
 
   else if (pending.type === 'supplier_orderid_lookup') {
     const orderId = msg.text.trim();
-    if (!orderId) return bot.sendMessage(chatId, '⚠️ Order ID tidak boleh kosong. Ketik /cancel untuk batal.');
+    if (!orderId) return bot.sendMessage(chatId, '⚠️ The Order ID cannot be empty. Type /cancel to abort.');
     db.clearPendingAction(chatId);
     if (!AIVERSEHUB_API_KEY) {
-      return bot.sendMessage(chatId, '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ *AIVERSEHUB_API_KEY* has not been set in `.env`.', { parse_mode: 'Markdown' });
     }
     let order;
     try {
       order = await supplier.getOrderById(orderId);
     } catch (err) {
-      return bot.sendMessage(chatId, `⚠️ Gagal ambil order dari Supplier:\n_${err.message}_`, { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, `⚠️ Failed to fetch the order from the supplier:\n_${err.message}_`, { parse_mode: 'Markdown' });
     }
     if (!order) {
-      return bot.sendMessage(chatId, `🔍 Order ID \`${escapeHtml(orderId)}\` tidak ditemukan di Supplier.`, { parse_mode: 'HTML' });
+      return bot.sendMessage(chatId, `🔍 Order ID \`${escapeHtml(orderId)}\` was not found at the supplier.`, { parse_mode: 'HTML' });
     }
     const delivered = Array.isArray(order.delivered_products) && order.delivered_products.length
       ? order.delivered_products.map(p => `<code>${escapeHtml(String(p))}</code>`).join('\n')
-      : '_(tidak ada, atau belum terkirim)_';
+      : '_(none, or not delivered yet)_';
     bot.sendMessage(chatId,
-      `🔍 <b>Detail Order Supplier</b>\n\n` +
+      `🔍 <b>Supplier Order Details</b>\n\n` +
       `Order ID: <code>${escapeHtml(order.order_id)}</code>\n` +
       `Service: ${escapeHtml(order.service || '-')}\n` +
-      `Jumlah: ${order.quantity}\n` +
-      `Nominal: ${usd(order.amount || 0)}\n` +
+      `Quantity: ${order.quantity}\n` +
+      `Amount: ${usd(order.amount || 0)}\n` +
       `Status: ${escapeHtml(order.status || '-')}\n\n` +
-      `📦 Produk terkirim:\n${delivered}`,
+      `📦 Products delivered:\n${delivered}`,
       { parse_mode: 'HTML' }
     );
   }
@@ -4121,7 +4121,7 @@ bot.on('message', async (msg) => {
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
     bot.sendMessage(chatId,
-      `✅ Teks *How to Use* untuk *${product ? product.name : productId}${variant && variant.label ? ' - ' + variant.label : ''}* berhasil disimpan.`,
+      `✅ The *How to Use* text for *${product ? product.name : productId}${variant && variant.label ? ' - ' + variant.label : ''}* was saved.`,
       { parse_mode: 'Markdown' }
     );
   }
@@ -4149,20 +4149,20 @@ bot.on('message', async (msg) => {
     const product = db.findProduct(productId);
     if (!product) {
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, '⚠️ Produk tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product not found, cancelled.');
     }
     if (typed === '-') {
       db.setProductLogo(productId, null);
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, `✅ Logo untuk *${product.name}* dihapus, balik pakai emoji biasa.`, { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, `✅ The logo for *${product.name}* was removed; it goes back to the plain emoji.`, { parse_mode: 'Markdown' });
     }
     if (!/^https?:\/\//i.test(typed)) {
-      return bot.sendMessage(chatId, '⚠️ URL tidak valid - harus diawali `http://` atau `https://`. Coba lagi, atau /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ Invalid URL - it must start with `http://` or `https://`. Try again, or /cancel to abort.', { parse_mode: 'Markdown' });
     }
     db.setProductLogo(productId, typed);
     db.clearPendingAction(chatId);
     bot.sendMessage(chatId,
-      `✅ Logo untuk *${product.name}* berhasil disimpan. Mulai sekarang notifikasi channel "🎉 New Purchase!" untuk produk ini tampil pakai logo ini.`,
+      `✅ The logo for *${product.name}* was saved. From now on the "🎉 New Purchase!" channel notification for this product uses this logo.`,
       { parse_mode: 'Markdown' }
     );
   }
@@ -4172,23 +4172,23 @@ bot.on('message', async (msg) => {
     const product = db.findProduct(productId);
     if (!product) {
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, '⚠️ Produk tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product not found, cancelled.');
     }
     const typed = (msg.text || '').trim();
     if (typed === '-') {
       db.setProductEmoji(productId, '📦', null);
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, `✅ Ikon untuk *${product.name}* dibalikin ke emoji unicode biasa (📦, tanpa premium).`, { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, `✅ The icon for *${product.name}* was reverted to a plain unicode emoji (📦, no premium).`, { parse_mode: 'Markdown' });
     }
-    // Cari entity custom_emoji PERTAMA di pesan ini (boleh dari forward) -
-    // sama seperti mekanisme capture di "🎨 Kelola Emoji ID" (lihat
-    // pending.type === 'emoji_capture'). Kalau tidak ketemu, minta ulang -
-    // JANGAN diam-diam terima unicode biasa supaya admin tidak salah kira
-    // sudah premium padahal cuma nempel karakter biasa.
+    // Find the FIRST custom_emoji entity in this message (a forward is fine) -
+    // the same mechanism as the capture in "🎨 Manage Emoji ID" (see
+    // pending.type === 'emoji_capture'). When none is found, ask again - do NOT
+    // quietly accept plain unicode, so the admin does not wrongly believe it is
+    // premium when it is only an ordinary character.
     const found = (msg.entities || []).find(e => e.type === 'custom_emoji');
     if (!found) {
       return bot.sendMessage(chatId,
-        '⚠️ Belum ketemu custom emoji di pesan itu. Pastikan kirim/forward pesan yang beneran mengandung *emoji premium* (dipilih dari panel emoji Telegram Premium kamu), bukan cuma emoji unicode biasa. Ketik `-` untuk pakai unicode biasa, atau /cancel untuk batal.',
+        '⚠️ No custom emoji was found in that message. Make sure you send or forward a message that genuinely contains a *premium emoji* (picked from your Telegram Premium emoji panel), not just a plain unicode emoji. Type `-` to use plain unicode, or /cancel to abort.',
         { parse_mode: 'Markdown' }
       );
     }
@@ -4196,7 +4196,7 @@ bot.on('message', async (msg) => {
     db.setProductEmoji(productId, fallbackChar, found.custom_emoji_id);
     db.clearPendingAction(chatId);
     bot.sendMessage(chatId,
-      `✅ Emoji untuk *${product.name}* berhasil diganti!\n\n🆔 ID: \`${found.custom_emoji_id}\`\n\nCek langsung di halaman deskripsi produk / notifikasi channel buat lihat hasilnya.`,
+      `✅ The emoji for *${product.name}* was changed!\n\n🆔 ID: \`${found.custom_emoji_id}\`\n\nCheck the product description page / channel notification to see the result.`,
       { parse_mode: 'Markdown' }
     );
   }
