@@ -1799,10 +1799,10 @@ async function executeGiftSend(chatId, order) {
   }
 }
 
-// Link referral pribadi user, dalam format deep-link /start standar Telegram
-// (https://t.me/<bot_username>?start=<payload>). Payload yang dipakai di sini
-// adalah chatId si pengundang sendiri, supaya saat teman yang diundang buka
-// bot lewat link ini, handler /start bisa langsung tahu siapa pengundangnya.
+// A user's personal referral link, in Telegram's standard /start deep-link format
+// (https://t.me/<bot_username>?start=<payload>). The payload used here is the
+// inviter's own chatId, so that when an invited friend opens the bot through this
+// link, the /start handler immediately knows who invited them.
 function referralLink(chatId) {
   return `https://t.me/${BOT_USERNAME}?start=${chatId}`;
 }
@@ -1852,13 +1852,13 @@ function referralKeyboard(chatId) {
     [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_share_referral'), url: `https://t.me/share/url?url=${encodeURIComponent(referralLink(chatId))}&text=${encodeURIComponent(`Yuk belanja akun premium murah di ${STORE_NAME}!`)}` }, 'share_referral'), 'primary')]
   ];
   if (BOT_USERNAME) {
-    // Tombol copy_text bawaan Telegram (Bot API 7.x+) - begitu dipencet,
-    // link referral LANGSUNG kecopy ke clipboard user, TANPA bot kirim
-    // pesan/chat baru berisi link itu.
+    // Telegram's built-in copy_text button (Bot API 7.x+) - one press copies the
+    // referral link STRAIGHT to the user's clipboard, WITHOUT the bot sending a
+    // new message containing it.
     rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_referral'), copy_text: { text: referralLink(chatId) } }, 'copy_referral'), 'primary')]);
   } else {
-    // BOT_USERNAME belum diisi -> link belum valid, tetap kasih tombol yang
-    // munculin peringatan lewat callback (bukan copy_text statis yang salah).
+    // BOT_USERNAME is not set -> the link is not valid yet, so still offer a button
+    // that raises a warning via callback (rather than a static, wrong copy_text).
     rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_referral'), callback_data: 'referral:copy' }, 'copy_referral'), 'primary')]);
   }
   rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back'), 'danger')]);
@@ -1867,9 +1867,9 @@ function referralKeyboard(chatId) {
 
 function referralText(chatId) {
   const stats = db.getReferralStats(chatId);
-  // Judul halaman: emoji-nya diambil lewat teksEmoji() supaya custom emoji
-  // yang di-set admin di menu "🎨 Kelola Emoji ID" -> "Halaman Refer & Earn"
-  // ke-apply. Kalau belum di-set, otomatis fallback ke emoji unicode biasa.
+  // Page title: its emoji comes from teksEmoji() so a custom emoji set by the admin
+  // under "🎨 Manage Emoji ID" -> "Refer & Earn Page" applies. When unset it falls
+  // back to the plain unicode emoji automatically.
   const title = `${teksEmoji('referral_title', '🎁')} ${lang.t(chatId, 'referral_title')}`;
   if (!BOT_USERNAME) {
     return `${title}\n\n${lang.t(chatId, 'referral_disabled')}`;
@@ -1880,9 +1880,9 @@ function referralText(chatId) {
     link: referralLink(chatId),
     count: stats.referralCount,
     earnings: usd(stats.referralEarnings, chatId),
-    // Sama seperti title: masing-masing baris pakai key emoji sendiri
-    // (cocok dengan key di admin menu: referral_reward, referral_link,
-    // referral_howitworks, referral_total, referral_earnings).
+    // Same as the title: each line uses its own emoji key (matching the keys in the
+    // admin menu: referral_reward, referral_link, referral_howitworks,
+    // referral_total, referral_earnings).
     reward_emoji: teksEmoji('referral_reward', '💎'),
     link_emoji: teksEmoji('referral_link', '🔗'),
     how_emoji: teksEmoji('referral_howitworks', '💳'),
@@ -1891,29 +1891,29 @@ function referralText(chatId) {
   });
 }
 
-// Label stok yang aman ditampilkan ke buyer. Sejak stok varian Supplier API
-// (Supplier) disinkron otomatis lewat scheduleSupplierSync(), angka
-// variant.stock-nya sudah live - jadi cukup ditampilkan apa adanya dengan
-// ikon di depan supaya buyer tahu ini stok yang di-supply otomatis lewat
-// API (bukan stok manual admin), bukan indikator generik seperti dulu.
-// ===== BUG FIX: BUTTON_DATA_INVALID untuk produk/varian bernama panjang =====
-// Sebelumnya banyak tombol (desc/howto/variant/qty/qtycustom/confirm)
-// menempel productId+variantId APA ADANYA ke callback_data, mis.
-// `variant:${productId}:${variantId}`. Telegram membatasi callback_data KERAS
-// di 64 byte - untuk produk dengan nama panjang (co. "Netflix 1M Premium 4K
-// HDR" -> id "netflix-1m-premium-4k-hdr", variant id "...-default") ini
-// gampang lewat batas itu. Begitu terjadi, Telegram TOLAK seluruh pesan yang
-// mengandung keyboard itu (error "BUTTON_DATA_INVALID"), bikin buyer cuma
-// dapat pesan error generik pas buka halaman deskripsi produknya - padahal
-// produk lain yang namanya lebih pendek (Gemini, Spotify) baik-baik saja.
-// (successKeyboard() di atas sudah pernah kena masalah SAMA PERSIS dan
-// diperbaiki dengan cara serupa - simpan referensi pendek, bukan id mentah.)
+// A stock label that is safe to show a buyer. Since Supplier API variant stock is
+// synced automatically by scheduleSupplierSync(), the variant.stock number is
+// already live - so it is simply shown as is with an icon in front, telling the
+// buyer this stock is supplied automatically through an API (rather than being
+// manual admin stock), instead of the generic indicator used before.
+// ===== BUG FIX: BUTTON_DATA_INVALID for products/variants with long names =====
+// Many buttons (desc/howto/variant/qty/qtycustom/confirm) used to embed the
+// productId+variantId VERBATIM into callback_data, for example
+// `variant:${productId}:${variantId}`. Telegram caps callback_data HARD at 64
+// bytes - and for a product with a long name ("Netflix 1M Premium 4K HDR" -> id
+// "netflix-1m-premium-4k-hdr", variant id "...-default") that limit is easily
+// exceeded. When it is, Telegram REJECTS the entire message carrying that
+// keyboard (a "BUTTON_DATA_INVALID" error), so the buyer only gets a generic
+// error when opening that product's description page - while other products with
+// shorter names (Gemini, Spotify) work fine.
+// (successKeyboard() above hit EXACTLY THE SAME problem and was fixed the same
+// way - store a short reference, not the raw id.)
 //
-// Fix: ganti productId+variantId mentah dengan hash pendek 10 karakter yang
-// SELALU muat berapa pun panjang nama produknya, lalu resolve balik ke
-// productId/variantId asli lewat resolveProductRef() begitu tombolnya
-// dipencet. Katalog produk toko ini kecil, jadi loop penuh saat resolve
-// murah dan tidak perlu index/cache tambahan.
+// The fix: replace the raw productId+variantId with a short 10-character hash
+// that ALWAYS fits however long the product name is, then resolve it back to the
+// real productId/variantId via resolveProductRef() when the button is pressed.
+// This store's product catalogue is small, so a full loop on resolve is cheap and
+// needs no extra index or cache.
 function productRef(productId, variantId) {
   return crypto.createHash('sha1').update(`${productId}\u0000${variantId}`).digest('hex').slice(0, 10);
 }
@@ -1928,47 +1928,47 @@ function resolveProductRef(ref) {
 }
 
 function stockLabel(variant) {
-  // BUG FIX: dulu selalu tampil teks statis "Auto (API)" berapapun stok
-  // sebenarnya, karena stok lokal varian Supplier API cuma di-refresh manual
-  // (dan sering lupa). Sekarang variant.liveStock disinkron otomatis tiap
-  // SUPPLIER_SYNC_INTERVAL_MINUTES lewat scheduleSupplierSync(), jadi angka
-  // ini sudah live - aman ditampilkan langsung ke buyer.
-  // Varian Canboso API sekarang JUGA dicek live tiap buyer buka halaman
-  // varian (lihat handler 'variant:') - variant.liveStock-nya disinkron di
-  // situ, jadi angka di sini pun sudah cukup segar untuk ditampilkan apa
-  // adanya (bukan lagi label generik "Auto (API)").
-  // ===== PATCH: stok live (variant.liveStock) & stok manual (variant.stock,
-  // dimirror dari stockItems.length) sekarang field TERPISAH (lihat
-  // db.setVariantStock) - jadi keduanya harus DIJUMLAH di sini lewat
-  // db.getTotalStock() supaya angka yang ditampilkan mencerminkan total
-  // yang benar-benar bisa dipenuhi (live + manual), bukan cuma salah satu.
+  // BUG FIX: this used to always show the static text "Auto (API)" whatever the
+  // real stock was, because a Supplier API variant's local stock was only
+  // refreshed manually (and often forgotten). variant.liveStock is now synced
+  // automatically every SUPPLIER_SYNC_INTERVAL_MINUTES by scheduleSupplierSync(),
+  // so this number is live and safe to show a buyer directly.
+  // Canboso API variants are NOW also checked live whenever a buyer opens the
+  // variant page (see the 'variant:' handler) - their variant.liveStock is synced
+  // there, so the number here is fresh enough to display as is (no longer a
+  // generic "Auto (API)" label).
+  // ===== PATCH: live stock (variant.liveStock) and manual stock (variant.stock,
+  // mirrored from stockItems.length) are now SEPARATE fields (see
+  // db.setVariantStock) - so both must be ADDED TOGETHER here via
+  // db.getTotalStock(), so the number shown reflects the total that can genuinely
+  // be fulfilled (live + manual), not just one of them.
   return String(db.getTotalStock(variant));
 }
 
 // Flat list of every SKU (product + variant) as its own buy button, color-coded by stock
-// ===== PATCH v3: live-check varian Canboso API sebelum hitung warna =====
-// Sebelumnya warna tombol (hijau/merah) di sini murni pakai db.getTotalStock(v),
-// yaitu angka LOKAL yang cuma ter-update lewat sync terjadwal (scheduleCanbosoSync,
-// tiap CANBOSO_SYNC_INTERVAL_SECONDS) atau repaint 30 detik (scheduleProductListRepaint) -
-// keduanya cuma menghitung ULANG dari angka lokal yang SAMA, bukan menyegarkan
-// angkanya sendiri. Akibatnya ada jendela waktu di mana tombol masih hijau
-// padahal stok di sisi Canboso sudah 0 (baru kepakai buyer lain), sampai buyer
-// pencet "Buy Now" dan baru ketahuan "Out of stock" - lihat handler 'variant:'
-// yang sudah lebih dulu punya live-check serupa.
-// Sekarang productListKeyboard() jadi ASYNC dan mem-fetch stok live utk semua
-// varian yang py canbosoProductId, PERSIS pola yg sama kaya di handler 'variant:'
-// (pakai canboso.getLiveStock(), yang sudah di-cache 20 detik di level
-// supplierCanboso.js -> getProductsCached(), jadi tidak nambah beban API kalau
-// dipanggil berulang kali dlm rentang <20 detik oleh banyak buyer/repaint timer).
-// Kalau fetch gagal/timeout, JANGAN block - fallback diam-diam ke angka lokal
-// yang sudah ada (db.getTotalStock(v)), sama seperti prinsip di handler lain:
-// live-check ini cuma penyegar tampilan, BUKAN validasi final (placeOrder() di
-// handler 'confirm:' tetap jadi validasi final sebenarnya).
-// Supplier API (AIVerse Hub) TIDAK diikutkan di sini - modulnya (supplier.js)
-// belum punya lapisan cache seperti getProductsCached() milik Canboso, jadi
-// live-check per buka menu di sini bisa lebih berat/rawan rate-limit. Untuk
-// varian Supplier API, percepat SUPPLIER_SYNC_INTERVAL_MINUTES di .env kalau
-// mau jendela basi-nya lebih pendek.
+// ===== PATCH v3: live-check Canboso API variants before computing the colour =====
+// The button colour (green/red) here used to rely purely on db.getTotalStock(v),
+// a LOCAL number updated only by the scheduled sync (scheduleCanbosoSync, every
+// CANBOSO_SYNC_INTERVAL_SECONDS) or the 30-second repaint
+// (scheduleProductListRepaint) - both of which merely RECOMPUTE from that SAME
+// local number rather than refreshing it. As a result there was a window where a
+// button was still green while the stock on Canboso's side had already hit 0
+// (just taken by another buyer), until the buyer pressed "Buy Now" and only then
+// saw "Out of stock" - see the 'variant:' handler, which already had a similar
+// live check. productListKeyboard() is now ASYNC and fetches live stock for every
+// variant with a canbosoProductId, EXACTLY the pattern used in the 'variant:'
+// handler (via canboso.getLiveStock(), already cached for 20 seconds at the
+// supplierCanboso.js level -> getProductsCached(), so it adds no API load when
+// called repeatedly within 20 seconds by many buyers or the repaint timer).
+// When a fetch fails or times out, DO NOT block - fall back silently to the
+// existing local number (db.getTotalStock(v)), following the same principle as
+// elsewhere: this live check only freshens the display, it is NOT the final
+// validation (placeOrder() in the 'confirm:' handler remains that).
+// Supplier API (AIVerse Hub) is deliberately excluded here - its module
+// (supplier.js) has no cache layer like Canboso's getProductsCached(), so a live
+// check on every menu open could be heavier and more rate-limit prone. For
+// Supplier API variants, shorten SUPPLIER_SYNC_INTERVAL_MINUTES in .env if you
+// want a smaller staleness window.
 async function productListKeyboard(chatId) {
   const products = db.getAllProducts();
   const rows = [];
@@ -1981,30 +1981,30 @@ async function productListKeyboard(chatId) {
             db.setVariantStock(p.id, v.id, live.stock);
             v.liveStock = live.stock;
           }
-          // Kalau live null/NaN (produk hilang dari Canboso / field tak
-          // dikenali), diamkan di sini - alertCanbosoStockIssue() sudah
-          // dipicu dari tempat lain (handler 'variant:'/sync terjadwal),
-          // tidak perlu dobel alert tiap kali menu list dibuka.
+          // When live is null/NaN (the product vanished from Canboso / the field
+          // is unrecognised), stay quiet here - alertCanbosoStockIssue() is
+          // already triggered elsewhere (the 'variant:' handler / scheduled sync),
+          // so there is no need to double-alert every time the list menu opens.
         } catch (err) {
-          // Fetch gagal (network/API down/timeout) - pakai angka lokal
-          // terakhir yang ada, jangan sampai error di sini bikin seluruh
-          // menu produk gagal tampil.
-          console.error(`Canboso getLiveStock (list) gagal (product_id=${v.canbosoProductId}):`, err.message);
+          // The fetch failed (network/API down/timeout) - use the last known local
+          // number, and never let an error here stop the whole product menu from
+          // rendering.
+          console.error(`Canboso getLiveStock (list) failed (product_id=${v.canbosoProductId}):`, err.message);
         }
       }
       const label = p.variants.length > 1 ? `${p.name} ${v.label}` : p.name;
-      // Kalau produk punya emojiId, emoji-nya sudah tampil lewat icon tombol
-      // (icon_custom_emoji_id) -> jangan ulang lagi p.emoji di teks label,
-      // supaya tidak dobel.
+      // When a product has an emojiId, its emoji already appears as the button
+      // icon (icon_custom_emoji_id) -> do not repeat p.emoji in the label text, or
+      // it would show twice.
       const emojiPart = p.emojiId ? '' : (p.emoji ? `${p.emoji} ` : '');
-      // ===== PATCH v2: warna tombol beneran (Bot API 9.4 "style" field) =====
-      // Sebelumnya di sini cuma nempel teks dot 🟢/🔴 di depan label, karena
-      // waktu itu dikira Telegram belum bisa mewarnai LATAR tombol inline.
-      // Ternyata bisa - persis mekanisme yang sudah dipakai tombol-tombol
-      // menu /start (lihat withStyle(), style 'primary'/'success'/'danger').
-      // Sekarang dipakai juga di sini: stok > 0 -> 'success' (hijau beneran),
-      // stok habis -> 'danger' (merah beneran) - dot emoji teks dihapus
-      // karena sudah redundan dengan warna latar tombolnya sendiri.
+      // ===== PATCH v2: real button colours (the Bot API 9.4 "style" field) =====
+      // This used to prepend a 🟢/🔴 dot to the label text, because Telegram was
+      // believed not to support colouring an inline button's BACKGROUND. It does
+      // - exactly the mechanism already used by the /start menu buttons (see
+      // withStyle(), style 'primary'/'success'/'danger').
+      // It is now used here too: stock > 0 -> 'success' (genuinely green), out of
+      // stock -> 'danger' (genuinely red) - the text dot emoji was removed as
+      // redundant next to the button's own background colour.
       const stockStyle = db.getTotalStock(v) > 0 ? 'success' : 'danger';
       rows.push([withStyle(withProductIcon({
         text: `${emojiPart}${label} - ${usd(db.getBulkPrice(v), chatId)} | Stock: ${stockLabel(v)}`,
@@ -2016,15 +2016,15 @@ async function productListKeyboard(chatId) {
   return { inline_keyboard: rows };
 }
 
-// ===== PATCH v3: warna tombol "Buy Now" di halaman detail ikut stock =====
-// Sebelumnya tombol ini selalu abu-abu netral berapapun stok-nya - beda
-// dari daftar produk (productListKeyboard) yang sudah diwarnai hijau/merah.
-// Efeknya buyer baru tahu produk habis SETELAH pencet "Buy Now" (muncul
-// alert "Stok habis"), padahal harusnya sudah kelihatan dari warna tombol
-// begitu halaman detail dibuka. Sekarang terima parameter `variant`
-// (opsional, buat backward-compat kalau ada pemanggil lain yang belum
-// diupdate) - kalau ada, tombol "Buy Now" ikut diwarnai 'success'/'danger'
-// persis pola yang sama seperti productListKeyboard().
+// ===== PATCH v3: the "Buy Now" button colour on the detail page follows stock =====
+// This button used to be a neutral grey whatever the stock was - unlike the
+// product list (productListKeyboard), which was already coloured green/red. The
+// effect was that a buyer only learned a product was sold out AFTER pressing
+// "Buy Now" (getting an "Out of stock" alert), when it should have been visible
+// from the button colour the moment the detail page opened. It now takes a
+// `variant` parameter (optional, for backward compatibility with any caller not
+// yet updated) - when supplied, the "Buy Now" button is coloured
+// 'success'/'danger' exactly as in productListKeyboard().
 function descKeyboard(productId, variantId, chatId, product, variant) {
   const ref = productRef(productId, variantId);
   const buyButton = withButtonIconPreferProduct({ text: lang.t(chatId, 'btn_buy_now'), callback_data: `variant:${ref}` }, 'buy_now', product);
@@ -2038,33 +2038,33 @@ function descKeyboard(productId, variantId, chatId, product, variant) {
   };
 }
 
-// ===== FITUR BARU: 🔔 Notifikasi Live Stock ke SEMUA User =====
-// Dipicu OTOMATIS setiap kali admin berhasil nambah stok 1 varian, lewat
-// cara apapun (📋 paste link/kode -> addstock_items, ATAU 🔢 angka manual ->
-// addstock_manual_qty - lihat kedua handler itu di bagian TEXT MESSAGES).
-// Setiap ikon di teks ini punya slot sendiri lewat teksEmoji() (grup
-// "stockalert" di TEKS_GROUPS) - JADI SELALU pakai custom emoji Premium
-// begitu admin isi ID-nya lewat "🎨 Kelola Emoji ID" (fallback ke unicode
-// biasa kalau belum diisi/owner belum Premium, sama seperti mekanisme
-// lain di bot ini - tidak pernah error).
+// ===== FEATURE: 🔔 Live Stock Notification to ALL Users =====
+// Triggered AUTOMATICALLY whenever an admin successfully adds stock to a variant,
+// by any route (📋 pasting links/codes -> addstock_items, OR 🔢 a manual number
+// -> addstock_manual_qty - see both handlers in the TEXT MESSAGES section).
+// Every icon in this text has its own slot via teksEmoji() (the "stockalert"
+// group in TEKS_GROUPS) - so it ALWAYS uses a Premium custom emoji once the admin
+// fills in the ID via "🎨 Manage Emoji ID" (falling back to plain unicode when
+// unset or the owner is not Premium, the same as every other mechanism in this
+// bot - it never errors).
 function buildStockAlertText(product, variant, qtyAdded, chatId) {
   const title = product.variants.length > 1 ? `${product.name} - ${variant.label}` : product.name;
   return (
-    `${teksEmoji('stockalert_bell', '🔔')} <b>STOK BARU TERSEDIA!</b>\n\n` +
-    `${teksEmoji('stockalert_product', '📦')} <b>Produk:</b> ${productEmojiHtml(product)} ${escapeHtml(title)}\n` +
-    `${teksEmoji('stockalert_added', '➕')} <b>Ditambahkan:</b> ${qtyAdded} pcs\n` +
-    `${teksEmoji('stockalert_total', '📊')} <b>Total Stok Sekarang:</b> ${db.getTotalStock(variant)} pcs\n` +
-    `${teksEmoji('stockalert_price', '💲')} <b>Harga:</b> ${usd(db.getBasePrice(variant), chatId)}\n\n` +
-    `${teksEmoji('stockalert_footer', '⚡')} Buruan checkout sebelum kehabisan lagi!`
+    `${teksEmoji('stockalert_bell', '🔔')} <b>NEW STOCK AVAILABLE!</b>\n\n` +
+    `${teksEmoji('stockalert_product', '📦')} <b>Product:</b> ${productEmojiHtml(product)} ${escapeHtml(title)}\n` +
+    `${teksEmoji('stockalert_added', '➕')} <b>Added:</b> ${qtyAdded} pcs\n` +
+    `${teksEmoji('stockalert_total', '📊')} <b>Total Stock Now:</b> ${db.getTotalStock(variant)} pcs\n` +
+    `${teksEmoji('stockalert_price', '💲')} <b>Price:</b> ${usd(db.getBasePrice(variant), chatId)}\n\n` +
+    `${teksEmoji('stockalert_footer', '⚡')} Check out now before it sells out again!`
   );
 }
 
-// Tombol "✅ Buy Now" nempel di notifikasi live stock - PRIORITASKAN emoji
-// premium milik produk itu sendiri (sama seperti descKeyboard() di atas),
-// dan langsung nyambung ke callback `variant:${ref}` yang SAMA persis
-// dipakai tombol Buy Now di halaman deskripsi produk (lihat handler
-// `data.startsWith('variant:')`) - jadi begitu user pencet, langsung masuk
-// ke alur pilih jumlah beli, bukan cuma buka halaman deskripsi lagi.
+// The "✅ Buy Now" button attached to a live stock notification - it PREFERS the
+// product's own premium emoji (like descKeyboard() above), and links straight to
+// the SAME `variant:${ref}` callback used by the Buy Now button on the product
+// description page (see the `data.startsWith('variant:')` handler) - so pressing
+// it goes directly into the choose-quantity flow, rather than merely reopening
+// the description page.
 function stockAlertKeyboard(productId, variantId, product) {
   const ref = productRef(productId, variantId);
   return {
@@ -2074,12 +2074,12 @@ function stockAlertKeyboard(productId, variantId, product) {
   };
 }
 
-// Broadcast generik ke SEMUA user terdaftar (pola sama persis dengan 📢
-// Broadcast/Mode Maintenance: loop 1-per-1 + jeda kecil antar pesan biar
-// tidak kena rate limit Telegram). buildTextForUser(uid) dipanggil PER user
-// supaya harga/bahasa bisa dipersonalisasi (usd() beda Rp/$ sesuai lang
-// user). keyboard sama untuk semua user. adminChatId opsional - kalau
-// diisi, ringkasan berhasil/gagal dikirim balik ke situ setelah selesai.
+// A generic broadcast to ALL registered users (exactly the pattern used by 📢
+// Broadcast/Maintenance Mode: a one-by-one loop with a small delay between
+// messages to stay under Telegram's rate limit). buildTextForUser(uid) is called
+// PER user so prices can be personalised. The keyboard is the same for everyone.
+// adminChatId is optional - when supplied, a success/failure summary is sent back
+// there once it finishes.
 async function broadcastToAllUsers(buildTextForUser, keyboard, adminChatId, label) {
   const allDb = db.readDb();
   const userIds = Object.keys(allDb.users);
@@ -2089,43 +2089,43 @@ async function broadcastToAllUsers(buildTextForUser, keyboard, adminChatId, labe
       await bot.sendMessage(uid, buildTextForUser(uid), { parse_mode: 'HTML', reply_markup: keyboard });
       success++;
     } catch (err) {
-      failed++; // biasanya user sudah blokir/hapus bot - lanjut ke user berikutnya
+      failed++; // usually the user has blocked or deleted the bot - move on to the next
     }
     await new Promise(r => setTimeout(r, 40));
   }
   if (adminChatId) {
     bot.sendMessage(adminChatId,
-      `🔔 <i>${escapeHtml(label)} selesai dikirim ke semua user.</i>\n📨 Berhasil: <b>${success}</b> • ⚠️ Gagal: <b>${failed}</b>`,
+      `🔔 <i>${escapeHtml(label)} finished sending to all users.</i>\n📨 Succeeded: <b>${success}</b> • ⚠️ Failed: <b>${failed}</b>`,
       { parse_mode: 'HTML' }
     ).catch(() => {});
   }
 }
 
-// Broadcast notifikasi live stock ke SEMUA user terdaftar begitu admin
-// nambah stok manual (📥 Tambah Stock - lihat addstock_items/
-// addstock_manual_qty). SENGAJA TIDAK di-await oleh pemanggilnya - supaya
-// admin yang lagi nambah stok (apalagi kalau paste banyak link sekaligus,
-// 1 pesan/baris) tidak harus nunggu broadcast ke semua user selesai dulu
-// baru bisa lanjut kirim baris berikutnya. Ringkasan berhasil/gagal dikirim
-// balik ke admin yang mentrigger (adminChatId) setelah broadcast selesai.
+// Broadcast a live stock notification to ALL registered users as soon as an admin
+// adds stock manually (📥 Add Stock - see addstock_items/addstock_manual_qty).
+// It is DELIBERATELY not awaited by its caller - so an admin adding stock
+// (especially when pasting many links at once, one message per line) does not
+// have to wait for the broadcast to finish before sending the next line. The
+// success/failure summary is sent back to the admin who triggered it
+// (adminChatId) once the broadcast completes.
 async function broadcastStockAlert(product, variant, qtyAdded, adminChatId) {
   const keyboard = stockAlertKeyboard(product.id, variant.id, product);
   await broadcastToAllUsers(
     uid => buildStockAlertText(product, variant, qtyAdded, uid),
-    keyboard, adminChatId, `Notifikasi live stock (${product.name})`
+    keyboard, adminChatId, `Live stock notification (${product.name})`
   );
 }
 
-// ===== FITUR BARU: 🔔 Notifikasi Live Stock dari SYNC Supplier/Canboso =====
-// Beda dari broadcastStockAlert() di atas (dipicu admin nambah stok
-// MANUAL), ini dipicu OTOMATIS tiap kali auto-sync terjadwal
-// (scheduleSupplierSync()/scheduleCanbosoSync() - lihat refreshSupplierData/
-// refreshCanbosoData di bawah) mendeteksi TOTAL stok 1+ varian berubah
-// (naik ATAU turun) dibanding sync sebelumnya - sesuai permintaan: kirim
-// tiap kali sync, bukan cuma pas restock dari 0. Semua varian yang
-// berubah di 1 siklus sync yang SAMA digabung jadi 1 pesan broadcast (bukan
-// 1 pesan terpisah per varian) supaya user tidak kebanjiran banyak pesan
-// sekaligus kalau kebetulan banyak varian berubah bareng.
+// ===== FEATURE: 🔔 Live Stock Notification from a Supplier/Canboso SYNC =====
+// Unlike broadcastStockAlert() above (triggered by an admin adding stock
+// MANUALLY), this fires AUTOMATICALLY whenever a scheduled auto-sync
+// (scheduleSupplierSync()/scheduleCanbosoSync() - see refreshSupplierData/
+// refreshCanbosoData below) detects that the TOTAL stock of one or more variants
+// has changed (up OR down) since the previous sync - as requested: sent on every
+// sync, not only on a restock from 0. Every variant that changed within the SAME
+// sync cycle is combined into ONE broadcast message (rather than a separate
+// message per variant) so users are not flooded when many variants change at
+// once.
 function buildStockSyncBroadcastText(changes, chatId) {
   const bell = teksEmoji('stockalert_bell', '🔔');
   const footer = teksEmoji('stockalert_footer', '⚡');
@@ -2138,7 +2138,7 @@ function buildStockSyncBroadcastText(changes, chatId) {
       `${teksEmoji('stockalert_price', '💲')} ${usd(db.getBasePrice(c.variant), chatId)}`
     );
   });
-  return `${bell} <b>STOK DIPERBARUI (Live Supplier)!</b>\n\n${blocks.join('\n\n')}\n\n${footer} Cek & checkout sekarang!`;
+  return `${bell} <b>STOCK UPDATED (Live Supplier)!</b>\n\n${blocks.join('\n\n')}\n\n${footer} Take a look and check out now!`;
 }
 
 function stockSyncBroadcastKeyboard(changes) {
@@ -2151,15 +2151,15 @@ function stockSyncBroadcastKeyboard(changes) {
   return { inline_keyboard: rows };
 }
 
-// Dipanggil fire-and-forget dari scheduleSupplierSync()/scheduleCanbosoSync()
-// - TIDAK ada adminChatId (auto, bukan ditrigger admin manual dari chat),
-// jadi tidak ada ringkasan balik ke admin di sini (biar tidak dobel spam -
-// laporan error sync yang relevan buat admin sudah ada jalur sendiri lewat
-// notifyAdmins() di scheduleSupplierSync/scheduleCanbosoSync).
+// Called fire-and-forget from scheduleSupplierSync()/scheduleCanbosoSync() -
+// there is NO adminChatId (it is automatic, not triggered by an admin from chat),
+// so no summary goes back to an admin here (avoiding duplicate spam - sync errors
+// relevant to admins already have their own route via notifyAdmins() in
+// scheduleSupplierSync/scheduleCanbosoSync).
 async function broadcastStockSyncChanges(changes) {
   if (!changes || !changes.length) return;
   const keyboard = stockSyncBroadcastKeyboard(changes);
-  await broadcastToAllUsers(uid => buildStockSyncBroadcastText(changes, uid), keyboard, null, 'Notifikasi live stock (sync supplier)');
+  await broadcastToAllUsers(uid => buildStockSyncBroadcastText(changes, uid), keyboard, null, 'Live stock notification (supplier sync)');
 }
 
 function howToListKeyboard(chatId) {
@@ -2179,19 +2179,19 @@ function howToListKeyboard(chatId) {
   return { inline_keyboard: rows };
 }
 
-// Keyboard untuk pesan "ORDER BERHASIL" - selalu ada How to Use, dan kalau
-// ada item dengan TOTP secret (Kode 2FA live), tambahkan tombol Refresh
-// karena kodenya berubah tiap 30 detik dan bisa basi kalau cuma statis.
+// The keyboard for the "ORDER SUCCESSFUL" message - How to Use is always there,
+// and when an item carries a TOTP secret (a live 2FA code) a Refresh button is
+// added, because the code changes every 30 seconds and a static one goes stale.
 function successKeyboard(productId, variantId, orderId, deliveredItems, chatId) {
-  // PENTING: tombol ini cuma bawa orderId ("howtoorder:<orderId>"), BUKAN
-  // productId+variantId+orderId sekaligus. productId/variantId gampang
-  // panjang (variant.id sering sudah mengandung product.id sebagai prefix),
-  // dan callback_data Telegram dibatasi 64 byte - kalau ketiganya digabung
-  // gampang lewat batas itu dan bikin Telegram TOLAK kirim seluruh pesan
-  // "ORDER BERHASIL" (lihat .catch(() => {}) di pemanggilnya, jadi buyer
-  // diam-diam TIDAK dapat pesan order sama sekali kalau ini kejadian).
-  // Handler 'howtoorder:' di bawah ambil productId/variantId dari data
-  // order tersimpan, sama seperti pola "backtoorder:" yang sudah ada.
+  // IMPORTANT: this button carries only the orderId ("howtoorder:<orderId>"), NOT
+  // productId+variantId+orderId together. productId/variantId are easily long
+  // (variant.id often already contains product.id as a prefix), and Telegram caps
+  // callback_data at 64 bytes - combining all three easily exceeds that and makes
+  // Telegram REJECT the entire "ORDER SUCCESSFUL" message (see the .catch(() => {})
+  // in the caller, so the buyer would silently get no order message at all if that
+  // happened).
+  // The 'howtoorder:' handler below reads productId/variantId from the stored
+  // order data, the same pattern as the existing "backtoorder:".
   const rows = [
     [withButtonIcon({ text: '❗️ How to Use', callback_data: `howtoorder:${orderId}` }, 'how_to_use')]
   ];
@@ -2202,10 +2202,10 @@ function successKeyboard(productId, variantId, orderId, deliveredItems, chatId) 
 }
 
 function howToKeyboard(productId, variantId, context, chatId) {
-  // Back button balik ke konteks asal tombol "How to Use" dipencet:
-  // - context 'list'  -> balik ke menu utama "How to Use" (dari menu utama)
-  // - context ord_xxx -> balik ke pesan "ORDER BERHASIL" asal
-  // - kosong          -> balik ke halaman deskripsi produk (dari "Buy Now")
+  // The back button returns to wherever "How to Use" was pressed from:
+  // - context 'list'  -> back to the main "How to Use" menu (from the main menu)
+  // - context ord_xxx -> back to the original "ORDER SUCCESSFUL" message
+  // - empty           -> back to the product description page (from "Buy Now")
   let backCallback;
   if (context === 'list') backCallback = 'menu:howtouse';
   else if (context) backCallback = `backtoorder:${context}`;
@@ -2217,15 +2217,15 @@ function howToKeyboard(productId, variantId, context, chatId) {
   };
 }
 
-// Ikon 🎉/✅ di blok "Diskon Grosir" di bawah ini SEBELUMNYA hardcode
-// unicode biasa langsung di lang.js (bulk_discount_title/bulk_discount_line)
-// - jadi TIDAK PERNAH tampil premium walau ikon lain di halaman yang sama
-// (mis. ⚠️/📦 di enter_qty_title) sudah premium. Sekarang keduanya lewat
-// teksEmoji() juga, PINJAM ID yang sudah ada & sudah kepakai di tempat lain
-// (bukan ID baru) supaya konsisten gaya-nya: 🎉 pinjam dari 'success_title'
-// (judul "ORDER BERHASIL"), ✅ pinjam dari 'forcejoin_check' (ikon centang
-// wajib-join) - keduanya tetap bisa diganti terpisah kapan saja lewat admin
-// "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" kalau owner mau beda.
+// The 🎉/✅ icons in the "Bulk Discount" block below USED TO be plain unicode
+// hardcoded straight into lang.js (bulk_discount_title/bulk_discount_line) - so
+// they could NEVER render as premium even though other icons on the same page
+// (⚠️/📦 in enter_qty_title) already did. Both now go through teksEmoji() as
+// well, BORROWING IDs that already exist and are already used elsewhere (not new
+// ones) so the style stays consistent: 🎉 borrows from 'success_title' (the
+// "ORDER SUCCESSFUL" heading), ✅ borrows from 'forcejoin_check' (the force-join
+// tick) - either can still be changed separately at any time via admin
+// "🎨 Manage Emoji ID" -> "✍️ Emoji in Message Text" if the owner wants.
 function tiersText(variant, chatId) {
   if (!variant.tiers || variant.tiers.length <= 1) {
     return lang.t(chatId, 'price_per_pcs', { price: usd(db.getBasePrice(variant), chatId) });
