@@ -3421,8 +3421,8 @@ bot.on('callback_query', async (query) => {
       const successText = buildSuccessText(product, variant, qty, total, orderId, deliveredItems, chatId);
 
       // Automatic channel notification: "🎉 New Purchase!" (when the feature is on
-      // - see sendChannelNotif()). Called here rather than after the
-      // editMessageText below, so it still reaches the channel even if the edit or
+      // - see sendChannelNotif()). Called here rather than after editMessageText
+      // below, so it still reaches the channel even if the send to the buyer fails.
       sendChannelNotif('purchase', buildChannelPurchaseText(chatId, product, variant, qty, total), product);
 
       await bot.editMessageText(successText, {
@@ -3598,8 +3598,8 @@ async function verifyTelegramTarget(chatId, target) {
 
   if (targetInfo.isBot) {
     await bot.sendMessage(chatId,
-      `⚠️ <code>${escapeHtml(target)}</code> terdeteksi sebagai akun BOT, bukan user biasa. Gift/Stars tidak bisa dikirim ke akun bot.\n\n` +
-      `Kirim ulang username/ID user yang benar, atau /cancel untuk batal.`,
+      `⚠️ <code>${escapeHtml(target)}</code> is a BOT account, not a regular user. Gifts/Stars cannot be sent to a bot account.\n\n` +
+      `Send the correct user's username/ID again, or /cancel to abort.`,
       { parse_mode: 'HTML' }
     );
     return null;
@@ -3608,7 +3608,7 @@ async function verifyTelegramTarget(chatId, target) {
   const displayName = targetInfo.username
     ? `@${targetInfo.username}`
     : ([targetInfo.firstName, targetInfo.lastName].filter(Boolean).join(' ') || target);
-  await bot.sendMessage(chatId, `✅ Ditemukan: <b>${escapeHtml(displayName)}</b>`, { parse_mode: 'HTML' });
+  await bot.sendMessage(chatId, `✅ Found: <b>${escapeHtml(displayName)}</b>`, { parse_mode: 'HTML' });
   return targetInfo;
 }
 
@@ -3619,27 +3619,27 @@ bot.on('message', async (msg) => {
   const pending = db.getPendingAction(chatId);
   if (!pending) return;
 
-  // Lapis pertahanan tambahan (lihat komentar ADMIN_ONLY_PENDING_TYPES di
-  // atas): kalau pending action-nya termasuk tipe khusus admin TAPI chatId
-  // ini bukan admin, bersihkan diam-diam & hentikan di sini - JANGAN lanjut
+  // An extra layer of defence (see the ADMIN_ONLY_PENDING_TYPES comment above):
+  // when the pending action is an admin-only type BUT this chatId is not an admin,
+  // clear it quietly and stop here - do NOT continue to any step below.
   // ke step manapun di bawah.
   if (ADMIN_ONLY_PENDING_TYPES.has(pending.type) && !isAdmin(chatId)) {
     db.clearPendingAction(chatId);
     return;
   }
 
-  // Gerbang Mode Maintenance: kalau fitur aktif, user non-admin yang lagi
-  // di TENGAH pending action (mis. lagi ngetik jumlah beli custom / nominal
-  // topup) langsung dihentikan di sini - pending action-nya dibatalkan biar
-  // tidak nyangkut, lalu dikasih lihat pesan maintenance saja.
+  // The Maintenance Mode gate: while the feature is on, a non-admin user in the
+  // MIDDLE of a pending action (typing a custom quantity or a topup amount, say)
+  // is stopped here - their pending action is cancelled so it does not get stuck,
+  // and they are simply shown the maintenance message.
   if (!isAdmin(chatId) && db.getMaintenanceSettings().enabled) {
     db.clearPendingAction(chatId);
     return bot.sendMessage(chatId, buildMaintenanceText(chatId), { parse_mode: 'HTML' });
   }
 
-  // Broadcast nerima FOTO (+caption opsional) ATAU teks aja - beda dari
-  // semua pending action lain di bawah yang cuma nerima teks - jadi
-  // ditangani terpisah SEBELUM guard "harus ada msg.text" di bawah.
+  // Broadcast accepts a PHOTO (with an optional caption) OR plain text - unlike
+  // every other pending action below, which only accepts text - so it is handled
+  // separately BEFORE the "must have msg.text" guard below.
   if (pending.type === 'broadcast_content') {
     return handleBroadcastContent(msg, chatId);
   }
@@ -3756,21 +3756,21 @@ bot.on('message', async (msg) => {
     const entities = msg.entities || msg.caption_entities || [];
     const found = entities.find(e => e.type === 'custom_emoji' && e.custom_emoji_id);
     if (!found) {
-      return bot.sendMessage(chatId, '⚠️ Belum ketemu custom emoji di pesan itu. Pastikan kirim/forward pesan yang beneran mengandung *emoji premium* (dipilih dari panel emoji Telegram Premium kamu), bukan cuma emoji unicode biasa. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ No custom emoji was found in that message. Make sure you send or forward a message that genuinely contains a *premium emoji* (picked from your Telegram Premium emoji panel), not just a plain unicode emoji. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     const { scope, key } = pending.data;
     db.setEmojiId(`${scope}:${key}`, found.custom_emoji_id);
     db.clearPendingAction(chatId);
-    // Preview langsung pakai tag HTML <tg-emoji> (bukan cuma nunjukin ID
-    // mentahnya) supaya admin langsung lihat hasilnya tanpa perlu buka
-    // menu lain dulu.
+    // Preview it directly with the <tg-emoji> HTML tag (rather than only showing
+    // the raw ID) so the admin sees the result immediately without opening another
+    // menu first.
     const preview = `<tg-emoji emoji-id="${found.custom_emoji_id}">🎁</tg-emoji>`;
     bot.sendMessage(
       chatId,
-      `✅ Emoji ID berhasil dipasang!\n\n` +
+      `✅ Emoji ID set successfully!\n\n` +
       `${preview} Preview\n` +
       `🆔 ID: <code>${found.custom_emoji_id}</code>\n\n` +
-      `Coba cek langsung di menu terkait buat lihat hasilnya.`,
+      `Open the related menu to see it in action.`,
       { parse_mode: 'HTML' }
     );
   }
@@ -3778,22 +3778,22 @@ bot.on('message', async (msg) => {
   else if (pending.type === 'forcejoin_add_link') {
     const link = msg.text.trim();
     if (!/^https?:\/\/t\.me\//i.test(link)) {
-      return bot.sendMessage(chatId, '⚠️ Link tidak valid. Pastikan diawali `https://t.me/...`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ Invalid link. Make sure it starts with `https://t.me/...`. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     db.setPendingAction(chatId, { type: 'forcejoin_add_ref', data: { link } });
     await bot.sendMessage(
       chatId,
-      '➕ *Tambah Channel/Grup Wajib Join*\n\n*Langkah 2/2* - Kirim *Username channel/grup* (contoh: `@namachannel`) ATAU *Chat ID* (contoh: `-1001234567890`).\n\n' +
-      '💡 Untuk channel/grup *private* (tidak punya username publik), WAJIB pakai Chat ID numerik, dan bot harus sudah jadi *admin* di channel/grup tersebut supaya bisa cek status join member. Cara dapat Chat ID: forward pesan apapun dari channel/grup itu ke @userinfobot / @RawDataBot.\n\nKetik /cancel untuk batal.',
+      '➕ *Add a Force-Join Channel/Group*\n\n*Step 2/2* - Send the *channel/group username* (for example `@channelname`) OR the *Chat ID* (for example `-1001234567890`).\n\n' +
+      '💡 For a *private* channel/group (with no public username), a numeric Chat ID is REQUIRED, and the bot must already be an *admin* there so it can check members\' join status. How to get the Chat ID: forward any message from that channel/group to @userinfobot / @RawDataBot.\n\nType /cancel to abort.',
       { parse_mode: 'Markdown' }
     );
   }
 
   else if (pending.type === 'forcejoin_add_ref') {
     let ref = msg.text.trim();
-    if (!ref) return bot.sendMessage(chatId, '⚠️ Input kosong. Ketik /cancel untuk batal.');
-    // Normalisasi: numerik (boleh minus di depan) -> Number, selain itu pastikan
-    // diawali "@" (username channel).
+    if (!ref) return bot.sendMessage(chatId, '⚠️ Empty input. Type /cancel to abort.');
+    // Normalise: numeric (a leading minus is allowed) -> Number; otherwise make
+    // sure it starts with "@" (a channel username).
     if (/^-?\d+$/.test(ref)) {
       ref = Number(ref);
     } else {
@@ -3802,31 +3802,31 @@ bot.on('message', async (msg) => {
     const { link } = pending.data;
     db.clearPendingAction(chatId);
 
-    // Auto-deteksi judul channel-nya langsung dari Telegram (kalau bisa) -
-    // jadi admin tidak perlu ngetik ulang nama channel-nya secara manual.
+    // Auto-detect the channel title straight from Telegram (where possible) - so
+    // the admin does not have to retype the channel name by hand.
     let title = String(ref);
     try {
       const chat = await bot.getChat(ref);
       if (chat && chat.title) title = chat.title;
     } catch (err) {
-      // Bot mungkin belum jadi admin/member di channel itu - tetap lanjut
-      // simpan pakai chatRef sebagai title, admin bisa cek lagi manual nanti.
+      // The bot may not be an admin/member of that channel yet - carry on and save
+      // the chatRef as the title; the admin can check again manually later.
     }
 
     const channel = db.addForceJoinChannel({ title, link, chatRef: ref });
     await bot.sendMessage(
       chatId,
-      `✅ *Channel/Grup berhasil ditambahkan!*\n\n📢 *${channel.title}*\n🔗 ${channel.link}\n🆔 \`${channel.chatRef}\`\n\n` +
-      `⚠️ Pastikan bot sudah jadi *admin* di channel/grup ini supaya deteksi join-nya akurat. Aktifkan fitur "Wajib Join" lewat /admin -> 🔐 Wajib Join Channel/Grup kalau belum aktif.`,
+      `✅ *Channel/Group added successfully!*\n\n📢 *${channel.title}*\n🔗 ${channel.link}\n🆔 \`${channel.chatRef}\`\n\n` +
+      `⚠️ Make sure the bot is already an *admin* in this channel/group so join detection is accurate. Turn the "Force Join" feature on via /admin -> 🔐 Force Join Channel/Group if it is not enabled yet.`,
       { parse_mode: 'Markdown', reply_markup: adminForceJoinKeyboard() }
     );
   }
 
   else if (pending.type === 'channelnotif_setchannel') {
     let ref = msg.text.trim();
-    if (!ref) return bot.sendMessage(chatId, '⚠️ Input kosong. Ketik /cancel untuk batal.');
-    // Normalisasi: numerik (boleh minus di depan) -> Number, selain itu pastikan
-    // diawali "@" (username channel/group) - sama seperti forcejoin_add_ref.
+    if (!ref) return bot.sendMessage(chatId, '⚠️ Empty input. Type /cancel to abort.');
+    // Normalise: numeric (a leading minus is allowed) -> Number; otherwise make
+    // sure it starts with "@" (a channel/group username) - as in forcejoin_add_ref.
     if (/^-?\d+$/.test(ref)) {
       ref = Number(ref);
     } else {
@@ -3834,31 +3834,31 @@ bot.on('message', async (msg) => {
     }
     db.clearPendingAction(chatId);
 
-    // Auto-deteksi judul channel-nya langsung dari Telegram (kalau bisa) -
-    // jadi admin tidak perlu ngetik ulang nama channel-nya secara manual.
+    // Auto-detect the channel title straight from Telegram (where possible) - so
+    // the admin does not have to retype the channel name by hand.
     let title = String(ref);
     try {
       const chat = await bot.getChat(ref);
       if (chat && chat.title) title = chat.title;
     } catch (err) {
-      // Bot mungkin belum jadi admin/member di channel itu - tetap lanjut
-      // simpan pakai chatRef sebagai title, admin bisa cek lagi manual nanti.
+      // The bot may not be an admin/member of that channel yet - carry on and save
+      // the chatRef as the title; the admin can check again manually later.
     }
 
     const settings = db.setChannelNotifSettings({ chatRef: ref, title });
     await bot.sendMessage(
       chatId,
-      `✅ *Channel tujuan notifikasi berhasil diatur!*\n\n📢 *${title}*\n🆔 \`${ref}\`\n\n` +
-      `⚠️ Pastikan bot sudah jadi *admin* di channel/group ini, kalau belum pengiriman notifikasi akan gagal. Aktifkan fitur ini lewat /admin -> 📣 Set Notifikasi Channel -> 🟢 Aktifkan Notifikasi kalau belum aktif.`,
+      `✅ *Notification destination channel set successfully!*\n\n📢 *${title}*\n🆔 \`${ref}\`\n\n` +
+      `⚠️ Make sure the bot is already an *admin* in this channel/group, otherwise notifications will fail to send. Turn this feature on via /admin -> 📣 Set Channel Notifications -> 🟢 Enable Notifications if it is not enabled yet.`,
       { parse_mode: 'Markdown', reply_markup: adminChannelNotifKeyboard() }
     );
   }
 
   else if (pending.type === 'addproduct_name') {
     const raw = msg.text || '';
-    // Cari emoji premium yang owner pilih dari panel Telegram Premium-nya
-    // (custom_emoji entity) di pesan nama produk ini. Ambil yang PERTAMA saja
-    // sebagai ikon produk, lalu buang dari teks supaya nama produk bersih.
+    // Look for a premium emoji the owner picked from their Telegram Premium panel
+    // (a custom_emoji entity) in this product-name message. Take only the FIRST as
+    // the product icon, then strip it from the text so the name stays clean.
     const customEntities = (msg.entities || [])
       .filter(e => e.type === 'custom_emoji')
       .sort((a, b) => a.offset - b.offset);
@@ -3874,22 +3874,22 @@ bot.on('message', async (msg) => {
       nameText = raw.slice(0, start) + raw.slice(end);
     }
     const name = nameText.trim();
-    if (!name) return bot.sendMessage(chatId, '⚠️ Nama produk tidak boleh kosong.');
-    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || ('produk-' + Date.now());
+    if (!name) return bot.sendMessage(chatId, '⚠️ The product name cannot be empty.');
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || ('product-' + Date.now());
     db.setPendingAction(chatId, { type: 'addproduct_price', data: { name, id, emoji, emojiId } });
     const emojiNote = emojiId
-      ? '\n\n✅ Emoji premium terdeteksi & akan dipakai sebagai ikon produk ini.'
-      : '\n\n⚠️ Tidak ada emoji premium terdeteksi, produk akan pakai ikon default 📦.';
-    bot.sendMessage(chatId, `Harga produk *"${name}"* dalam USD? (angka saja, boleh desimal, contoh: \`6\` atau \`5.99\`)${emojiNote}`, { parse_mode: 'Markdown' });
+      ? '\n\n✅ A premium emoji was detected and will be used as this product\'s icon.'
+      : '\n\n⚠️ No premium emoji detected, so the product will use the default 📦 icon.'
+    bot.sendMessage(chatId, `Price of *"${name}"* in USD? (numbers only, decimals allowed, for example \`6\` or \`5.99\`)${emojiNote}`, { parse_mode: 'Markdown' });
   }
   else if (pending.type === 'addproduct_price') {
     const price = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
-    if (!price) return bot.sendMessage(chatId, '⚠️ Masukkan harga yang valid dalam USD (angka saja, boleh desimal), contoh: 5.99');
+    if (!price) return bot.sendMessage(chatId, '⚠️ Enter a valid price in USD (numbers only, decimals allowed), for example: 5.99');
     db.setPendingAction(chatId, { type: 'addproduct_desc', data: { ...pending.data, price } });
     bot.sendMessage(chatId,
-      'Deskripsi produk? (bebas, boleh banyak baris, boleh pakai tag HTML `<b>...</b>` untuk bold. Kalau kamu pilih emoji premium langsung dari panel Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga)\n\n' +
-      'Contoh:\n`Akun Gemini AI Pro asli\nAktif langsung di Gmail kamu\nGaransi 24 jam setelah link diterima`\n\n' +
-      'Ketik `-` kalau mau lewati dulu (bisa diisi belakangan di data/db.json).',
+      'Product description? (free text, multiple lines are fine, and HTML tags such as `<b>...</b>` work for bold. If you pick a premium emoji straight from your own Telegram Premium panel, it is saved as premium automatically)\n\n' +
+      'Example:\n`Genuine Gemini AI Pro account\nActive straight away on your Gmail\n24-hour warranty after the link is delivered`\n\n' +
+      'Type `-` to skip for now (it can be filled in later in data/db.json).',
       { parse_mode: 'Markdown' }
     );
   }
@@ -3900,41 +3900,41 @@ bot.on('message', async (msg) => {
     const result = db.addSimpleProduct(id, name, price, description, emoji, emojiId);
     db.clearPendingAction(chatId);
     if (!result) {
-      return bot.sendMessage(chatId, `⚠️ Produk dengan id "${id}" sudah ada (kemungkinan nama serupa sudah dipakai). Coba ➕ Tambah Produk lagi dengan nama lain.`);
+      return bot.sendMessage(chatId, `⚠️ A product with the id "${id}" already exists (a similar name is probably in use). Try ➕ Add Product again with a different name.`);
     }
     const iconHtml = emojiId ? `<tg-emoji emoji-id="${emojiId}">${emoji || '📦'}</tg-emoji>` : (emoji || '📦');
     bot.sendMessage(chatId,
-      `✅ <b>Produk ${iconHtml} ${escapeHtml(name)} berhasil dibuat!</b>\n\n` +
-      `💰 Harga: ${usd(price)}\n` +
-      `📦 Stok saat ini: 0\n\n` +
-      `Selanjutnya isi stok lewat /admin → 📥 Tambah Stock, supaya bisa langsung dikirim otomatis begitu ada yang beli.`,
+      `✅ <b>Product ${iconHtml} ${escapeHtml(name)} created successfully!</b>\n\n` +
+      `💰 Price: ${usd(price)}\n` +
+      `📦 Current stock: 0\n\n` +
+      `Next, add stock via /admin → 📥 Add Stock, so it can be delivered automatically as soon as someone buys.`,
       { parse_mode: 'HTML' }
     );
   }
   else if (pending.type === 'addvariant_label') {
     const label = msg.text.trim();
     db.setPendingAction(chatId, { type: 'addvariant_price', data: { ...pending.data, label } });
-    bot.sendMessage(chatId, `Harga varian dalam USD? (angka saja, boleh desimal, contoh: 15 atau 14.99)`);
+    bot.sendMessage(chatId, `Variant price in USD? (numbers only, decimals allowed, for example 15 or 14.99)`);
   }
   else if (pending.type === 'addvariant_price') {
     const price = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
-    if (!price) return bot.sendMessage(chatId, '⚠️ Masukkan harga yang valid dalam USD (boleh desimal).');
+    if (!price) return bot.sendMessage(chatId, '⚠️ Enter a valid price in USD (decimals allowed).');
     db.setPendingAction(chatId, { type: 'addvariant_stock', data: { ...pending.data, price } });
-    bot.sendMessage(chatId, 'Jumlah stok tersedia? (angka saja, contoh: 500)');
+    bot.sendMessage(chatId, 'How much stock is available? (numbers only, for example: 500)');
   }
   else if (pending.type === 'addvariant_stock') {
     const stock = parseInt(msg.text.replace(/\D/g, ''), 10) || 0;
     db.setPendingAction(chatId, { type: 'addvariant_desc', data: { ...pending.data, stock } });
-    bot.sendMessage(chatId, 'Deskripsi produk untuk varian ini? (boleh banyak baris, ketik `-` kalau mau dikosongkan dulu)', { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, 'Product description for this variant? (multiple lines are fine; type `-` to leave it empty for now)', { parse_mode: 'Markdown' });
   }
-  // BUG FIX: sebelumnya alur "Tambah Varian" berhenti di addvariant_stock dan
-  // langsung panggil db.addVariant() tanpa pernah nanya deskripsi sama sekali
-  // - beda dengan "Tambah Produk" (addproduct_desc) yang selalu nanya. Akibatnya
-  // varian ke-2/ke-3 dst di produk multi-varian SELALU tampil tanpa deskripsi
-  // di halaman produk (fallback ke teks harga/stok generik), padahal admin
-  // sudah mengira sudah mengisi deskripsi lewat "Tambah Produk" di awal (yang
-  // cuma kesimpan di varian default, bukan ke varian baru). Sekarang alur ini
-  // ikut nanya deskripsi juga, sama seperti Tambah Produk.
+  // BUG FIX: the "Add Variant" flow used to stop at addvariant_stock and call
+  // db.addVariant() without ever asking for a description - unlike "Add Product"
+  // (addproduct_desc), which always asks. As a result the 2nd, 3rd and later
+  // variants of a multi-variant product ALWAYS appeared with no description on the
+  // product page (falling back to generic price/stock text), even though the admin
+  // assumed they had entered one via "Add Product" at the start (which only saved
+  // it on the default variant, not the new one). This flow now asks for a
+  // description too, just like Add Product.
   else if (pending.type === 'addvariant_desc') {
     const typed = embedOwnerCustomEmoji(msg);
     const description = typed === '-' ? '' : typed;
@@ -3943,48 +3943,48 @@ bot.on('message', async (msg) => {
     const ok = db.addVariant(productId, variantId, label, price, stock, description);
     db.clearPendingAction(chatId);
     if (!ok) {
-      return bot.sendMessage(chatId, `⚠️ Varian dengan label "${label}" sepertinya sudah ada di produk ini (id "${variantId}" sudah dipakai). Coba ulangi dengan label yang beda.`);
+      return bot.sendMessage(chatId, `⚠️ A variant labelled "${label}" seems to already exist on this product (the id "${variantId}" is taken). Try again with a different label.`);
     }
-    bot.sendMessage(chatId, `✅ Varian "${label}" (${usd(price)}/pcs, stok ${stock}) ditambahkan ke produk "${productId}".\n\nMau atur diskon grosir bertingkat? Edit langsung di data/db.json pada bagian "tiers".`);
+    bot.sendMessage(chatId, `✅ Variant "${label}" (${usd(price)}/pcs, stock ${stock}) added to product "${productId}".\n\nWant to set tiered bulk discounts? Edit the "tiers" section directly in data/db.json.`);
   }
 
   else if (pending.type === 'setprice_amount') {
     const price = parseFloat(msg.text.replace(/[^0-9.]/g, ''));
-    if (!price) return bot.sendMessage(chatId, '⚠️ Masukkan harga yang valid dalam USD (angka saja, boleh desimal), contoh: 5.99');
+    if (!price) return bot.sendMessage(chatId, '⚠️ Enter a valid price in USD (numbers only, decimals allowed), for example: 5.99');
     const { productId, variantId } = pending.data;
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
     db.clearPendingAction(chatId);
     if (!variant) {
-      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product/variant not found, cancelled.');
     }
     db.setVariantPrice(productId, variantId, price);
     const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
-    // Kalau varian ini terhubung Supplier API, tampilkan juga margin
-    // terbaru (modal Supplier vs harga jual baru) supaya admin langsung
-    // tahu untung/rugi tanpa harus buka menu Supplier API lagi.
+    // When this variant is linked to the Supplier API, also show the latest margin
+    // (supplier cost vs the new sale price) so the admin immediately sees the
+    // profit or loss without opening the Supplier API menu again.
     const marginLine = variant.supplierServiceId ? `\n\n${marginText(variant.supplierCost, price)}` : '';
-    bot.sendMessage(chatId, `✅ Harga *${label}* berhasil diubah jadi ${usd(price)}/pcs.${marginLine}`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `✅ The price of *${label}* was changed to ${usd(price)}/pcs.${marginLine}`, { parse_mode: 'Markdown' });
   }
 
-  // Input "10,7,5" -> markup% tier 1-49 / 50-499 / 500+ KHUSUS 1 varian
-  // (override DEFAULT_SUPPLIER_TIER_MARKUP global) - lihat handler callback
-  // 'suppliertiermarkup' di atas untuk konteksnya.
+  // Input "10,7,5" -> markup% for tiers 1-49 / 50-499 / 500+ FOR ONE variant
+  // (overriding the global DEFAULT_SUPPLIER_TIER_MARKUP) - see the
+  // 'suppliertiermarkup' callback handler above for context.
   else if (pending.type === 'set_tier_markup') {
     const { productId, variantId } = pending.data;
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
     if (!product || !variant) {
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product/variant not found, cancelled.');
     }
     const parts = msg.text.split(',').map(s => s.trim());
     if (parts.length !== 3 || parts.some(p => p === '' || isNaN(Number(p)))) {
-      return bot.sendMessage(chatId, '⚠️ Format salah. Ketik 3 angka persen dipisah koma, contoh: `10,7,5`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ Wrong format. Type 3 percentage numbers separated by commas, for example: `10,7,5`. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     const [p1, p2, p3] = parts.map(Number);
     if ([p1, p2, p3].some(p => p < 0)) {
-      return bot.sendMessage(chatId, '⚠️ Persen markup tidak boleh negatif. Ketik ulang, contoh: `10,7,5`. Ketik /cancel untuk batal.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ A markup percentage cannot be negative. Type it again, for example: `10,7,5`. Type /cancel to abort.', { parse_mode: 'Markdown' });
     }
     db.clearPendingAction(chatId);
     const newMarkup = [
@@ -3996,16 +3996,16 @@ bot.on('message', async (msg) => {
     const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
     const cost = variant.supplierCost;
     if (typeof cost !== 'number' || isNaN(cost) || cost <= 0) {
-      // Markup-nya sudah tersimpan dan bakal kepakai di sync berikutnya,
-      // tapi belum bisa dihitung SEKARANG karena modal live belum diketahui
-      // (mis. varian belum pernah sync sama sekali).
+      // The markup is saved and will apply on the next sync, but cannot be
+      // calculated NOW because the live cost is not yet known (this variant may
+      // never have synced at all).
       return bot.sendMessage(chatId,
-        `✅ Markup 3-tier *${label}* disimpan: ${p1}% / ${p2}% / ${p3}%.\n\n⚠️ Modal Supplier belum diketahui, jadi tier BELUM dihitung sekarang - akan otomatis terisi begitu sync berikutnya jalan (atau klik "🔄 Refresh Modal & Stok").`,
+        `✅ 3-tier markup for *${label}* saved: ${p1}% / ${p2}% / ${p3}%.\n\n⚠️ The supplier cost is not known yet, so the tiers have NOT been calculated now - they will fill in automatically on the next sync (or click "🔄 Refresh Cost & Stock").`,
         { parse_mode: 'Markdown' }
       );
     }
-    // Langsung hitung ulang tier dari modal SAAT INI + markup baru, supaya
-    // buyer langsung lihat harga baru tanpa perlu nunggu jadwal auto-sync.
+    // Recalculate the tiers immediately from the CURRENT cost plus the new markup,
+    // so buyers see the new price without waiting for the scheduled auto-sync.
     const newTiers = computeTiersFromCost(cost, newMarkup);
     db.setVariantTiers(productId, variantId, newTiers);
     bot.sendMessage(chatId,
@@ -4050,7 +4050,7 @@ bot.on('message', async (msg) => {
     const variant = product && product.variants.find(v => v.id === variantId);
     if (!product || !variant) {
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product/variant not found, cancelled.');
     }
     const parts = msg.text.split(',').map(s => s.trim());
     if (parts.length !== 3 || parts.some(p => p === '' || isNaN(Number(p)))) {
@@ -4116,7 +4116,7 @@ bot.on('message', async (msg) => {
     const ok = db.setHowToUse(productId, variantId, text);
     db.clearPendingAction(chatId);
     if (!ok) {
-      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product/variant not found, cancelled.');
     }
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
@@ -4210,7 +4210,7 @@ bot.on('message', async (msg) => {
     const result = db.addStockItems(productId, variantId, lines);
     if (!result) {
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product/variant not found, cancelled.');
     }
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
@@ -4238,7 +4238,7 @@ bot.on('message', async (msg) => {
     const result = db.addManualStock(productId, variantId, qty);
     if (!result) {
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product/variant not found, cancelled.');
     }
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
@@ -6567,7 +6567,7 @@ bot.on('callback_query', async (query) => {
       const product = resolved && db.findProduct(resolved.productId);
       const variant = product && product.variants.find(v => v.id === resolved.variantId);
       if (!product || !variant) {
-        return sendOrEditAdmin(chatId, messageId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.', adminBackKeyboard('admin:cat_products'));
+        return sendOrEditAdmin(chatId, messageId, '⚠️ Product/variant not found, cancelled.', adminBackKeyboard('admin:cat_products'));
       }
       if (mode === 'items') {
         db.setPendingAction(chatId, { type: 'addstock_items', data: { productId: product.id, variantId: variant.id } });
