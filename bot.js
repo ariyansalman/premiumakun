@@ -3397,22 +3397,22 @@ bot.on('callback_query', async (query) => {
             const buyerMsgKey = isSupplierBalanceError(err.message) ? 'supplier_balance_empty' : 'supplier_order_failed';
             bot.answerCallbackQuery(query.id, { text: lang.t(chatId, buyerMsgKey), show_alert: true }).catch(() => {});
             notifyAdmins(
-              `⚠️ <b>Order via Canboso API gagal</b>\n\n` +
+              `⚠️ <b>Order via the Canboso API failed</b>\n\n` +
               `User: ${query.from.username ? '@' + escapeHtml(query.from.username) : `ID ${chatId}`} (${chatId})\n` +
-              `Produk: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
-              `Jumlah: ${qty}${hasLocalPortion ? ` (${localPortion.length} dari stok lokal, sisa ${remainderQty} coba dipesan ke Canboso)` : ''}\n` +
+              `Product: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
+              `Quantity: ${qty}${hasLocalPortion ? ` (${localPortion.length} from local stock, remaining ${remainderQty} attempted via Canboso)` : ''}\n` +
               `Product ID: <code>${escapeHtml(String(variant.canbosoProductId))}</code>\n` +
               `Error: ${escapeHtml(err.message)}\n\n` +
-              `ℹ️ Saldo user BELUM dipotong (order dibatalkan otomatis, stok lokal yang sempat dipakai sudah dikembalikan).`
+              `ℹ️ The user's balance has NOT been charged (the order was cancelled automatically, and any local stock used has been restored).`
             );
             return;
           }
           db.updateBalance(chatId, -total);
         }
       } else {
-        // Tidak ada stok manual lokal yang cukup, dan varian ini juga tidak
-        // terhubung ke Supplier API / Canboso API - fallback ke alur manual
-        // lama (admin kirim akun/detail sendiri ke buyer).
+        // There is not enough local manual stock, and this variant is not linked
+        // to a Supplier API / Canboso API either - fall back to the old manual
+        // flow (the admin sends the account/details to the buyer themselves).
         db.updateBalance(chatId, -total);
         db.decrementStock(productId, variantId, qty);
       }
@@ -3420,9 +3420,9 @@ bot.on('callback_query', async (query) => {
       const orderId = db.createOrder(chatId, productId, variantId, qty, unitPrice, total, deliveredItems, query.from.username, supplierMeta);
       const successText = buildSuccessText(product, variant, qty, total, orderId, deliveredItems, chatId);
 
-      // Notifikasi Channel Otomatis: "🎉 New Purchase!" (kalau fitur aktif -
-      // lihat sendChannelNotif()). Dipanggil di sini (bukan nunggu editMessageText
-      // di bawah) supaya tetap terkirim ke channel meski edit/send ke buyer gagal.
+      // Automatic channel notification: "🎉 New Purchase!" (when the feature is on
+      // - see sendChannelNotif()). Called here rather than after the
+      // editMessageText below, so it still reaches the channel even if the edit or
       sendChannelNotif('purchase', buildChannelPurchaseText(chatId, product, variant, qty, total), product);
 
       await bot.editMessageText(successText, {
@@ -3430,97 +3430,97 @@ bot.on('callback_query', async (query) => {
         reply_markup: successKeyboard(productId, variantId, orderId, deliveredItems, chatId)
       }).catch(async (e) => {
         logError('editMessageText_success', e);
-        // Fallback kalau edit gagal (mis. pesan asal sudah terlalu lama) - tetap kirim, jangan sampai user tidak dapat produknya.
+        // A fallback when the edit fails (the original message being too old, say) - still send it, so the user never misses their product.
         await bot.sendMessage(chatId, successText, { parse_mode: 'HTML', reply_markup: successKeyboard(productId, variantId, orderId, deliveredItems, chatId) }).catch(() => {});
       });
 
       // Notify all admins
-      // PENTING: pakai HTML + escapeHtml() di sini, BUKAN Markdown mentah -
-      // username Telegram bebas mengandung underscore ("_") dan nama produk/
-      // varian bebas diketik admin (bisa mengandung *, _, `, [ dsb). Kalau
-      // dikirim mentah ke parse_mode 'Markdown', 1 underscore/simbol yang
-      // tidak berpasangan bikin Telegram menolak pesan ("can't parse
-      // entities") - dan karena ada .catch(() => {}) di bawah, kegagalan itu
-      // DIAM-DIAM tidak kelihatan, admin jadi tidak pernah tahu ada order
-      // baru masuk (fatal khusus untuk produk non-auto-delivery yang butuh
-      // admin kirim manual). Pola escapeHtml() ini sudah dipakai konsisten
-      // di formatDeliveryLogEntry()/buildSuccessText() - disamakan di sini.
+      // IMPORTANT: use HTML plus escapeHtml() here, NOT raw Markdown - a Telegram
+      // username may contain an underscore ("_") and product/variant names are
+      // free text typed by the admin (possibly containing *, _, `, [ and so on).
+      // Sent raw with parse_mode 'Markdown', a single unpaired underscore or
+      // symbol makes Telegram reject the message ("can't parse entities") - and
+      // because there is a .catch(() => {}) below, that failure is SILENT, so the
+      // admin would never learn a new order had come in (fatal specifically for
+      // non-auto-delivery products that need the admin to send manually). This
+      // escapeHtml() pattern is already used consistently in
+      // formatDeliveryLogEntry()/buildSuccessText() - matched here.
       const username = query.from.username ? '@' + escapeHtml(query.from.username) : `ID ${chatId}`;
-      // ===== BUG FIX: adminNote SEBELUMNYA cuma ngecek `deliverySource`
-      // (nama sumbernya), BUKAN apakah `deliveredItems` beneran ada isinya.
-      // Kasus nyata yang kena: canboso.purchase()/supplier.placeOrder()
-      // SUKSES (tidak throw, artinya saldo/stok di sisi API luar SUDAH
-      // kepotong), tapi hasil ekstraksi item-nya kosong (mis. nama field
-      // respons API buat "kode/link/akun" ternyata beda dari yang ditebak
-      // di purchase() - persis pola bug field-stok yang sudah diperbaiki
-      // sebelumnya, tapi ini versi untuk KONTEN produknya, jauh lebih fatal).
-      // Sebelum fix ini: buyer sudah bayar & lihat pesan "akan dikirim
-      // manual" (lihat buildSuccessText di atas, itu sudah benar), TAPI
-      // admin malah dikasih tahu "Tidak perlu tindakan lagi" - jadi TIDAK
-      // ADA YANG SADAR order ini nyangkut, buyer bisa nunggu selamanya
-      // tanpa produk padahal saldo mereka & saldo API luar sudah sama-sama
-      // terpotong. Sekarang dicek isi aktualnya, bukan cuma nama sumbernya,
-      // dan untuk kasus API luar yang kosong dikasih flag KHUSUS (⚠️ high
-      // priority + Order ID di sisi API luar) supaya admin bisa cek manual
-      // & kirim produknya sendiri.
+      // ===== BUG FIX: adminNote PREVIOUSLY only checked `deliverySource` (the name
+      // of the source), NOT whether `deliveredItems` actually held anything.
+      // The real case that hit this: canboso.purchase()/supplier.placeOrder()
+      // SUCCEEDED (it did not throw, meaning the external API's balance/stock HAD
+      // been deducted), but item extraction came back empty (the API response field
+      // names for the "code/link/account" turning out to differ from what
+      // purchase() assumed - exactly the stock-field bug pattern fixed earlier, but
+      // this time for the product CONTENT, which is far more serious).
+      // Before this fix: the buyer had paid and saw the "will be sent manually"
+      // message (see buildSuccessText above, which was already correct), BUT the
+      // admin was told "No further action needed" - so NOBODY REALISED the order
+      // was stuck, and the buyer could wait forever with no product even though
+      // both their balance and the external API's balance had been charged. The
+      // actual contents are now checked, not just the source name, and an empty
+      // result from an external API raises a SPECIFIC flag (⚠️ high priority plus
+      // the external API's Order ID) so the admin can check and send the product
+      // themselves.
       const gotAutoItems = deliveredItems && deliveredItems.length > 0;
-      // ===== BUG FIX: deteksi hasil PARSIAL dari API luar (Supplier/Canboso)
-      // - beda dari kasus "kosong total" di atas. Ini kejadian kalau API
-      // luar sukses tapi cuma balikin SEBAGIAN item dari qty yang diminta
-      // (mis. buyer beli 5, API cuma sanggup kirim 3 - entah karena stok
-      // remote-nya sebenarnya kurang dari yang ditampilkan atau alasan lain
-      // di sisi mereka). Buyer TETAP dicharge `total` penuh (dihitung dari
-      // qty yang diminta, bukan qty yang benar-benar terkirim - lihat
-      // perhitungan `total` di atas SEBELUM API dipanggil), padahal cuma
-      // dapat sebagian barang. Sebelum fix ini, admin tidak pernah diberi
-      // tahu ada selisih ini sama sekali (dianggap "Tidak perlu tindakan
-      // lagi" selama array items TIDAK kosong).
+      // ===== BUG FIX: detect a PARTIAL result from an external API
+      // (Supplier/Canboso) - different from the "completely empty" case above.
+      // This happens when the external API succeeds but returns only SOME of the
+      // items for the qty requested (a buyer orders 5 and the API can only deliver
+      // 3 - whether because the remote stock was really lower than displayed or
+      // for some other reason on their side). The buyer is STILL charged the full
+      // `total` (computed from the qty requested, not the qty actually delivered -
+      // see the `total` calculation above, BEFORE the API is called), while
+      // receiving only part of the goods. Before this fix, the admin was never
+      // told about that difference at all (it counted as "No further action
+      // needed" as long as the items array was not empty).
       const isPartialFulfillment = gotAutoItems
         && (deliverySource === 'supplier_api' || deliverySource === 'canboso_api' || deliverySource === 'mixed_supplier' || deliverySource === 'mixed_canboso')
         && deliveredItems.length < qty;
       let adminNote;
       if (deliverySource === 'mixed_supplier' || deliverySource === 'mixed_canboso') {
-        // ===== PATCH: partial fulfillment gabungan - sebagian qty dari stok
-        // manual lokal (stockItems), sisanya baru dipesan otomatis ke
-        // Supplier/Canboso. Beda dari isPartialFulfillment di bawah (yang
-        // artinya API-nya sendiri cuma balikin sebagian dari yang DIMINTA
-        // ke mereka) - di sini totalnya BISA SAJA pas qty, cuma sumbernya
-        // campuran, jadi tetap perlu diberi tahu ke admin untuk transparansi
-        // (mis. kalau butuh cek dua tempat berbeda untuk audit/komplain).
+        // ===== PATCH: combined partial fulfilment - part of the qty from local
+        // manual stock (stockItems), the remainder ordered automatically from
+        // Supplier/Canboso. Different from isPartialFulfillment below (which means
+        // the API itself returned only part of what was ASKED of it) - here the
+        // total MAY well match qty exactly, just from mixed sources, so the admin
+        // is still told for transparency (in case two different places need
+        // checking for an audit or complaint).
         const apiLabel = deliverySource === 'mixed_supplier' ? 'Supplier' : 'Canboso';
         adminNote = isPartialFulfillment
-          ? `⚠️ <b>PERLU TINDAKAN (parsial)</b>: buyer beli ${qty}, dipenuhi dari stok lokal + ${apiLabel} tapi total yang terkirim cuma ${deliveredItems.length} (buyer tetap dicharge penuh sesuai ${qty}). Order ID ${apiLabel}: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek & lengkapi kekurangannya manual, atau refund selisihnya ke buyer.`
-          : `✅ Auto-delivered (campuran: sebagian dari stok lokal, sisanya via ${apiLabel} API). Tidak perlu tindakan lagi.`;
+          ? `⚠️ <b>ACTION NEEDED (partial)</b>: the buyer ordered ${qty}, filled from local stock + ${apiLabel}, but only ${deliveredItems.length} were delivered in total (the buyer was still charged in full for ${qty}). ${apiLabel} Order ID: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Check and make up the shortfall manually, or refund the difference to the buyer.`
+          : `✅ Auto-delivered (mixed: partly from local stock, the rest via the ${apiLabel} API). No further action needed.`;
       } else if (deliverySource === 'supplier_api') {
         adminNote = !gotAutoItems
-          ? `⚠️ <b>PERLU TINDAKAN</b>: order Supplier API SUKSES (saldo toko di Supplier sudah terpotong) tapi bot GAGAL mengekstrak produk yang dikirim balik (kemungkinan skema respons API berubah). Order ID Supplier: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek dashboard Supplier lalu kirim manual ke buyer.`
+          ? `⚠️ <b>ACTION NEEDED</b>: the Supplier API order SUCCEEDED (the store's supplier balance has been charged) but the bot FAILED to extract the product returned (the API response schema may have changed). Supplier Order ID: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Check the supplier dashboard, then send it to the buyer manually.`
           : isPartialFulfillment
-          ? `⚠️ <b>PERLU TINDAKAN (parsial)</b>: buyer beli ${qty}, API Supplier cuma balikin ${deliveredItems.length} item (buyer tetap dicharge penuh sesuai ${qty}). Order ID Supplier: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek & lengkapi kekurangannya manual, atau refund selisihnya ke buyer.`
-          : `Auto-delivered via Supplier API (service_id: <code>${escapeHtml(variant.supplierServiceId)}</code>). Tidak perlu tindakan lagi.`;
+          ? `⚠️ <b>ACTION NEEDED (partial)</b>: the buyer ordered ${qty}, the Supplier API returned only ${deliveredItems.length} item(s) (the buyer was still charged in full for ${qty}). Supplier Order ID: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Check and make up the shortfall manually, or refund the difference to the buyer.`
+          : `Auto-delivered via the Supplier API (service_id: <code>${escapeHtml(variant.supplierServiceId)}</code>). No further action needed.`;
       } else if (deliverySource === 'canboso_api') {
-        // ===== BUG FIX (lanjutan): kalau ekstraksi gagal (!gotAutoItems),
-        // tempelkan potongan raw JSON response Canboso langsung di notifikasi
-        // ini (bukan cuma "kemungkinan skema respons berbeda") - supaya admin
-        // (atau developer yang diteruskan pesan ini) bisa LANGSUNG lihat nama
-        // field asli yang dipakai Canboso untuk order_id/items, tanpa perlu
-        // buka dashboard atau tools debug terpisah. Dibatasi ~600 karakter
-        // biar tidak kepanjangan di notifikasi Telegram, dan di-escape HTML
-        // karena isinya JSON mentah dari luar (bisa mengandung < > &).
+        // ===== BUG FIX (continued): when extraction fails (!gotAutoItems), attach a
+        // slice of Canboso's raw JSON response directly to this notification
+        // (rather than merely "the response schema may differ") - so the admin (or
+        // a developer this message is forwarded to) can see IMMEDIATELY which field
+        // names Canboso really used for order_id/items, without opening a dashboard
+        // or a separate debug tool. Capped at ~600 characters so it does not run
+        // long in a Telegram notification, and HTML-escaped because it is raw
+        // external JSON (which may contain < > &).
         const rawPreview = canbosoRawResult
           ? escapeHtml(JSON.stringify(canbosoRawResult).slice(0, 600))
-          : '(tidak ada data raw)';
+          : '(no raw data)';
         adminNote = !gotAutoItems
-          ? `⚠️ <b>PERLU TINDAKAN</b>: order Canboso API SUKSES (saldo wallet Canboso sudah terpotong) tapi bot GAGAL mengekstrak produk yang dikirim balik (kemungkinan skema respons API berbeda dari dugaan). Order ID Canboso: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek dashboard supplier lalu kirim manual ke buyer.\n\n🐞 <b>Raw response Canboso</b> (kirim ini ke developer supaya field mapping-nya bisa diperbaiki):\n<code>${rawPreview}</code>`
+          ? `⚠️ <b>ACTION NEEDED</b>: the Canboso API order SUCCEEDED (the Canboso wallet balance has been charged) but the bot FAILED to extract the product returned (the API response schema may differ from what was assumed). Canboso Order ID: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Check the supplier dashboard, then send it to the buyer manually.\n\n🐞 <b>Canboso raw response</b> (send this to a developer so the field mapping can be fixed):\n<code>${rawPreview}</code>`
           : isPartialFulfillment
-          ? `⚠️ <b>PERLU TINDAKAN (parsial)</b>: buyer beli ${qty}, API Canboso cuma balikin ${deliveredItems.length} item (buyer tetap dicharge penuh sesuai ${qty}). Order ID Canboso: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Cek & lengkapi kekurangannya manual, atau refund selisihnya ke buyer.`
-          : `Auto-delivered via Canboso API (product_id: <code>${escapeHtml(String(variant.canbosoProductId))}</code>). Tidak perlu tindakan lagi.`;
+          ? `⚠️ <b>ACTION NEEDED (partial)</b>: the buyer ordered ${qty}, the Canboso API returned only ${deliveredItems.length} item(s) (the buyer was still charged in full for ${qty}). Canboso Order ID: <code>${escapeHtml(String((supplierMeta && supplierMeta.supplierOrderId) || '-'))}</code>. Check and make up the shortfall manually, or refund the difference to the buyer.`
+          : `Auto-delivered via the Canboso API (product_id: <code>${escapeHtml(String(variant.canbosoProductId))}</code>). No further action needed.`;
       } else if (deliverySource === 'local_auto') {
-        adminNote = `✅ Auto-delivered (${deliveredItems.length} item terkirim otomatis). Tidak perlu tindakan lagi.`;
+        adminNote = `✅ Auto-delivered (${deliveredItems.length} item(s) sent automatically). No further action needed.`;
       } else {
-        adminNote = `📦 Silakan kirim akun/detail ke user secara manual.`;
+        adminNote = `📦 Please send the account/details to the user manually.`;
       }
       notifyAdmins(
-        `🛎️ <b>Order Baru</b>\n\nUser: ${username} (${chatId})\nProduk: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\nJumlah: ${qty}\nTotal: ${usd(total)}\nOrder ID: <code>${escapeHtml(orderId)}</code>\n\n${adminNote}`
+        `🛎️ <b>New Order</b>\n\nUser: ${username} (${chatId})\nProduct: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\nQuantity: ${qty}\nTotal: ${usd(total)}\nOrder ID: <code>${escapeHtml(orderId)}</code>\n\n${adminNote}`
       );
       } finally {
         pendingOrderConfirms.delete(chatId);
@@ -3536,18 +3536,18 @@ bot.on('callback_query', async (query) => {
 
 // ================= TEXT MESSAGES (pending actions) =================
 
-// Daftar SEMUA pending-action type yang cuma boleh dieksekusi ADMIN (dientri
-// lewat alur /admin, yang sudah digerbangi isAdmin() di satu titik di
-// bot.on('callback_query', ...) - lihat guard `data.startsWith('admin:')`).
-// Handler bot.on('message', ...) di bawah SEHARUSNYA memang cuma menerima
-// pending tipe ini kalau chatId-nya admin (karena cuma kode admin-gated yang
-// pernah manggil db.setPendingAction() dengan tipe-tipe ini). Tapi guard di
-// bawah ini sengaja ditambah sebagai LAPIS PERTAHANAN REDUNDAN, supaya kalau
-// suatu saat ada bug/typo di kode admin (fitur baru, refactor, dll) yang
-// lupa naruh setPendingAction() di dalam blok admin-gated, tetap ada 1
-// penghalang terakhir sebelum step sensitif (ubah saldo user, broadcast ke
-// semua user, ubah produk/setting toko, dll) sempat dieksekusi oleh chatId
-// yang BUKAN admin - tidak cuma mengandalkan asumsi "tipe ini pasti aman".
+// Every pending-action type that ONLY an ADMIN may execute (entered through the
+// /admin flow, already gated by isAdmin() at a single point in
+// bot.on('callback_query', ...) - see the `data.startsWith('admin:')` guard).
+// The bot.on('message', ...) handler below SHOULD only ever receive these pending
+// types for an admin chatId (since only admin-gated code ever calls
+// db.setPendingAction() with them). But the guard below is deliberately added as
+// a REDUNDANT LAYER OF DEFENCE, so that if a bug or typo ever creeps into the
+// admin code (a new feature, a refactor) that forgets to put setPendingAction()
+// inside an admin-gated block, there is still one last barrier before a sensitive
+// step (changing a user's balance, broadcasting to all users, changing
+// products/store settings) could be executed by a NON-admin chatId - rather than
+// relying on the assumption that "this type must be safe".
 const ADMIN_ONLY_PENDING_TYPES = new Set([
   'set_emoji_id',
   'forcejoin_add_link', 'forcejoin_add_ref',
@@ -3565,20 +3565,20 @@ const ADMIN_ONLY_PENDING_TYPES = new Set([
   'listusers_search_id'
 ]);
 
-// Helper bersama: validasi username/ID Telegram tujuan SEBELUM lanjut ke
-// halaman konfirmasi - dipakai fitur Buy Stars, Buy Gift, Confess Gift, DAN
-// Jual Gift Koleksi (semuanya kirim ke username/ID Telegram, jadi 1 fungsi
-// aja, tidak diduplikasi per fitur). Kirim pesan "🔎 Mengecek..." dulu (nanti
-// dihapus lagi), lalu cek ke Telegram lewat checkTargetExists() (userbot.js).
+// A shared helper: validate the destination Telegram username/ID BEFORE moving on
+// to the confirmation page - used by Buy Stars, Buy Gift, Confess Gift, AND Sell
+// Collectible Gift (all of which send to a Telegram username/ID, so one function
+// serves them all rather than being duplicated per feature). It first sends a
+// "🔎 Checking..." message (deleted again afterwards), then checks with Telegram
+// via checkTargetExists() (userbot.js).
 //
-// Return targetInfo { id, username, firstName, lastName, isBot } kalau
-// target ketemu & valid (bukan bot). Return null kalau tidak ketemu / target
-// ternyata akun bot - dalam kasus ini fungsi ini SUDAH otomatis kirim pesan
-// error yang sesuai ke user, jadi caller tinggal `if (!targetInfo) return;`
-// tanpa perlu kirim pesan tambahan lagi.
+// Returns targetInfo { id, username, firstName, lastName, isBot } when the target
+// is found and valid (not a bot). Returns null when it is not found or turns out
+// to be a bot account - in which case this function has ALREADY sent the right
+// error message to the user, so the caller can simply `if (!targetInfo) return;`.
 async function verifyTelegramTarget(chatId, target) {
   const checkingMsg = await bot.sendMessage(
-    chatId, `🔎 Mengecek <code>${escapeHtml(target)}</code> di Telegram...`, { parse_mode: 'HTML' }
+    chatId, `🔎 Checking <code>${escapeHtml(target)}</code> on Telegram...`, { parse_mode: 'HTML' }
   );
   let targetInfo;
   try {
@@ -3587,9 +3587,9 @@ async function verifyTelegramTarget(chatId, target) {
     await bot.deleteMessage(chatId, checkingMsg.message_id).catch(() => {});
     logError('verifyTelegramTarget', err);
     await bot.sendMessage(chatId,
-      `❌ Username/ID <code>${escapeHtml(target)}</code> tidak ditemukan di Telegram.\n\n` +
-      `Kemungkinan: salah ketik, akun tidak ada/private, atau (khusus input angka ID) target belum pernah berinteraksi dengan userbot toko ini.\n\n` +
-      `Kirim ulang username/ID yang benar (tanpa @), atau /cancel untuk batal.`,
+      `❌ The username/ID <code>${escapeHtml(target)}</code> was not found on Telegram.\n\n` +
+      `Possible reasons: a typo, the account does not exist or is private, or (for a numeric ID specifically) the target has never interacted with this store's userbot.\n\n` +
+      `Send the correct username/ID again (without @), or /cancel to abort.`,
       { parse_mode: 'HTML' }
     );
     return null;
