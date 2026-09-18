@@ -3188,22 +3188,22 @@ bot.on('callback_query', async (query) => {
       // once for the same chatId - see the note on the pendingOrderConfirms
       // declaration above.
       if (pendingOrderConfirms.has(chatId)) {
-        return bot.answerCallbackQuery(query.id, { text: '⏳ Order sebelumnya masih diproses, tunggu sebentar...', show_alert: true }).catch(() => {});
+        return bot.answerCallbackQuery(query.id, { text: '⏳ Your previous order is still processing, please wait a moment...', show_alert: true }).catch(() => {});
       }
       pendingOrderConfirms.add(chatId);
       try {
       const [, ref, qtyStr] = data.split(':');
       const qty = parseInt(qtyStr, 10);
-      // ===== BUG FIX (SECURITY): validasi qty WAJIB integer positif =====
-      // callback_data TIDAK bisa dipercaya mentah-mentah (sama seperti catatan
-      // IDOR di "backtoorder:"/"refresh2fa:" di atas) - client Telegram custom
-      // / userbot bisa memicu callback_query dengan data APAPUN, termasuk
-      // "confirm:<ref>:-5". Tanpa guard ini, qty negatif lolos cek
-      // "qty > variant.stock" (selalu false untuk angka negatif), bikin
-      // `total` ikut negatif, bikin cek "user.balance < total" ikut lolos
-      // walau saldo $0, lalu db.updateBalance(chatId, -total) JUSTRU
-      // MENAMBAH saldo user tanpa bayar sepeser pun (exploit saldo gratis).
-      // qty juga tidak boleh 0 (order kosong, $0, tapi tetap tercatat sukses).
+      // ===== BUG FIX (SECURITY): qty MUST be validated as a positive integer =====
+      // callback_data cannot be trusted as sent (the same point as the IDOR notes
+      // on "backtoorder:"/"refresh2fa:" above) - a custom Telegram client or
+      // userbot can fire a callback_query with ANY data, including
+      // "confirm:<ref>:-5". Without this guard a negative qty passes the
+      // "qty > variant.stock" check (always false for a negative number), makes
+      // `total` negative too, makes the "user.balance < total" check pass even at a
+      // $0 balance, and then db.updateBalance(chatId, -total) ACTUALLY ADDS to the
+      // user's balance without them paying a cent (a free-balance exploit).
+      // qty must not be 0 either (an empty $0 order still recorded as successful).
       if (!Number.isInteger(qty) || qty <= 0) {
         return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'invalid_qty'), show_alert: true });
       }
@@ -3213,27 +3213,27 @@ bot.on('callback_query', async (query) => {
       if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'product_variant_not_found') });
       const { productId, variantId } = resolved;
 
-      // Varian Supplier API sekarang IKUT dicek terhadap variant.stock lokal
-      // juga - dulu dilewati sama sekali dengan alasan "ketersediaan asli
-      // dicek live lewat placeOrder() di bawah", TAPI sejak variant.stock
-      // varian Supplier API disinkron otomatis (saat link pertama kali &
-      // tiap SUPPLIER_SYNC_INTERVAL_MINUTES, lihat refreshSupplierData()),
-      // angka ini sudah cukup akurat untuk dipakai cek awal. Manfaatnya:
-      // buyer langsung dapat pesan "stok tidak cukup" TANPA perlu nunggu
-      // panggilan API ke Supplier dulu (yang baru gagal setelah beberapa
-      // detik). Catatan: kalau auto-sync mati (SUPPLIER_SYNC_INTERVAL_MINUTES=0)
-      // dan admin lama tidak klik refresh manual, angka ini bisa basi -
-      // placeOrder() di Supplier tetap jadi sumber kebenaran FINAL, cek ini
-      // cuma penyaring awal supaya UX lebih cepat, bukan pengganti validasi itu.
-      // KHUSUS varian Canboso API: cek stok LIVE ulang di sini (bukan cuma
-      // andalkan snapshot dari saat buyer buka halaman 'variant:' - bisa
-      // saja beda buyer lain sudah menghabiskan stok di antara waktu itu).
-      // Pakai cache 20 detik yang sama (lihat getProductsCached() di
-      // supplierCanboso.js) jadi tidak nambah beban API dibanding cek di
-      // 'variant:' kalau buyer confirm dalam <20 detik. Kalau fetch GAGAL,
-      // `liveStockChecked` tetap false - qty TIDAK divalidasi terhadap
-      // variant.stock lokal (yang bisa saja basi/0 dari sync sebelumnya),
-      // dan canboso.purchase() di bawah jadi validasi FINAL satu-satunya.
+      // Supplier API variants are NOW also checked against the local variant.stock
+      // - this used to be skipped entirely on the grounds that "real availability
+      // is checked live by placeOrder() below", BUT since Supplier API variant
+      // stock is synced automatically (on first link and every
+      // SUPPLIER_SYNC_INTERVAL_MINUTES, see refreshSupplierData()), the number is
+      // accurate enough for an initial check. The benefit: the buyer gets an
+      // "insufficient stock" message IMMEDIATELY, without waiting on an API call
+      // to the supplier that only fails seconds later. Note: if auto-sync is off
+      // (SUPPLIER_SYNC_INTERVAL_MINUTES=0) and the admin has not clicked a manual
+      // refresh for a while, this number can be stale - placeOrder() on the
+      // supplier's side remains the FINAL source of truth; this check is only an
+      // early filter for a faster UX, not a replacement for that validation.
+      // FOR Canboso API variants specifically: re-check LIVE stock here (rather
+      // than relying on the snapshot from when the buyer opened the 'variant:'
+      // page - another buyer may have consumed the stock in between).
+      // It uses the same 20-second cache (see getProductsCached() in
+      // supplierCanboso.js), so it adds no API load compared with the 'variant:'
+      // check when a buyer confirms within 20 seconds. When the fetch FAILS,
+      // `liveStockChecked` stays false - qty is NOT validated against the local
+      // variant.stock (which could be stale/0 from an earlier sync), and
+      // canboso.purchase() below becomes the sole FINAL validation.
       let liveStockChecked = false;
       if (variant.canbosoProductId) {
         try {
@@ -3244,17 +3244,16 @@ bot.on('callback_query', async (query) => {
             liveStockChecked = true;
           }
         } catch (err) {
-          console.error(`Canboso getLiveStock (confirm) gagal (product_id=${variant.canbosoProductId}):`, err.message);
+          console.error(`Canboso getLiveStock (confirm) failed (product_id=${variant.canbosoProductId}):`, err.message);
         }
       }
-      // ===== BUG FIX: sama seperti di handler 'variant:' - jangan pernah
-      // block pakai angka live doang selama stok manual lokal (stockItems)
-      // masih cukup untuk qty ini.
-      // ===== PATCH: variant.liveStock & variant.stock (manual) sekarang
-      // field terpisah dan DIJUMLAH lewat db.getTotalStock() - bukan lagi
-      // Math.max(variant.stock, localCountForConfirmGate) yang cuma ambil
-      // salah satu angka terbesar (padahal keduanya idealnya bisa dipakai
-      // barengan untuk menutupi qty yang sama).
+      // ===== BUG FIX: as in the 'variant:' handler - never block on the live
+      // number alone while local manual stock (stockItems) still covers this qty.
+      //
+      // ===== PATCH: variant.liveStock and variant.stock (manual) are now separate
+      // fields, ADDED TOGETHER via db.getTotalStock() - no longer
+      // Math.max(variant.stock, localCountForConfirmGate), which only took the
+      // larger of the two (when ideally both can contribute to the same qty).
       const totalAvailable = db.getTotalStock(variant);
       const shouldCheckStock = !variant.canbosoProductId || liveStockChecked;
       if (shouldCheckStock && qty > totalAvailable) {
@@ -3262,20 +3261,19 @@ bot.on('callback_query', async (query) => {
       }
 
       const unitPrice = db.getUnitPriceForQty(variant, qty);
-      // ===== BUG FIX: bulatkan total ke 2 desimal =====
-      // unitPrice * qty rawan floating-point drift (mis. 0.52 * 11 =
-      // 5.720000000000001). usd() cuma membulatkan untuk TAMPILAN, tapi
-      // db.updateBalance()/createOrder() menyimpan angka mentahnya - lama-
-      // lama saldo user "meleset" dari yang ditampilkan, bisa bikin
-      // pembelian ditolak ("saldo tidak cukup") padahal secara tampilan
-      // saldonya pas cukup.
+      // ===== BUG FIX: round the total to 2 decimals =====
+      // unitPrice * qty is prone to floating-point drift (0.52 * 11 =
+      // 5.720000000000001, say). usd() only rounds for DISPLAY, while
+      // db.updateBalance()/createOrder() store the raw number - over time a user's
+      // balance drifts from what is displayed, which can get a purchase rejected
+      // ("insufficient balance") when the displayed balance looks exactly enough.
       const total = Math.round(unitPrice * qty * 100) / 100;
       const user = db.getUser(chatId, query.from.username);
       if (user.balance < total) {
-        // Selain toast alert singkat, kirim juga pesan actionable dengan
-        // tombol quick-topup (QRIS/USDT/TON) sejumlah PERSIS kekurangan
-        // saldonya - user bisa langsung bayar tanpa keluar dulu ke menu
-        // Wallet lalu balik lagi cari produknya.
+        // Besides the brief toast alert, also send an actionable message with
+        // quick-topup buttons (QRIS/USDT/TON) for EXACTLY the shortfall - so the
+        // user can pay straight away without leaving for the Wallet menu and then
+        // hunting for the product again.
         const shortfall = total - user.balance;
         bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'insufficient_balance'), show_alert: true }).catch(() => {});
         return bot.sendMessage(chatId,
@@ -3287,26 +3285,26 @@ bot.on('callback_query', async (query) => {
       let deliveredItems = null;
       let supplierMeta = null;
       let deliverySource = 'manual'; // 'manual' | 'local_auto' | 'supplier_api'
-      // Simpan response MENTAH dari Canboso (kalau lewat jalur itu) - dipakai
-      // KHUSUS untuk ditempelkan ke notifikasi admin kalau ekstraksi
-      // items/orderId di purchase() ternyata meleset (lihat adminNote di
-      // bawah). Tanpa ini, admin cuma dikasih tahu "GAGAL mengekstrak" tanpa
-      // ada petunjuk field APA yang sebenarnya dipakai Canboso, jadi tidak
-      // ada yang bisa dicek untuk perbaiki pemetaan field di
-      // supplierCanboso.js - harus nebak terus tiap kali beda kasus.
+      // Keep the RAW response from Canboso (when that route was used) - used
+      // SPECIFICALLY to attach to the admin notification if the item/orderId
+      // extraction in purchase() turns out to have missed (see adminNote below).
+      // Without it the admin is only told "FAILED to extract" with no clue WHICH
+      // fields Canboso actually used, so there is nothing to inspect in order to
+      // fix the field mapping in supplierCanboso.js - leaving them guessing on
+      // every new case.
       let canbosoRawResult = null;
 
-      // ===== BUG FIX: prioritaskan stok manual lokal (yang diisi admin lewat
-      // "➕ Tambah Stock") DI ATAS Supplier API / Canboso API, kalau stoknya
-      // sudah cukup untuk qty ini. Sebelum fix ini, varian yang PERNAH
-      // dihubungkan ke Supplier API (`variant.supplierServiceId` /
-      // `variant.canbosoProductId` masih terisi) SELALU coba order ke API
-      // luar dulu - walau admin sudah menambahkan link/kode manual ke
-      // stockItems lokal - dan kalau API luar itu gagal (mis. saldo wallet
-      // toko di sisi Supplier habis), order langsung dibatalkan otomatis
-      // walau sebenarnya ada stok manual yang siap dikirim. Sekarang: kalau
-      // stok lokal cukup, pakai itu (deliverySource = 'local_auto') dan
-      // SAMA SEKALI tidak memanggil API luar untuk order ini.
+      // ===== BUG FIX: prioritise local manual stock (entered by the admin via
+      // "➕ Add Stock") OVER the Supplier API / Canboso API whenever it already
+      // covers this qty. Before this fix, a variant that had EVER been linked to a
+      // Supplier API (`variant.supplierServiceId` / `variant.canbosoProductId`
+      // still set) ALWAYS tried the external API first - even when the admin had
+      // added manual links/codes to the local stockItems - and if that external
+      // API failed (the store's wallet balance on the supplier's side running out,
+      // say), the order was cancelled automatically even though manual stock was
+      // ready to deliver. Now: when local stock is enough, it is used
+      // (deliverySource = 'local_auto') and the external API is not called AT ALL
+      // for this order.
       const localStockAvailable = db.getStockItemCount(productId, variantId);
       const useLocalStock = localStockAvailable >= qty;
 
@@ -3324,13 +3322,13 @@ bot.on('callback_query', async (query) => {
           db.decrementStock(productId, variantId, qty);
         }
       } else if (variant.supplierServiceId || variant.canbosoProductId) {
-        // ===== PATCH: partial fulfillment gabungan lokal + Supplier/Canboso.
-        // Dulu begitu stok lokal < qty, sistem full ke API luar untuk SELURUH
-        // qty (all-or-nothing) - walau sebagian qty-nya sebenarnya bisa
-        // dipenuhi dari stockItems lokal. Sekarang: ambil dulu SEMUA yang ada
-        // di lokal (localStockAvailable, walau kurang dari qty), baru sisanya
-        // (remainderQty) yang dipesan otomatis ke API luar untuk menutupi
-        // kekurangannya - bukan qty penuh lagi.
+        // ===== PATCH: partial fulfilment combining local + Supplier/Canboso.
+        // Previously, as soon as local stock < qty the system went fully to the
+        // external API for the WHOLE qty (all or nothing) - even though part of
+        // the qty could have been filled from local stockItems. Now: take
+        // everything available locally first (localStockAvailable, even when short
+        // of qty), and only order the remainder (remainderQty) automatically from
+        // the external API to make up the difference - no longer the full qty.
         let localPortion = [];
         if (localStockAvailable > 0) {
           try {
@@ -3344,13 +3342,13 @@ bot.on('callback_query', async (query) => {
         const hasLocalPortion = localPortion.length > 0;
 
         if (variant.supplierServiceId) {
-          // Panggil Supplier API DULU, SEBELUM saldo lokal dipotong - kalau
-          // order API gagal (network/timeout, saldo toko di Supplier habis,
-          // atau stok remote-nya kosong), saldo user WAJIB tetap utuh dan
-          // TIDAK ada order "hantu" yang tercatat tanpa produk beneran
-          // terkirim. Kalau tadi sempat ambil localPortion, KEMBALIKAN dulu
-          // ke stockItems (db.restoreStockItems) sebelum return - supaya
-          // item lokal itu tidak hilang percuma walau order-nya dibatalkan.
+          // Call the Supplier API FIRST, BEFORE the local balance is deducted - if
+          // the API order fails (network/timeout, the store's supplier balance
+          // running out, or the remote stock being empty), the user's balance MUST
+          // stay intact and NO "ghost" order may be recorded without a product
+          // actually being delivered. If a localPortion was taken, RETURN it to
+          // stockItems (db.restoreStockItems) before returning - so those local
+          // items are not lost for nothing when the order is cancelled.
           try {
             const result = await supplier.placeOrder(variant.supplierServiceId, remainderQty);
             const supplierItems = Array.isArray(result.products) ? result.products : [];
@@ -3359,43 +3357,43 @@ bot.on('callback_query', async (query) => {
             deliverySource = hasLocalPortion ? 'mixed_supplier' : 'supplier_api';
           } catch (err) {
             if (hasLocalPortion) db.restoreStockItems(productId, variantId, localPortion);
-            console.error(`Supplier API order gagal (service_id=${variant.supplierServiceId}, qty=${remainderQty}):`, err.message);
+            console.error(`Supplier API order failed (service_id=${variant.supplierServiceId}, qty=${remainderQty}):`, err.message);
             const buyerMsgKey = isSupplierBalanceError(err.message) ? 'supplier_balance_empty' : 'supplier_order_failed';
             bot.answerCallbackQuery(query.id, { text: lang.t(chatId, buyerMsgKey), show_alert: true }).catch(() => {});
             notifyAdmins(
-              `⚠️ <b>Order via Supplier API gagal</b>\n\n` +
+              `⚠️ <b>Order via the Supplier API failed</b>\n\n` +
               `User: ${query.from.username ? '@' + escapeHtml(query.from.username) : `ID ${chatId}`} (${chatId})\n` +
-              `Produk: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
-              `Jumlah: ${qty}${hasLocalPortion ? ` (${localPortion.length} dari stok lokal, sisa ${remainderQty} coba dipesan ke Supplier)` : ''}\n` +
+              `Product: ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
+              `Quantity: ${qty}${hasLocalPortion ? ` (${localPortion.length} from local stock, remaining ${remainderQty} attempted via the supplier)` : ''}\n` +
               `Service ID: <code>${escapeHtml(variant.supplierServiceId)}</code>\n` +
               `Error: ${escapeHtml(err.message)}\n\n` +
-              `ℹ️ Saldo user BELUM dipotong (order dibatalkan otomatis, stok lokal yang sempat dipakai sudah dikembalikan).`
+              `ℹ️ The user's balance has NOT been charged (the order was cancelled automatically, and any local stock used has been restored).`
             );
             return;
           }
           db.updateBalance(chatId, -total);
         } else {
-          // canbosoProductId - sama seperti blok Supplier API (AIVerse Hub)
-          // di atas: panggil API Canboso DULU, SEBELUM saldo lokal user
-          // dipotong, dan kembalikan localPortion kalau gagal.
+          // canbosoProductId - just like the Supplier API (AIVerse Hub) block
+          // above: call the Canboso API FIRST, BEFORE the user's local balance is
+          // deducted, and restore localPortion on failure.
           try {
             const result = await canboso.purchase(variant.canbosoProductId, remainderQty);
             const supplierItems = result.items.length ? result.items : [];
             deliveredItems = [...localPortion, ...supplierItems];
             supplierMeta = { supplierServiceId: `canboso:${variant.canbosoProductId}`, supplierOrderId: result.orderId };
             canbosoRawResult = result.raw;
-            // Simpan potongan raw response ke supplierMeta (ikut tersimpan
-            // permanen di data/db.json lewat db.createOrder di bawah) KHUSUS
-            // kalau ekstraksi item gagal - supaya raw response tidak hilang
-            // kalau notifikasi Telegram ke admin kebetulan gagal terkirim/
-            // terlewat; masih bisa dicek belakangan lewat "🔍 Cek Order ID".
+            // Store a slice of the raw response in supplierMeta (persisted in
+            // data/db.json via db.createOrder below) SPECIFICALLY when item
+            // extraction failed - so the raw response is not lost if the Telegram
+            // notification to the admin happens to fail or be missed; it can still
+            // be inspected later via "🔍 Check Order ID".
             if (supplierItems.length === 0) {
               supplierMeta.rawDebug = JSON.stringify(result.raw).slice(0, 1000);
             }
             deliverySource = hasLocalPortion ? 'mixed_canboso' : 'canboso_api';
           } catch (err) {
             if (hasLocalPortion) db.restoreStockItems(productId, variantId, localPortion);
-            console.error(`Canboso API order gagal (product_id=${variant.canbosoProductId}, qty=${remainderQty}):`, err.message);
+            console.error(`Canboso API order failed (product_id=${variant.canbosoProductId}, qty=${remainderQty}):`, err.message);
             const buyerMsgKey = isSupplierBalanceError(err.message) ? 'supplier_balance_empty' : 'supplier_order_failed';
             bot.answerCallbackQuery(query.id, { text: lang.t(chatId, buyerMsgKey), show_alert: true }).catch(() => {});
             notifyAdmins(
