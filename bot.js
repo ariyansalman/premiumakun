@@ -106,18 +106,11 @@ bot.on('polling_error', (err) => {
   console.error('⚠️ Telegram polling error:', err.message);
 });
 
-// usd(n, chatId) - format harga sesuai bahasa customer:
-//   - bahasa Indonesia -> Rp (dikonversi pakai kurs live USD->IDR, sama kurs
-//     yang dipakai buat QRIS)
-//   - bahasa English & default (chatId tidak dikasih, dipakai di panel
-//     admin/notifikasi internal) -> tetap format $ seperti semula
-const usd = (n, chatId) => {
+// usd(n) - format a price in the store's currency (USD). The second argument is
+// accepted and ignored: it used to select a per-customer currency, and is kept in
+// the signature so the many existing call sites need no change.
+const usd = (n, _chatId) => {
   const amount = Number(n);
-  const userLang = chatId ? lang.getUserLang(chatId) : null;
-  if (userLang === 'id') {
-    const rate = payment.getCachedUsdToIdrRate(USD_TO_IDR_RATE_FALLBACK);
-    return rupiah(amount * rate);
-  }
   return '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 const rupiah = (n) => 'Rp' + Math.round(Number(n)).toLocaleString('id-ID');
@@ -980,58 +973,11 @@ function embedOwnerCustomEmoji(msg) {
 // diproses ulang di sini justru bisa bikin tag ke-nest dobel.
 const renderDescription = (text) => (text || '').split('{e}').join(boltEmojiText());
 
-// ============================================================
-// Auto-translate deskripsi produk (fitur "Admin isi 1 bahasa, otomatis
-// berubah saat /setlanguage") — pakai endpoint publik Google Translate
-// (translate.googleapis.com) TANPA API key. Endpoint ini tidak resmi/tidak
-// didukung Google secara formal, jadi WAJIB dibungkus try/catch dan boleh
-// gagal kapan saja (rate-limit, endpoint berubah, dst) — kalau gagal, fallback
-// ke teks asli apa adanya supaya buyer tetap dapat info produk (lebih baik
-// tampil bahasa "salah" daripada error/kosong).
-async function translateText(text, sourceLang, targetLang) {
-  if (!text) return null;
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
-    const data = await res.json();
-    // Bentuk respons: [[[translated_chunk, original_chunk, ...], ...], ...]
-    // Teks panjang dipecah Google jadi beberapa chunk, harus digabung balik.
-    const chunks = Array.isArray(data) && Array.isArray(data[0]) ? data[0] : [];
-    const translated = chunks.map(c => (Array.isArray(c) ? c[0] : '')).join('');
-    return translated || null;
-  } catch (err) {
-    console.error('⚠️ Auto-translate deskripsi gagal:', err.message);
-    return null;
-  }
-}
-
-// Ambil teks deskripsi varian dalam bahasa yang SEDANG dipakai buyer
-// (lang.getUserLang(chatId)), auto-translate + cache kalau bahasa deskripsi
-// aslinya (variant.descriptionLang, default 'id' untuk data lama) beda dari
-// bahasa buyer. Cache tersimpan permanen di data/db.json
-// (variant.descriptionTranslated[targetLang]) sampai admin edit ulang teks
-// aslinya (lihat db.setDescription() yang reset cache ini).
-async function getLocalizedDescription(chatId, productId, variant) {
-  const raw = variant.description || '';
-  if (!raw) return '';
-  const sourceLang = variant.descriptionLang === 'en' ? 'en' : 'id';
-  const targetLang = lang.getUserLang(chatId) === 'en' ? 'en' : 'id';
-  if (sourceLang === targetLang) return raw;
-
-  const cached = variant.descriptionTranslated && variant.descriptionTranslated[targetLang];
-  if (cached) return cached;
-
-  const translated = await translateText(raw, sourceLang, targetLang);
-  if (translated) {
-    db.cacheDescriptionTranslation(productId, variant.id, targetLang, translated);
-    return translated;
-  }
-  return raw; // fallback: gagal translate, tampilkan bahasa asli daripada kosong
-}
+// Shared prompt shown on every admin "Set Description" screen.
+const DESC_INPUT_PROMPT =
+  'Type the new description (as many lines as you like; HTML tags such as `<b>...</b>` work for bold. ' +
+  'If you pick a premium emoji straight from your own Telegram Premium panel, it is saved as premium ' +
+  'automatically - no manual ID setup needed). Type `-` to clear it, or /cancel to abort.';
 
 // Buang 1 emoji unicode (+ spasi setelahnya) di AWAL sebuah teks. Dipakai
 // begitu icon_custom_emoji_id dipasang ke tombol, supaya emoji tidak tampil
@@ -2421,19 +2367,9 @@ bot.onText(/^\/start(?:\s+(.+))?/, async (msg, match) => {
     db.registerReferral(chatId, referrerChatId);
   }
 
-  // Kalau user ini BELUM PERNAH pilih bahasa sama sekali, tampilkan layar
-  // pilih bahasa dulu SEBELUM menu utama. Setelah dipilih (lihat callback
-  // 'lang:id' / 'lang:en' di bawah), bot langsung lanjut nampilin menu utama.
-  if (!db.hasChosenLang(chatId)) {
-    return bot.sendMessage(
-      chatId,
-      `${lang.tr('id', 'choose_language')}\n${lang.tr('en', 'choose_language')}`,
-      { reply_markup: lang.languageKeyboard() }
-    );
-  }
-
-  // Admin tetap bisa langsung masuk tanpa wajib join, biar owner tidak
-  // pernah terkunci dari bot-nya sendiri (mis. lupa join channel sendiri).
+  // Admins always get straight in without the force-join requirement, so the
+  // owner is never locked out of their own bot (by forgetting to join their own
+  // channel, for example).
   if (!isAdmin(chatId)) {
     const passed = await checkForceJoinAndPrompt(chatId, null);
     if (!passed) return;
@@ -2443,18 +2379,6 @@ bot.onText(/^\/start(?:\s+(.+))?/, async (msg, match) => {
     chatId,
     buildWelcomeText(chatId),
     { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) }
-  );
-});
-
-// ================= SET LANGUAGE (command) =================
-// Bisa dipanggil kapan saja buat ganti bahasa, tidak cuma pas /start awal.
-bot.onText(/^\/(setlanguage|language|lang|bahasa)/, (msg) => {
-  const chatId = msg.chat.id;
-  db.getUser(chatId, msg.from.username);
-  bot.sendMessage(
-    chatId,
-    `${lang.tr('id', 'choose_language')}\n${lang.tr('en', 'choose_language')}`,
-    { reply_markup: lang.languageKeyboard('menu:main') }
   );
 });
 
@@ -2535,45 +2459,22 @@ bot.on('callback_query', async (query) => {
       return safeEditMessage(chatId, messageId, welcomeText, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) });
     }
 
-    // ---- Gerbang Mode Maintenance: blokir SEMUA interaksi menu lain kalau
-    // fitur aktif (admin selalu lolos, sama seperti gerbang wajib-join). ----
-    if (!isAdmin(chatId) && !data.startsWith('lang:') && db.getMaintenanceSettings().enabled) {
+    // ---- Maintenance Mode gate: block EVERY other menu interaction while the
+    // feature is on (admins always pass, like the force-join gate). ----
+    if (!isAdmin(chatId) && db.getMaintenanceSettings().enabled) {
       await safeEditMessage(chatId, messageId, buildMaintenanceText(chatId), { parse_mode: 'HTML' });
       return bot.answerCallbackQuery(query.id).catch(() => {});
     }
 
-    // ---- Gerbang wajib-join: blokir SEMUA interaksi menu lain kalau fitur
-    // aktif & user masih ada channel yang belum di-join (admin selalu lolos). ----
-    if (!isAdmin(chatId) && !data.startsWith('lang:')) {
+    // ---- Force-join gate: block EVERY other menu interaction while the feature
+    // is on and the user still has an unjoined channel (admins always pass). ----
+    if (!isAdmin(chatId)) {
       const passed = await checkForceJoinAndPrompt(chatId, messageId);
       if (!passed) return bot.answerCallbackQuery(query.id).catch(() => {});
     }
 
-    // ---- Ganti bahasa lewat command (/language, /lang, /bahasa, /setlanguage)
-    // sekarang, BUKAN tombol inline di menu utama lagi - tapi callback
-    // 'lang:id' / 'lang:en' dari keyboard yang dikirim command itu tetap
-    // ditangani di sini. ----
-    if (data.startsWith('lang:')) {
-      const code = data.slice('lang:'.length);
-      lang.setUserLang(chatId, code === 'en' ? 'en' : 'id');
-      db.clearPendingAction(chatId);
-      bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'language_changed').replace(/<\/?b>/g, '') }).catch(() => {});
-      // Setelah bahasa dipilih (baik pas /start pertama kali maupun ganti
-      // bahasa belakangan), cek dulu status wajib-join SEBELUM tampilkan menu
-      // utama - kalau masih ada channel yang belum di-join, layar join yang
-      // tampil duluan (kecuali untuk admin, yang selalu boleh lewat).
-      if (!isAdmin(chatId)) {
-        const passed = await checkForceJoinAndPrompt(chatId, messageId);
-        if (!passed) return;
-      }
-      // Tampilkan ULANG menu utama FULL dalam bahasa yang baru dipilih - baik
-      // teksnya maupun semua tombol inline-nya.
-      const welcomeText = buildWelcomeText(chatId);
-      return safeEditMessage(chatId, messageId, welcomeText, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) });
-    }
-
     // ---- Main menu navigation ----
-    else if (data === 'menu:main') {
+    if (data === 'menu:main') {
       db.clearPendingAction(chatId);
       const welcomeText = buildWelcomeText(chatId);
       await safeEditMessage(chatId, messageId, welcomeText, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(chatId) });
@@ -3068,9 +2969,9 @@ bot.on('callback_query', async (query) => {
       }
 
       const header = `${productEmojiHtml(product)} <b>${escapeHtml(product.name)} - ${escapeHtml(variant.label)}</b>\n\n`;
-      const localizedDesc = await getLocalizedDescription(chatId, productId, variant);
-      const body = localizedDesc
-        ? `<blockquote>${renderDescription(localizedDesc)}</blockquote>`
+      const descText = variant.description || '';
+      const body = descText
+        ? `<blockquote>${renderDescription(descText)}</blockquote>`
         : `<blockquote>${lang.t(chatId, 'desc_fallback', { price: usd(db.getBasePrice(variant), chatId), stock: stockLabel(variant) })}</blockquote>`;
 
       await bot.editMessageText(header + body, {
@@ -4239,17 +4140,16 @@ bot.on('message', async (msg) => {
   else if (pending.type === 'setdesc_text') {
     const typed = embedOwnerCustomEmoji(msg);
     const text = typed === '-' ? '' : typed;
-    const { productId, variantId, lang: descLang } = pending.data;
-    const ok = db.setDescription(productId, variantId, text, descLang);
+    const { productId, variantId } = pending.data;
+    const ok = db.setDescription(productId, variantId, text);
     db.clearPendingAction(chatId);
     if (!ok) {
-      return bot.sendMessage(chatId, '⚠️ Produk/varian tidak ditemukan, dibatalkan.');
+      return bot.sendMessage(chatId, '⚠️ Product/variant not found, cancelled.');
     }
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
     bot.sendMessage(chatId,
-      `✅ Deskripsi (${descLang === 'en' ? 'EN' : 'ID'}) untuk *${product ? product.name : productId}${variant && variant.label ? ' - ' + variant.label : ''}* berhasil disimpan.` +
-      (text ? `\n\nℹ️ Versi bahasa satunya bakal otomatis di-generate (auto-translate) begitu ada buyer yang /setlanguage beda buka deskripsi ini.` : ''),
+      `✅ Description for *${product ? product.name : productId}${variant && variant.label ? ' - ' + variant.label : ''}* saved successfully.`,
       { parse_mode: 'Markdown' }
     );
   }
@@ -6520,62 +6420,39 @@ bot.on('callback_query', async (query) => {
     }
 
     else if (action === 'setdesc') {
-      await sendOrEditAdmin(chatId, messageId, '📝 *Set Deskripsi*\\n\\nPilih produk yang mau diatur deskripsinya:', adminProductPickKeyboard('setdesc_pick'));
+      await sendOrEditAdmin(chatId, messageId, '📝 *Set Description*\n\nPick the product whose description you want to set:', adminProductPickKeyboard('setdesc_pick'));
     }
     else if (action === 'setdesc_pick') {
       const product = db.findProduct(param);
       if (!product || !product.variants.length) {
         return sendOrEditAdmin(chatId, messageId,
-          `⚠️ Produk *${product ? product.name : param}* belum punya varian. Tambah variannya dulu lewat ➕ Tambah Varian.`,
+          `⚠️ Product *${product ? product.name : param}* has no variants yet. Add one first via ➕ Add Variant.`,
           adminBackKeyboard('admin:cat_products')
         );
       }
       if (product.variants.length === 1) {
         const variant = product.variants[0];
-        db.setPendingAction(chatId, { type: 'setdesc_choose_lang', data: { productId: param, variantId: variant.id } });
+        db.setPendingAction(chatId, { type: 'setdesc_text', data: { productId: param, variantId: variant.id } });
         await sendOrEditAdmin(chatId, messageId,
-          `📝 *Set Deskripsi - ${product.name}*\\n\\n` +
-          (variant.description ? `Deskripsi saat ini (${variant.descriptionLang === 'en' ? 'EN' : 'ID'}):\\n${variant.description}\\n\\n` : 'Belum ada deskripsi.\\n\\n') +
-          'Teks deskripsi yang mau kamu ketik nanti itu bahasa apa? (Bahasa satunya bakal di-generate otomatis pakai auto-translate saat buyer /setlanguage beda dari ini)',
-          { inline_keyboard: [
-            [{ text: '🇮🇩 Indonesia', callback_data: 'admin:setdesclang:id' }, { text: '🇬🇧 English', callback_data: 'admin:setdesclang:en' }],
-            [{ text: '‹ Kembali', callback_data: 'admin:cat_products' }]
-          ] }
+          `📝 *Set Description - ${product.name}*\n\n` +
+          (variant.description ? `Current description:\n${variant.description}\n\n` : 'No description yet.\n\n') +
+          DESC_INPUT_PROMPT,
+          adminBackKeyboard('admin:cat_products')
         );
       } else {
-        await sendOrEditAdmin(chatId, messageId, `📝 Set Deskripsi untuk *${product.name}*\\n\\nPilih varian:`, adminVariantPickKeyboard(product, 'setdesc_variant', 'admin:setdesc'));
+        await sendOrEditAdmin(chatId, messageId, `📝 Set Description for *${product.name}*\n\nPick a variant:`, adminVariantPickKeyboard(product, 'setdesc_variant', 'admin:setdesc'));
       }
     }
     else if (action === 'setdesc_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const variantId = variant.id;
-      db.setPendingAction(chatId, { type: 'setdesc_choose_lang', data: { productId: param, variantId } });
+      db.setPendingAction(chatId, { type: 'setdesc_text', data: { productId: param, variantId } });
       await sendOrEditAdmin(chatId, messageId,
-        `📝 *Set Deskripsi - ${product.name} ${variant.label}*\\n\\n` +
-        (variant.description ? `Deskripsi saat ini (${variant.descriptionLang === 'en' ? 'EN' : 'ID'}):\\n${variant.description}\\n\\n` : 'Belum ada deskripsi.\\n\\n') +
-        'Teks deskripsi yang mau kamu ketik nanti itu bahasa apa? (Bahasa satunya bakal di-generate otomatis pakai auto-translate saat buyer /setlanguage beda dari ini)',
-        { inline_keyboard: [
-          [{ text: '🇮🇩 Indonesia', callback_data: 'admin:setdesclang:id' }, { text: '🇬🇧 English', callback_data: 'admin:setdesclang:en' }],
-          [{ text: '‹ Kembali', callback_data: 'admin:cat_products' }]
-        ] }
-      );
-    }
-    else if (action === 'setdesclang') {
-      const chosenLang = param === 'en' ? 'en' : 'id';
-      const pendingLangChoice = db.getPendingAction(chatId);
-      if (!pendingLangChoice || pendingLangChoice.type !== 'setdesc_choose_lang') {
-        return bot.answerCallbackQuery(query.id, { text: 'Sesi kedaluwarsa, ulangi dari menu Set Deskripsi.' });
-      }
-      const { productId, variantId } = pendingLangChoice.data;
-      const product = db.findProduct(productId);
-      const variant = product && product.variants.find(v => v.id === variantId);
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Produk/varian sudah tidak ada.' });
-      db.setPendingAction(chatId, { type: 'setdesc_text', data: { productId, variantId, lang: chosenLang } });
-      await sendOrEditAdmin(chatId, messageId,
-        `📝 *Set Deskripsi (${chosenLang === 'en' ? 'EN' : 'ID'}) - ${product.name}${variant.label ? ' ' + variant.label : ''}*\\n\\n` +
-        'Ketik deskripsi baru (bebas banyak baris, boleh tag HTML `<b>...</b>` untuk bold. Kalau kamu pilih emoji premium langsung dari panel Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga - nggak perlu setting ID manual). Ketik `-` untuk mengosongkan, atau /cancel untuk batal.',
+        `📝 *Set Description - ${product.name} ${variant.label}*\n\n` +
+        (variant.description ? `Current description:\n${variant.description}\n\n` : 'No description yet.\n\n') +
+        DESC_INPUT_PROMPT,
         adminBackKeyboard('admin:cat_products')
       );
     }
