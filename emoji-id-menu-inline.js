@@ -1,39 +1,37 @@
 // ============================================================
-// CUSTOM EMOJI ID — IKON TOMBOL MENU INLINE (per tombol/halaman)
+// CUSTOM EMOJI ID — INLINE MENU BUTTON ICONS (per button/page)
 // ============================================================
-// Dipakai untuk custom emoji yang muncul sebagai IKON di LABEL TOMBOL
-// inline keyboard lewat field "icon_custom_emoji_id" pada
-// InlineKeyboardButton — fitur Bot API 9.4 (rilis 9 Feb 2026). Beda
-// mekanisme dari emoji di TEKS pesan (lihat emoji-id-teks.js): ini
-// bukan tag HTML di dalam teks, tapi field terpisah di object tombolnya.
-// Sebelum Bot API 9.4, custom emoji di tombol memang tidak didukung
-// sama sekali oleh Telegram — sekarang sudah bisa.
+// Used for the custom emoji that appears as the ICON on an inline keyboard
+// BUTTON LABEL, via the "icon_custom_emoji_id" field on InlineKeyboardButton
+// — a Bot API 9.4 feature (released 9 Feb 2026). This is a different mechanism
+// from emoji inside MESSAGE TEXT (see emoji-id-teks.js): it is not an HTML tag
+// inside the text, but a separate field on the button object itself.
+// Before Bot API 9.4, custom emoji on buttons were not supported by Telegram at
+// all — now they are.
 //
-// Setiap key di bawah = 1 tombol/halaman tertentu, jadi kamu bisa pasang
-// ikon custom emoji yang BEDA-BEDA untuk tiap tombol (bukan cuma 1 ID
-// yang sama dipakai di semua tombol).
+// Each key below = one specific button/page, so you can give every button a
+// DIFFERENT custom emoji icon (rather than reusing a single ID everywhere).
 //
-// CARA ISI: tinggal ganti nilai string di bawah ini (di antara "").
-// KOSONGKAN ("") kalau belum ada ID-nya — tombol tetap tampil normal
-// (fallback ke teks biasa) tanpa bikin bot error, lihat iconFor() di bawah.
+// HOW TO FILL IN: just replace the string value below (between the "").
+// LEAVE IT EMPTY ("") when you do not have an ID yet — the button still renders
+// normally (falling back to plain text) without breaking the bot, see iconFor() below.
 //
-// ⚠️ SYARAT WAJIB: akun PEMILIK BOT (bukan bot-nya) wajib punya
-// langganan Telegram Premium aktif. Kalau owner belum Premium / ID
-// dikosongkan, tombol otomatis tampil normal TANPA ikon - bot tetap
-// jalan normal, TIDAK ERROR.
+// ⚠️ HARD REQUIREMENT: the BOT OWNER's account (not the bot itself) must have an
+// active Telegram Premium subscription. If the owner is not Premium, or the ID
+// is left empty, the button simply renders normally WITHOUT an icon - the bot
+// keeps working, NO ERROR.
 //
-// Cara dapat custom_emoji_id:
-// 1. Kirim custom emoji yang mau dipakai ke @userinfobot atau
-//    @RawDataBot (kirim dari akun Premium supaya custom emoji-nya
-//    beneran ke-attach sebagai entity, bukan cuma tampil sebagai
-//    teks biasa).
-// 2. Lihat field "custom_emoji_id" di entities pesan tsb.
-// 3. Tempel ID-nya (angka panjang, contoh: "5373141891321699086")
-//    ke key yang sesuai di object EMOJI_IDS di bawah.
+// How to obtain a custom_emoji_id:
+// 1. Send the custom emoji you want to @userinfobot or @RawDataBot (send it
+//    from a Premium account so the custom emoji is really attached as an
+//    entity, instead of appearing as plain text).
+// 2. Look at the "custom_emoji_id" field in that message's entities.
+// 3. Paste the ID (a long number, for example "5373141891321699086") into the
+//    matching key in the EMOJI_IDS object below.
 // ============================================================
 
 const EMOJI_IDS = {
-  // --- Menu utama /start ---
+  // --- Main /start menu ---
   buy_produk: "5472401690793614752",
   profile: "5249053508681883137",
   saldo_saya: "5278467510604160626",
@@ -42,31 +40,31 @@ const EMOJI_IDS = {
   referral: "5449800250032143374",
   support: "5201990176175299013",
 
-  // --- Halaman Refer & Earn (tombol di dalam halamannya) ---
+  // --- Refer & Earn page (the buttons inside it) ---
   share_referral: "5258043150110301407",
   copy_referral: "5987635334945444280",
 
-  // --- Tombol halaman lainnya ---
+  // --- Buttons on other pages ---
   contact_support: "5172893417717367746",
   close_menu: "5368352122318383442",
   recover: "5377584064326804458",
   cancel_recover: "5368352122318383442",
   refresh_2fa: "5433878454078556670",
 
-  // --- Tombol Pilihan Gift (Buy Gift/Confess Gift) ---
-  // Fallback SAJA - kalau 1 gift dari katalog Telegram punya sticker
-  // custom_emoji_id sendiri (lihat userbot.js getGiftCatalog()), itu yang
-  // dipakai duluan buat ikon tombolnya, BUKAN ID di sini. ID ini cuma
-  // dipakai kalau gift itu tidak punya sticker custom (fallback ke 🎁 polos).
+  // --- Gift selection buttons (Buy Gift/Confess Gift) ---
+  // A FALLBACK ONLY - when a gift from the Telegram catalogue has its own
+  // sticker custom_emoji_id (see getGiftCatalog() in userbot.js), that one is
+  // used for the button icon instead of the ID here. This ID only applies when
+  // the gift has no custom sticker (falling back to a plain 🎁).
   gift: "",
 
-  // --- Menu Wallet / Topup ---
+  // --- Wallet / Topup menu ---
   topup_qris: "6084682277072144595",
   topup_usdt: "5292125588209804353",
   topup_ton: "5834757434333208303",
-  // Baru: tombol topup Binance Pay - sengaja dikosongkan (belum pernah
-  // ditangkap lewat "🎨 Kelola Emoji ID"), isi lewat admin panel atau tempel
-  // manual ID-nya di sini kalau sudah punya.
+  // New: the Binance Pay topup button - deliberately left empty (never captured
+  // through "🎨 Manage Emoji ID"); fill it in from the admin panel or paste the
+  // ID here manually once you have one.
   topup_binance: "",
   batal: "5969916760898408074",
   nominal_cepat: "5188605164000395914",
@@ -79,38 +77,38 @@ const EMOJI_IDS = {
   copy_id_binance: "",
   batalkan_binance: "",
 
-  // --- Navigasi umum (dipakai di banyak halaman) ---
+  // --- General navigation (used across many pages) ---
   back: "5255703720078879038",
   go_back: "5346320297299560938",
 
-  // --- Halaman deskripsi produk ---
+  // --- Product description page ---
   how_to_use: "5420323339723881652",
   buy_now: "5440841102871517055",
 
-  // --- Halaman jumlah & konfirmasi order ---
+  // --- Quantity and order confirmation pages ---
   jumlah_custom: "6215281817247812147",
   place_order: "5193065010795911968",
   cancel_order: "5974083768233760323",
 
-  // --- Tombol Wajib Join Channel ---
-  // Sengaja diisi ID yang SUDAH ADA & sudah kepakai di tombol lain (bukan
-  // ID baru), disamakan berdasarkan MEKANISME tombolnya - supaya begitu
-  // owner update kode ini, langsung tampil pakai emoji Premium yang sama
-  // TANPA admin perlu forward ulang emoji manapun.
-  join_channel: "5172893417717367746",  // sama dengan tombol "Contact Support" (sama-sama tombol url keluar dari bot)
-  checkjoin: "5193065010795911968",     // sama dengan tombol "Place Order" (sama-sama tombol konfirmasi ✅)
+  // --- Force Join Channel buttons ---
+  // Deliberately filled with IDs that ALREADY EXIST and are already used on
+  // other buttons (not new IDs), matched by what the button DOES - so that as
+  // soon as the owner updates this code, they render with the same Premium emoji
+  // WITHOUT the admin having to forward any emoji again.
+  join_channel: "5172893417717367746",  // same as the "Contact Support" button (both are url buttons leaving the bot)
+  checkjoin: "5193065010795911968",     // same as the "Place Order" button (both are ✅ confirmation buttons)
 
   // --- Admin panel: /admin ---
-  // Belum ada di data/db.json (belum pernah ditangkap lewat "🎨 Kelola
-  // Emoji ID"), jadi sengaja dibiarkan kosong - isi lewat admin panel
-  // atau tempel manual di sini kalau sudah punya ID-nya.
-  // 4 tombol kategori di menu utama /admin (lihat adminMainKeyboard() di bot.js)
+  // Not present in data/db.json yet (never captured through "🎨 Manage Emoji
+  // ID"), so deliberately left empty - fill them in from the admin panel or
+  // paste them here manually once you have the IDs.
+  // The 4 category buttons in the main /admin menu (see adminMainKeyboard() in bot.js)
   admin_cat_products: "",
   admin_cat_users: "",
   admin_cat_reports: "",
   admin_cat_settings: "",
-  // Tombol "🏠 Menu Utama" (shortcut lompat langsung ke menu utama /admin
-  // dari halaman submenu manapun) - lihat adminBackKeyboard() dkk di bot.js
+  // The "🏠 Main Menu" button (a shortcut straight back to the main /admin menu
+  // from any submenu page) - see adminBackKeyboard() and friends in bot.js
   admin_menu_utama: "",
   admin_daftar_produk: "",
   admin_tambah_produk: "",
@@ -129,18 +127,18 @@ const EMOJI_IDS = {
   admin_auto_backup: "",
   admin_broadcast: "",
   admin_channel_notif: "",
-  // Tombol "🎁 Kelola Emoji Gift" di kategori Gift (Userbot) - BEDA dari key
-  // "gift" di atas (yang itu ikon fallback tombol PILIHAN gift-nya sendiri,
-  // ini cuma ikon tombol menu admin buat masuk ke fitur "Kelola Emoji Gift").
-  admin_gift_emoji: "",
+  // The "🎁 Manage Gift Emoji" button in the Gift (Userbot) category - DIFFERENT
+  // from the "gift" key above (that one is the fallback icon for the gift
+  // SELECTION buttons themselves; this is only the icon for the admin menu
+  // button that opens the "Manage Gift Emoji" feature).
 };
 
-// Ambil ID untuk 1 key tombol. Prioritas: (1) hasil "tangkap otomatis" lewat
-// fitur admin "🎨 Kelola Emoji ID" (tersimpan persisten di data/db.json), lalu
-// (2) ID yang ditempel manual di object EMOJI_IDS di atas. Balikin null kalau
-// dua-duanya kosong, supaya pemanggilnya (withButtonIcon() di bot.js) tahu
-// harus skip field icon_custom_emoji_id sama sekali - bukan ngirim string
-// kosong ke Telegram (yang bisa bikin error validasi field).
+// Look up the ID for one button key. Priority: (1) the result of an "automatic
+// capture" via the admin "🎨 Manage Emoji ID" feature (stored persistently in
+// data/db.json), then (2) an ID pasted manually into the EMOJI_IDS object above.
+// Returns null when both are empty, so the caller (withButtonIcon() in bot.js)
+// knows to omit the icon_custom_emoji_id field entirely - rather than sending an
+// empty string to Telegram (which could trigger a field validation error).
 function iconFor(key) {
   const db = require('./db');
   const fromDb = db.getEmojiId(`menu:${key}`);

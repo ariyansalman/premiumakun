@@ -1,11 +1,13 @@
 // ============================================================
-// Cek & perbaiki dobel-hitung stok (variant.stock manual TANPA
-// kode/link asli, yang kebetulan PERSIS SAMA dengan liveStock API)
+// Detect and repair double-counted stock (a manual variant.stock with NO
+// real codes/links behind it, that happens to EXACTLY MATCH the API
+// liveStock)
 //
-// CARA PAKAI (jalankan dari folder /root/bot):
-//   node fix-double-stock.js            -> cuma cek & tampilkan (AMAN, tidak ubah apapun)
-//   node fix-double-stock.js --apply    -> beneran perbaiki (reset stock manual jadi 0
-//                                           untuk varian yang match pola dobel-hitung)
+// USAGE (run from the bot folder):
+//   node fix-double-stock.js            -> report only (SAFE, changes nothing)
+//   node fix-double-stock.js --apply    -> actually repair (reset the manual
+//                                          stock to 0 for variants matching
+//                                          the double-count pattern)
 // ============================================================
 const db = require('./db.js');
 const apply = process.argv.includes('--apply');
@@ -17,18 +19,20 @@ db.getAllProducts().forEach(p => {
     const hasRealItems = Array.isArray(v.stockItems) && v.stockItems.length > 0;
     const stock = v.stock || 0;
     const liveStock = v.liveStock || 0;
-    // Pola mencurigakan: terhubung API, stock manual TIDAK didukung kode
-    // asli, dan angkanya PERSIS SAMA dengan liveStock (indikasi dobel input).
+    // Suspicious pattern: linked to an API, the manual stock is not backed by
+    // any real codes, and the number EXACTLY MATCHES liveStock (a sign the
+    // same stock was entered twice).
     const suspicious = isApiLinked && !hasRealItems && stock > 0 && stock === liveStock;
     if (suspicious) {
       found++;
       console.log(`⚠️  ${p.name} - ${v.label}`);
-      console.log(`    stock (manual, tanpa kode asli): ${stock}`);
+      console.log(`    stock (manual, no real codes): ${stock}`);
       console.log(`    liveStock (API): ${liveStock}`);
-      console.log(`    Total ditampilkan SEKARANG: ${stock + liveStock}  ->  Seharusnya: ${liveStock}`);
+      console.log(`    Total shown RIGHT NOW: ${stock + liveStock}  ->  Should be: ${liveStock}`);
       if (apply) {
-        db.setVariantStock(p.id, v.id, liveStock); // liveStock tetap
-        // Reset field stock manual ke 0 langsung lewat require ulang db (pakai fungsi resmi kalau ada, fallback manual)
+        db.setVariantStock(p.id, v.id, liveStock); // liveStock stays as is
+        // Reset the manual stock field to 0 directly (use the official helper
+        // where one exists, fall back to editing the file by hand)
         const raw = require('fs').readFileSync('./data/db.json', 'utf-8');
         const data = JSON.parse(raw);
         const prod = data.products.find(pp => pp.id === p.id);
@@ -37,7 +41,7 @@ db.getAllProducts().forEach(p => {
           variant.stock = 0;
           require('fs').writeFileSync('./data/db.json', JSON.stringify(data, null, 2));
         }
-        console.log(`    ✅ DIPERBAIKI - stock manual direset ke 0, total sekarang: ${liveStock}`);
+        console.log(`    ✅ REPAIRED - manual stock reset to 0, total is now: ${liveStock}`);
       }
       console.log('');
     }
@@ -45,12 +49,12 @@ db.getAllProducts().forEach(p => {
 });
 
 if (found === 0) {
-  console.log('✅ Tidak ada pola dobel-hitung yang ditemukan.');
+  console.log('✅ No double-counting pattern found.');
 } else if (!apply) {
-  console.log(`\n📋 Ditemukan ${found} varian dengan pola mencurigakan (lihat di atas).`);
-  console.log('   Kalau semua ini MEMANG bug (bukan stok manual yang sengaja), jalankan:');
+  console.log(`\n📋 Found ${found} variant(s) matching the suspicious pattern (listed above).`);
+  console.log('   If these really are a bug (and not deliberate manual stock), run:');
   console.log('   node fix-double-stock.js --apply');
 } else {
-  console.log(`\n✅ Selesai. ${found} varian diperbaiki.`);
-  console.log('   Backup otomatis ada di data/db.json.bak (dari sebelum script ini jalan pertama kali).');
+  console.log(`\n✅ Done. ${found} variant(s) repaired.`);
+  console.log('   An automatic backup sits at data/db.json.bak (from before this script first ran).');
 }

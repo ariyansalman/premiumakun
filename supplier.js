@@ -1,15 +1,16 @@
 // ============================================================
-// supplier.js — Integrasi API "Supplier" (https://aiversehub.store)
+// supplier.js — "Supplier" API integration (https://aiversehub.store)
 // ============================================================
-// Dipakai untuk fitur "Supplier API": toko ini bisa menghubungkan salah
-// satu varian produk lokal ke sebuah `service_id` di Supplier. Begitu ada
-// buyer beli varian yang terhubung, bot memesan produknya SECARA OTOMATIS
-// lewat API (bukan dari stok lokal `stockItems`) dan langsung meneruskan
-// kode/link yang dibalas API itu ke buyer - mirip dropship otomatis.
+// Powers the "Supplier API" feature: this store can link one of its local
+// product variants to a `service_id` on the supplier's side. As soon as a
+// buyer purchases a linked variant, the bot places the order AUTOMATICALLY
+// through the API (instead of using local `stockItems`) and forwards the
+// code/link the API returns straight to the buyer - much like automated
+// dropshipping.
 //
-// Dokumentasi resmi: https://aiversehub.store/docs
-// Auth: header "X-API-Key: <key>" di setiap request.
-// Rate limit: 3 request/detik per API key (balasan 429 kalau kelebihan).
+// Official documentation: https://aiversehub.store/docs
+// Auth: an "X-API-Key: <key>" header on every request.
+// Rate limit: 3 requests/second per API key (429 response when exceeded).
 // ============================================================
 
 require('dotenv').config();
@@ -17,9 +18,9 @@ require('dotenv').config();
 const AIVERSEHUB_API_KEY = process.env.AIVERSEHUB_API_KEY || '';
 const AIVERSEHUB_BASE_URL = (process.env.AIVERSEHUB_BASE_URL || 'https://aiversehub.store').replace(/\/+$/, '');
 
-// Sama seperti fetchWithTimeout() di payment.js - tanpa timeout, request yang
-// hang (API supplier lambat/nge-freeze) bisa bikin proses pembelian user
-// nge-gantung tanpa batas waktu (dan tombol "Place Order" kelihatan macet).
+// Same as fetchWithTimeout() in payment.js - without a timeout, a hanging
+// request (a slow or frozen supplier API) could stall a user's purchase
+// indefinitely (and make the "Place Order" button look stuck).
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -27,7 +28,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
     return await fetch(url, { ...options, signal: controller.signal });
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error(`Request timeout setelah ${timeoutMs / 1000}s: ${url}`);
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s: ${url}`);
     }
     throw err;
   } finally {
@@ -37,14 +38,14 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
 
 function ensureConfigured() {
   if (!AIVERSEHUB_API_KEY) {
-    throw new Error('AIVERSEHUB_API_KEY belum diisi di .env');
+    throw new Error('AIVERSEHUB_API_KEY has not been set in .env');
   }
 }
 
-// Request generik ke API Supplier. `query` (object) opsional untuk GET
-// dengan query string. Melempar Error dengan pesan yang jelas untuk semua
-// kegagalan (network, timeout, HTTP non-2xx, rate limit, JSON tidak valid)
-// supaya pemanggil tinggal try/catch tanpa perlu ngecek status manual lagi.
+// Generic request to the Supplier API. `query` (an object) is optional, for
+// GET requests with a query string. Throws an Error with a clear message for
+// every kind of failure (network, timeout, non-2xx HTTP, rate limit, invalid
+// JSON) so callers can simply try/catch without checking statuses by hand.
 async function apiRequest(method, path, { query, body } = {}) {
   ensureConfigured();
   let url = `${AIVERSEHUB_BASE_URL}${path}`;
@@ -65,64 +66,65 @@ async function apiRequest(method, path, { query, body } = {}) {
   });
 
   if (res.status === 429) {
-    throw new Error('Supplier: rate limit tercapai (429 Too Many Requests), coba lagi sebentar lagi.');
+    throw new Error('Supplier: rate limit reached (429 Too Many Requests), please try again shortly.');
   }
 
   let json;
   try {
     json = await res.json();
   } catch (e) {
-    throw new Error(`Supplier: response bukan JSON (HTTP ${res.status}) di ${path}`);
+    throw new Error(`Supplier: response was not JSON (HTTP ${res.status}) at ${path}`);
   }
 
   if (!res.ok) {
     const msg = (json && (json.error || json.message)) || `HTTP ${res.status}`;
-    throw new Error(`Supplier API error di ${path}: ${msg}`);
+    throw new Error(`Supplier API error at ${path}: ${msg}`);
   }
 
   return json;
 }
 
-// GET /api/v1/me - profil & saldo wallet toko kita DI SISI Supplier
-// (bukan saldo Wallet buyer di bot ini - dua hal yang beda).
+// GET /api/v1/me - our store's profile and wallet balance ON THE SUPPLIER'S
+// SIDE (not a buyer's Wallet balance in this bot - two different things).
 async function getMe() {
   return apiRequest('GET', '/api/v1/me');
 }
 
-// GET /api/v1/products - daftar semua service/produk yang tersedia di
-// Supplier beserta harga & stok real-time mereka. Return array kosong
-// kalau field `services` tidak ada di response (jaga-jaga format berubah).
+// GET /api/v1/products - every service/product available from the supplier,
+// together with their real-time price and stock. Returns an empty array when
+// the response has no `services` field (in case the format ever changes).
 async function getProducts() {
   const json = await apiRequest('GET', '/api/v1/products');
   return Array.isArray(json.services) ? json.services : [];
 }
 
-// POST /api/v1/order - pesan otomatis. Return { order_id, total_cost,
-// new_balance, products } persis seperti struktur di docs kalau sukses -
-// melempar Error (lihat apiRequest) kalau gagal (mis. saldo Supplier kita
-// habis, atau stok remote kosong).
+// POST /api/v1/order - place an order automatically. On success it returns
+// { order_id, total_cost, new_balance, products }, exactly the structure in
+// the docs - and throws an Error (see apiRequest) on failure (for example our
+// supplier balance running out, or the remote stock being empty).
 async function placeOrder(serviceId, quantity) {
   return apiRequest('POST', '/api/v1/order', { body: { service_id: serviceId, quantity } });
 }
 
-// GET /api/v1/order/{id} - detail 1 order (dipakai untuk audit/debug manual
-// dari /admin kalau perlu re-cek status order tertentu di sisi Supplier).
+// GET /api/v1/order/{id} - details of a single order (used for manual
+// auditing/debugging from /admin when a specific order's status needs to be
+// re-checked on the supplier's side).
 async function getOrderById(orderId) {
   const json = await apiRequest('GET', `/api/v1/order/${encodeURIComponent(orderId)}`);
   return json && json.order ? json.order : null;
 }
 
-// GET /api/v1/orders - riwayat order kita di Supplier (limit maksimum
-// yang diizinkan API adalah 200 - dibatasi di sini juga supaya tidak
-// bolak-balik dapat error "limit terlalu besar" dari API).
+// GET /api/v1/orders - our order history with the supplier (the maximum limit
+// the API allows is 200 - capped here too so we do not keep getting a "limit
+// too large" error back from the API).
 async function getOrders({ page, limit } = {}) {
   const safeLimit = limit ? Math.min(Number(limit), 200) : undefined;
   return apiRequest('GET', '/api/v1/orders', { query: { page, limit: safeLimit } });
 }
 
-// GET /api/v1/stats - statistik akun kita di Supplier (total deposit,
-// total belanja, breakdown per produk). `start`/`end` opsional, format
-// persis sesuai docs: YYYY-MM-DD-HH:MM-AM/PM.
+// GET /api/v1/stats - statistics for our supplier account (total deposits,
+// total spend, per-product breakdown). `start`/`end` are optional, in exactly
+// the format from the docs: YYYY-MM-DD-HH:MM-AM/PM.
 async function getStats({ start, end } = {}) {
   return apiRequest('GET', '/api/v1/stats', { query: { start, end } });
 }

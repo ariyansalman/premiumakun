@@ -1,45 +1,45 @@
 // ============================================================
-// AUTO BACKUP — zip full source code project (kecuali node_modules, .npm,
-// dan file .zip apapun - lihat isZipFile() di bawah)
+// AUTO BACKUP — zips the project's full source code (except node_modules,
+// .npm, and any .zip file - see isZipFile() below)
 // ============================================================
-// Dipakai oleh bot.js untuk fitur "💾 Auto Backup" di /admin: bikin file
-// .zip berisi SEMUA file project (kode, config, data/db.json, dst) TANPA
-// folder node_modules & .npm, TANPA `.env` (lihat EXCLUDE_FILES - dikecualikan
-// karena berisi token bot/API key), dan TANPA file .zip lain yang
-// mungkin nyasar ke folder project — supaya ukuran file kecil (bukan MB
-// besar) dan tidak membengkak tiap kali backup jalan.
+// Used by bot.js for the "💾 Auto Backup" feature in /admin: builds a .zip
+// containing EVERY project file (code, config, data/db.json, and so on)
+// WITHOUT the node_modules and .npm folders, WITHOUT `.env` (see EXCLUDE_FILES
+// - excluded because it holds the bot token and API keys), and WITHOUT any
+// other .zip file that may have ended up in the project folder — so the file
+// stays small (not many MB) and does not balloon on every backup run.
 //
-// Pakai package "archiver" (pure JS, ringan, populer) untuk bikin zip-nya.
-// Kalau belum ke-install, jalankan: npm install
+// Uses the "archiver" package (pure JS, lightweight, widely used) to build the
+// zip. If it is not installed yet, run: npm install
 const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 
 const PROJECT_ROOT = __dirname;
-// Folder tujuan file .zip sementara sebelum dikirim ke Telegram, lalu
-// dihapus lagi lewat cleanupBackupFile() setelah terkirim.
+// Destination folder for the temporary .zip before it is sent to Telegram; it
+// is deleted again by cleanupBackupFile() once the upload finishes.
 const BACKUP_TMP_DIR = path.join(PROJECT_ROOT, 'backup_tmp');
 
-// Folder yang DIKECUALIKAN dari backup. Sengaja HANYA node_modules & .npm
-// sesuai permintaan (biar full source code + data ikut, dan restore-nya
-// tinggal `npm install` lagi). .git & backup_tmp turut di-skip supaya tidak
-// ikut ke-zip riwayat git yang besar / file zip sebelumnya yang lagi dibuat.
-// Folder yang DIKECUALIKAN dari backup. Selain nama persis di
-// EXPLICIT_EXCLUDE_DIRS di bawah, folder APAPUN yang namanya diawali
-// "backup_" JUGA di-skip otomatis - lihat isJunkBackupDir() (PATCH v7).
+// Folders EXCLUDED from the backup. Deliberately only node_modules and .npm,
+// as requested (so the full source code plus data is included and restoring is
+// just another `npm install`). .git and backup_tmp are skipped too, so the
+// large git history and the zip currently being written do not get zipped in.
+// Folders EXCLUDED from the backup. Besides the exact names in
+// EXPLICIT_EXCLUDE_DIRS below, ANY folder whose name starts with "backup_" is
+// ALSO skipped automatically - see isJunkBackupDir() (PATCH v7).
 const EXPLICIT_EXCLUDE_DIRS = new Set(['node_modules', '.npm', '.git', 'backup_tmp']);
 
-// ===== PATCH v7: exclude folder backup manual apapun namanya =====
-// Sebelumnya EXCLUDE_DIRS cuma daftar 4 nama persis di atas - folder backup
-// manual yang dibuat admin sebelum operasi berisiko (contoh:
-// "backup_manual_sebelum_hapus_stars/", isinya duplikat bot.js/db.js/dst)
-// TIDAK PERNAH ke-skip kalau ditaruh di root project - jadi folder itu ikut
-// ke-zip TERUS-MENERUS di SETIAP auto-backup berikutnya selama-lamanya
-// (bukan cuma sekali), bikin ukuran zip membengkak permanen sebesar isi
-// folder itu. Sekarang folder apapun yang namanya diawali "backup_" (selain
-// "backup_tmp" yang sudah di-exclude terpisah) otomatis ikut di-skip -
-// jadi kebiasaan bikin folder "backup_manual_..." sebelum operasi berisiko
-// aman dilakukan lagi ke depannya tanpa bikin ukuran auto-backup membengkak.
+// ===== PATCH v7: exclude manual backup folders whatever they are named =====
+// Previously EXCLUDE_DIRS was only the 4 exact names above - a manual backup
+// folder an admin created before a risky operation (for example
+// "backup_manual_before_removing_stars/", holding copies of bot.js/db.js/etc.)
+// was NEVER skipped when placed in the project root - so that folder got zipped
+// in again on EVERY subsequent auto-backup, forever (not just once), permanently
+// inflating the zip by the size of its contents. Now any folder whose name
+// starts with "backup_" (other than "backup_tmp", already excluded separately)
+// is skipped automatically - so the habit of creating a "backup_manual_..."
+// folder before a risky operation is safe again and no longer inflates the
+// auto-backup size.
 function isJunkBackupDir(name) {
   return name.toLowerCase().startsWith('backup_');
 }
@@ -48,34 +48,34 @@ function isExcludedDir(name) {
   return EXPLICIT_EXCLUDE_DIRS.has(name) || isJunkBackupDir(name);
 }
 
-// File apapun berekstensi .zip TIDAK PERNAH ikut di-backup, di folder manapun
-// dia berada. Ini penting: kalau file backup lama (hasil download ulang dari
-// group Telegram, atau backup manual) sengaja/tidak sengaja ditaruh balik ke
-// folder project, backup BERIKUTNYA bakal ikut nge-zip file zip lama itu ke
-// dalam zip baru -> ukurannya membesar terus tiap kali backup jalan (bahkan
-// bisa "zip di dalam zip di dalam zip" kalau dibiarkan lama). Skip total
-// supaya ukuran backup tetap konsisten kecil setiap saat.
+// A file with a .zip extension is NEVER included in a backup, whatever folder it
+// sits in. This matters: if an old backup file (re-downloaded from the Telegram
+// group, or a manual backup) is put back into the project folder deliberately or
+// by accident, the NEXT backup would zip that old zip into the new one -> the
+// size grows on every run (and can even become "a zip inside a zip inside a
+// zip" if left alone). Skipping them entirely keeps the backup size consistently
+// small.
 function isZipFile(name) {
   return name.toLowerCase().endsWith('.zip');
 }
 
-// ===== PATCH v6: exclude file backup/.bak dari ikut ke-zip =====
-// Sebelumnya cuma file .zip yang di-skip (lihat isZipFile() di atas).
-// Tapi file backup KODE (bot.js.bak, bot.js.bak.<timestamp> dari
-// update.sh, data/db.json.bak, data/db.json.before-fix-*) TIDAK ikut
-// ke-skip - jadi tiap kali auto-backup jalan, file2 nyampah itu ikut
-// kebawa ke dalam zip, dan ukuran backup terus MEMBESAR tiap kali admin
-// habis update.sh (nambah 1 bot.js.bak.* baru tiap kali). Sekarang
-// pattern *.bak, *.bak.*, dan *.before-fix-* di-skip juga - backup jadi
-// selalu berisi source code AKTIF saja, ukurannya konsisten.
+// ===== PATCH v6: exclude backup/.bak files from the zip =====
+// Previously only .zip files were skipped (see isZipFile() above), but CODE
+// backup files (bot.js.bak, bot.js.bak.<timestamp> from update.sh,
+// data/db.json.bak, data/db.json.before-fix-*) were NOT skipped - so on every
+// auto-backup run that clutter was carried into the zip, and the backup kept
+// GROWING each time the admin ran update.sh (one more bot.js.bak.* every time).
+// The patterns *.bak, *.bak.*, and *.before-fix-* are now skipped as well, so a
+// backup always holds only the ACTIVE source code and its size stays
+// consistent.
 //
-// ===== PATCH v7: perbaiki bug regex .bak + tambah pola .beforeupdate =====
-// Bug lama: regex `/\.bak\.\d+/` cuma nangkep pola TITIK sebelum angka
-// (mis. "bot.js.bak.123"), padahal nama file .bak yang BENERAN kepakai di
-// VPS ini pola STRIP (mis. "bot.js.bak-1788584382") - jadi lolos terus dari
-// filter dan ikut ke-zip. Sekarang regex terima titik ATAUPUN strip
-// (`[.\-]`). Ditambah juga pola ".beforeupdate" (mis.
-// "data/db.json.beforeupdate") yang belum pernah masuk daftar sebelumnya.
+// ===== PATCH v7: fix the .bak regex bug and add the .beforeupdate pattern =====
+// The old bug: the regex `/\.bak\.\d+/` only caught the DOT-before-digits form
+// ("bot.js.bak.123"), while the .bak names actually produced on this VPS use a
+// DASH ("bot.js.bak-1788584382") - so they slipped past the filter and were
+// zipped in every time. The regex now accepts a dot OR a dash (`[.\-]`). The
+// ".beforeupdate" pattern (for example "data/db.json.beforeupdate") was also
+// added, having never been on the list before.
 function isJunkBackupFile(name) {
   const n = name.toLowerCase();
   return n.endsWith('.bak')
@@ -88,17 +88,17 @@ function isSkippedFile(name) {
   return isZipFile(name) || isJunkBackupFile(name);
 }
 
-// File tertentu (nama persis, case-insensitive) yang WAJIB di-skip dari backup
-// walau bukan hasil auto-backup bot ini sendiri — misalnya file zip source code
-// full project yang sengaja ditaruh admin di folder ini buat keperluan lain,
-// tapi tidak boleh ikut kebawa ke dalam backup berikutnya. Tambahkan nama file
-// lain di sini kalau ada kasus serupa nanti.
+// Specific files (exact name, case-insensitive) that MUST be skipped from the
+// backup even though this bot's auto-backup did not create them — for example a
+// full-project source zip an admin deliberately put in this folder for some
+// other purpose, which still must not be carried into the next backup. Add more
+// file names here if a similar case comes up later.
 //
-// `.env` WAJIB dikecualikan dari auto-backup - berisi token bot, API key
-// supplier/payment, dan kredensial lain yang tidak boleh ikut terkirim ke
-// BACKUP_GROUP_ID setiap auto-backup jalan. Backup restore tetap bisa jalan
-// normal: admin isi ulang .env manual di server baru dari catatan pribadi
-// (password manager dsb), BUKAN dari file backup zip yang beredar di Telegram.
+// `.env` MUST be excluded from the auto-backup - it holds the bot token,
+// supplier/payment API keys, and other credentials that must not be shipped to
+// BACKUP_GROUP_ID every time a backup runs. Restoring still works normally: the
+// admin fills in .env by hand on the new server from their own records (a
+// password manager and so on), NOT from a backup zip floating around Telegram.
 const EXCLUDE_FILES = new Set(['premium-akun-bot-update-full.zip', '.env']);
 function isExcludedFile(name) {
   return EXCLUDE_FILES.has(name.toLowerCase());
@@ -113,8 +113,8 @@ function timestampForFilename(date) {
   );
 }
 
-// Bikin 1 file .zip berisi seluruh project (kecuali EXCLUDE_DIRS di atas).
-// Resolve dengan { zipPath, sizeBytes, fileName }.
+// Build a single .zip holding the whole project (except EXCLUDE_DIRS above).
+// Resolves with { zipPath, sizeBytes, fileName }.
 function createBackupZip() {
   return new Promise((resolve, reject) => {
     try {
@@ -127,26 +127,26 @@ function createBackupZip() {
 
       output.on('close', () => resolve({ zipPath, sizeBytes: archive.pointer(), fileName }));
       archive.on('warning', (err) => {
-        if (err.code === 'ENOENT') return; // file hilang di tengah jalan - abaikan, jangan gagalin semuanya
+        if (err.code === 'ENOENT') return; // file vanished mid-run - ignore it rather than failing everything
         reject(err);
       });
       archive.on('error', (err) => reject(err));
 
       archive.pipe(output);
 
-      // Walk manual (bukan archive.glob) supaya folder yang di-exclude tidak
-      // usah dibuka/dibaca isinya sama sekali - lebih cepat & pasti aman.
+      // A manual walk (rather than archive.glob) so excluded folders are never
+      // opened or read at all - faster and reliably safe.
       (function addDir(dirAbs, dirRel) {
         const entries = fs.readdirSync(dirAbs, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.isDirectory() && isExcludedDir(entry.name)) continue; // lihat isExcludedDir() di atas
+          if (entry.isDirectory() && isExcludedDir(entry.name)) continue; // see isExcludedDir() above
           const absPath = path.join(dirAbs, entry.name);
           const relPath = dirRel ? `${dirRel}/${entry.name}` : entry.name;
           if (entry.isDirectory()) {
             addDir(absPath, relPath);
           } else if (entry.isFile()) {
-            if (isSkippedFile(entry.name)) continue; // lihat isZipFile()/isJunkBackupFile() di atas
-            if (isExcludedFile(entry.name)) continue; // lihat komentar EXCLUDE_FILES di atas
+            if (isSkippedFile(entry.name)) continue; // see isZipFile()/isJunkBackupFile() above
+            if (isExcludedFile(entry.name)) continue; // see the EXCLUDE_FILES comment above
             archive.file(absPath, { name: relPath });
           }
         }
@@ -159,7 +159,7 @@ function createBackupZip() {
   });
 }
 
-// Hapus file .zip sementara setelah selesai dikirim (best-effort, tidak throw).
+// Delete the temporary .zip once it has been sent (best-effort, never throws).
 function cleanupBackupFile(zipPath) {
   fs.unlink(zipPath, () => {});
 }

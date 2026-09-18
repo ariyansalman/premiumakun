@@ -1,68 +1,67 @@
 // ============================================================
-// CUSTOM EMOJI ID — TEKS PESAN (bukan tombol)
+// CUSTOM EMOJI ID — MESSAGE TEXT (not buttons)
 // ============================================================
-// Isi ID-nya LANGSUNG di file ini (bukan lewat .env). Dipakai untuk
-// custom emoji "⚡" yang muncul DI DALAM teks pesan lewat tag HTML
-// <tg-emoji emoji-id="...">⚡</tg-emoji> — beda mekanisme dari emoji
-// di ikon tombol inline (lihat emoji-id-menu-inline.js).
+// Fill the IDs in DIRECTLY in this file (not through .env). Used for the "⚡"
+// custom emoji that appears INSIDE message text via the HTML tag
+// <tg-emoji emoji-id="...">⚡</tg-emoji> — a different mechanism from emoji used
+// as inline button icons (see emoji-id-menu-inline.js).
 //
-// Ada 2 titik pemakaian, boleh diisi ID yang beda:
-// - EMOJI_ID_PRODUCT_DESC -> HANYA untuk bullet legacy "{e}" di deskripsi
-//   produk & how-to-use. Emoji premium LAIN yang owner pilih langsung dari
-//   panel Telegram Premium-nya saat ngetik deskripsi/how-to-use TIDAK butuh
-//   ID ini - itu ke-capture otomatis dari pesan owner sendiri (lihat fungsi
-//   embedOwnerCustomEmoji() di bot.js). ID ini boleh dikosongkan kalau kamu
-//   tidak pakai bullet "{e}" sama sekali.
-// - EMOJI_ID_MENU_NOTIF   -> teks menu/notifikasi: welcome, order
-//   berhasil, admin panel, dll.
+// There are 2 places it is used, and they may hold different IDs:
+// - EMOJI_ID_PRODUCT_DESC -> ONLY for the legacy "{e}" bullet in product
+//   descriptions and how-to-use text. OTHER premium emoji the owner picks
+//   straight from their Telegram Premium panel while typing a description or
+//   how-to-use do NOT need this ID - those are captured automatically from the
+//   owner's own message (see embedOwnerCustomEmoji() in bot.js). This ID can be
+//   left empty if you never use the "{e}" bullet.
+// - EMOJI_ID_MENU_NOTIF   -> menu/notification text: welcome, order success,
+//   admin panel, and so on.
 //
-// ⚠️ SYARAT WAJIB (Telegram Bot API 9.4, rilis 9 Feb 2026):
-// Bot HANYA boleh pakai custom emoji di teks kalau akun PEMILIK BOT
-// (bukan bot-nya) punya langganan Telegram Premium aktif. Kalau
-// owner belum Premium / ID dikosongkan, otomatis fallback ke emoji
-// unicode biasa "⚡" - bot tetap jalan normal, TIDAK ERROR.
+// ⚠️ HARD REQUIREMENT (Telegram Bot API 9.4, released 9 Feb 2026):
+// A bot may ONLY use custom emoji in text when the BOT OWNER's account (not the
+// bot itself) has an active Telegram Premium subscription. If the owner is not
+// Premium, or the ID is left empty, it falls back automatically to the plain
+// unicode emoji "⚡" - the bot keeps working, NO ERROR.
 //
-// Cara dapat custom_emoji_id:
-// 1. Kirim custom emoji yang mau dipakai ke @userinfobot atau
-//    @RawDataBot (kirim dari akun Premium supaya custom emoji-nya
-//    beneran ke-attach sebagai entity, bukan cuma tampil sebagai
-//    teks biasa).
-// 2. Lihat field "custom_emoji_id" di entities pesan tsb.
-// 3. Tempel ID-nya (angka panjang, contoh: "5373141891321699086")
-//    ke variabel di bawah, di antara tanda kutip.
+// How to obtain a custom_emoji_id:
+// 1. Send the custom emoji you want to @userinfobot or @RawDataBot (send it
+//    from a Premium account so the custom emoji is really attached as an
+//    entity, instead of appearing as plain text).
+// 2. Look at the "custom_emoji_id" field in that message's entities.
+// 3. Paste the ID (a long number, for example "5373141891321699086") into the
+//    variable below, between the quotes.
 // ============================================================
 
-// <- Tempel custom_emoji_id di sini (contoh: '5373141891321699086')
+// <- Paste a custom_emoji_id here (for example '5373141891321699086')
 const EMOJI_ID_PRODUCT_DESC = '';
 
-// <- Tempel custom_emoji_id di sini (boleh sama/beda dari yang di atas)
+// <- Paste a custom_emoji_id here (may be the same as or different from the one above)
 const EMOJI_ID_MENU_NOTIF = '';
 
 // ============================================================
-// BACKUP — SEMUA custom emoji ID "teks:*" (per key halaman)
+// BACKUP — ALL "teks:*" custom emoji IDs (per page key)
 // ============================================================
-// Ini SALINAN BACKUP dari data/db.json.emojiIds (key "teks:xxx"), yang
-// ke-capture otomatis lewat admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di
-// Teks Pesan". Fungsi teksEmoji(key, fallback) di bot.js SAAT INI hanya
-// baca dari data/db.json langsung - object di bawah TIDAK otomatis
-// kepakai bot, jadi kalau db.json hilang/kereset, tinggal tempel ulang
-// isi object ini ke data/db.json.emojiIds (dengan prefix "teks:") untuk
-// memulihkannya, atau minta bantuan hubungkan sebagai fallback kedua
-// di bot.js seperti mekanisme EMOJI_IDS di emoji-id-menu-inline.js.
+// This is a BACKUP COPY of data/db.json.emojiIds (the "teks:xxx" keys), which
+// are captured automatically via admin "🎨 Manage Emoji ID" -> "✍️ Emoji in
+// Message Text". The teksEmoji(key, fallback) function in bot.js CURRENTLY only
+// reads from data/db.json directly - the object below is NOT used by the bot
+// automatically, so if db.json is lost or reset, just paste the contents of this
+// object back into data/db.json.emojiIds (with a "teks:" prefix) to restore
+// them, or wire it up as a second fallback in bot.js the same way EMOJI_IDS
+// works in emoji-id-menu-inline.js.
 const EMOJI_ID_TEKS_BACKUP = {
   welcome_wave: "5316544208159390529",
-  // 5 slot baru di bawah ini SENGAJA diisi dengan ID yang SUDAH ADA & sudah
-  // kepakai di halaman lain (bukan ID baru) - supaya begitu owner update
-  // kode ini, teks welcome langsung tampil dengan emoji Premium yang sama
-  // gaya/setnya dengan tombol menu utama & halaman lain, TANPA admin perlu
-  // forward ulang emoji manapun lewat "🎨 Kelola Emoji ID". Kalau nanti mau
-  // ganti ke emoji lain, tetap bisa lewat admin panel seperti biasa (hasil
-  // override dari situ selalu menang - lihat prioritas di teksEmoji()).
-  welcome_cart: "5472401690793614752",   // sama dengan tombol menu "🛒 Buy Produk" (menu:buy_produk)
-  welcome_wallet: "5267300544094948794", // sama dengan tombol menu "💳 Wallet" & teks "wallet_title"
-  welcome_bolt: "6267008582294705964",   // sama dengan ikon "✅ Otomatis" di usdt_auto/ton_auto
-  welcome_gift: "5449800250032143374",   // sama dengan tombol menu "🎁 Refer & Earn" & teks referral_title
-  welcome_arrow: "5440841102871517055",  // sama dengan tombol "Beli Sekarang" (menu:buy_now)
+  // The 5 new slots below are DELIBERATELY filled with IDs that ALREADY EXIST
+  // and are already used on other pages (not new IDs) - so that as soon as the
+  // owner updates this code, the welcome text renders with the same Premium
+  // emoji style/set as the main menu buttons and other pages, WITHOUT the admin
+  // having to forward any emoji again via "🎨 Manage Emoji ID". To switch to a
+  // different emoji later, the admin panel still works as usual (an override set
+  // there always wins - see the priority order in teksEmoji()).
+  welcome_cart: "5472401690793614752",   // same as the "🛒 Buy Product" menu button (menu:buy_produk)
+  welcome_wallet: "5267300544094948794", // same as the "💳 Wallet" menu button and the "wallet_title" text
+  welcome_bolt: "6267008582294705964",   // same as the "✅ Automatic" icon in usdt_auto/ton_auto
+  welcome_gift: "5449800250032143374",   // same as the "🎁 Refer & Earn" menu button and the referral_title text
+  welcome_arrow: "5440841102871517055",  // same as the "Buy Now" button (menu:buy_now)
   profile_title: "5249053508681883137",
   profile_nama: "5305729205630155413",
   profile_username: "5222444124698853913",
@@ -77,7 +76,7 @@ const EMOJI_ID_TEKS_BACKUP = {
   referral_howitworks: "5361924463241739687",
   referral_total: "5944970130554359187",
   referral_earnings: "5188605164000395914",
-  success_border: "5422439311196834318", // sama dengan channelnotif_border/qris_tip/forcejoin_sparkle (nuansa ✨ dekorasi/pembuka) - lihat catatan di buildSuccessText() (bot.js)
+  success_border: "5422439311196834318", // same as channelnotif_border/qris_tip/forcejoin_sparkle (a ✨ decorative/opening feel) - see the note in buildSuccessText() (bot.js)
   success_title: "5461151367559141950",
   success_delivered: "4951848493422478932",
   success_link: "4916086774649848789",
@@ -121,121 +120,121 @@ const EMOJI_ID_TEKS_BACKUP = {
   insufficient_balance_warn: "5285139029333919650",
   insufficient_balance_shortfall: "5463219974132746636",
 
-  // --- Blok "Diskon Grosir/Bulk Discount" (BARU) ---
-  // Sebelumnya 🎉 & ✅ di sini HARDCODE unicode biasa langsung di lang.js
-  // (bulk_discount_title/bulk_discount_line) - jadi TIDAK PERNAH bisa tampil
-  // premium walau ikon lain di halaman "Enter Quantity" yang sama (⚠️/📦)
-  // sudah premium. Sekarang lewat teksEmoji() juga (lihat tiersText() di
-  // bot.js) - sengaja PINJAM ID yang SUDAH ADA & sudah kepakai di tempat lain
-  // (bukan ID baru) supaya begitu owner update kode ini, langsung tampil
-  // premium tanpa perlu forward ulang emoji manapun: bulk_title pinjam dari
-  // success_title (🎉 judul "ORDER BERHASIL"), bulk_check pinjam dari
-  // forcejoin_check (✅ ikon centang wajib-join). Tetap bisa diganti terpisah
-  // kapan saja lewat admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan"
-  // (hasil override dari situ selalu menang - lihat prioritas di teksEmoji()).
-  bulk_title: "5461151367559141950", // sama dengan success_title (🎉)
-  bulk_check: "6267008582294705964", // sama dengan forcejoin_check/welcome_bolt (✅)
+  // --- "Bulk Discount" block (NEW) ---
+  // Previously the 🎉 and ✅ here were plain unicode HARDCODED straight into
+  // lang.js (bulk_discount_title/bulk_discount_line) - so they could NEVER render
+  // as premium even though the other icons on the same "Enter Quantity" page
+  // (⚠️/📦) already did. They now go through teksEmoji() as well (see tiersText()
+  // in bot.js) - deliberately BORROWING IDs that ALREADY EXIST and are already
+  // used elsewhere (not new IDs) so that as soon as the owner updates this code
+  // they render as premium without forwarding any emoji again: bulk_title borrows
+  // from success_title (the 🎉 in the "ORDER SUCCESSFUL" heading), bulk_check
+  // borrows from forcejoin_check (the ✅ force-join tick). Either can still be
+  // changed separately at any time via admin "🎨 Manage Emoji ID" -> "✍️ Emoji in
+  // Message Text" (an override set there always wins - see teksEmoji()).
+  bulk_title: "5461151367559141950", // same as success_title (🎉)
+  bulk_check: "6267008582294705964", // same as forcejoin_check/welcome_bolt (✅)
 
-  // --- Layar Wajib Join Channel ---
-  // Sama seperti slot welcome_* di atas: sengaja diisi ID yang SUDAH ADA &
-  // sudah kepakai di teks/halaman lain (bukan ID baru), dicocokkan
-  // berdasarkan NUANSA/fungsinya - supaya begitu owner update kode ini,
-  // layar wajib-join langsung tampil dengan gaya emoji Premium yang sama
-  // dengan halaman lain, TANPA admin perlu forward ulang emoji manapun.
-  forcejoin_lock: "5285139029333919650",     // sama dengan qty_warning/insufficient_balance_warn (nuansa "wajib diperhatikan dulu")
-  forcejoin_sparkle: "5422439311196834318",  // sama dengan qris_tip (nuansa kalimat pembuka/tip)
-  forcejoin_bolt: "6267008582294705964",     // sama dengan welcome_bolt/usdt_auto/ton_auto (nuansa "cepat/otomatis")
-  forcejoin_arrow: "5440841102871517055",    // sama dengan welcome_arrow/buy_now (nuansa "arahan aksi berikutnya")
-  forcejoin_check: "6267008582294705964",    // sama dengan welcome_bolt (ikon centang "✅ Otomatis")
-  forcejoin_status_joined: "6267008582294705964",  // ✅ sama dengan checkmark di atas
-  forcejoin_status_pending: "5285139029333919650", // sama dengan ikon peringatan qty_warning (belum selesai)
+  // --- Force Join Channel screen ---
+  // Same as the welcome_* slots above: deliberately filled with IDs that ALREADY
+  // EXIST and are already used in other text/pages (not new IDs), matched by
+  // their FEEL/purpose - so that as soon as the owner updates this code, the
+  // force-join screen renders in the same Premium emoji style as every other
+  // page, WITHOUT the admin having to forward any emoji again.
+  forcejoin_lock: "5285139029333919650",     // same as qty_warning/insufficient_balance_warn (a "needs attention first" feel)
+  forcejoin_sparkle: "5422439311196834318",  // same as qris_tip (an opening-line/tip feel)
+  forcejoin_bolt: "6267008582294705964",     // same as welcome_bolt/usdt_auto/ton_auto (a "fast/automatic" feel)
+  forcejoin_arrow: "5440841102871517055",    // same as welcome_arrow/buy_now (a "here is the next action" feel)
+  forcejoin_check: "6267008582294705964",    // same as welcome_bolt (the "✅ Automatic" tick icon)
+  forcejoin_status_joined: "6267008582294705964",  // ✅ same as the checkmark above
+  forcejoin_status_pending: "5285139029333919650", // same as the qty_warning warning icon (not finished yet)
 
-  // --- Notifikasi Channel Otomatis (New Purchase / New Wallet Top-Up) ---
-  // Sama seperti grup slot lain di atas: sengaja diisi ID yang SUDAH ADA &
-  // sudah kepakai di teks/tombol lain (bukan ID baru), dicocokkan berdasarkan
-  // NUANSA/fungsinya - supaya begitu owner update kode ini, notifikasi
-  // channel langsung tampil pakai emoji Premium yang sama gaya/setnya dengan
-  // halaman lain, TANPA admin perlu forward ulang emoji manapun. Tetap bisa
-  // diganti kapan saja lewat admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks
-  // Pesan" -> "📢 Notifikasi Channel" (hasil override dari situ selalu menang).
-  channelnotif_purchase_title: "5461151367559141950", // sama dengan success_title (🎉 New Purchase!)
-  channelnotif_id: "5444856076954520455",             // sama dengan qris_orderid (nuansa "ID/nomor referensi")
-  channelnotif_product: "5472401690793614752",        // sama dengan welcome_cart (🛒 Product)
-  channelnotif_qty: "5780714685481357611",            // sama dengan qty_stock (nuansa jumlah/kuantitas)
-  channelnotif_total: "5278467510604160626",          // sama dengan qris_total (💰 Total)
-  channelnotif_time: "6084396322444544568",           // sama dengan qris_expire (nuansa waktu/durasi)
-  channelnotif_topup_title: "5267300544094948794",    // sama dengan welcome_wallet (💳 New Wallet Top-Up!)
-  channelnotif_network: "6267008582294705964",        // sama dengan welcome_bolt/usdt_auto (✅ status otomatis/terverifikasi)
-  channelnotif_amount: "5188605164000395914",         // sama dengan qris_saldo (💵 nominal yang masuk)
-  channelnotif_referral_title: "5461151367559141950",    // sama dengan success_title/channelnotif_purchase_title (🎉 New Referral Success!)
-  channelnotif_referral_user: "5249053508681883137",     // sama dengan profile_title (👤 baris User)
-  channelnotif_referral_referredby: "5449800250032143374", // sama dengan referral_title/welcome_gift (🎁 baris Referred By)
-  channelnotif_referral_reward: "5188605164000395914",   // sama dengan channelnotif_amount/qris_saldo (💵 baris Reward)
+  // --- Automatic channel notifications (New Purchase / New Wallet Top-Up) ---
+  // Same as the other slot groups above: deliberately filled with IDs that
+  // ALREADY EXIST and are already used in other text/buttons (not new IDs),
+  // matched by their FEEL/purpose - so that as soon as the owner updates this
+  // code, channel notifications render in the same Premium emoji style/set as
+  // every other page, WITHOUT the admin having to forward any emoji again. They
+  // can still be changed at any time via admin "🎨 Manage Emoji ID" -> "✍️ Emoji
+  // in Message Text" -> "📢 Channel Notifications" (an override there always wins).
+  channelnotif_purchase_title: "5461151367559141950", // same as success_title (🎉 New Purchase!)
+  channelnotif_id: "5444856076954520455",             // same as qris_orderid (an "ID/reference number" feel)
+  channelnotif_product: "5472401690793614752",        // same as welcome_cart (🛒 Product)
+  channelnotif_qty: "5780714685481357611",            // same as qty_stock (a count/quantity feel)
+  channelnotif_total: "5278467510604160626",          // same as qris_total (💰 Total)
+  channelnotif_time: "6084396322444544568",           // same as qris_expire (a time/duration feel)
+  channelnotif_topup_title: "5267300544094948794",    // same as welcome_wallet (💳 New Wallet Top-Up!)
+  channelnotif_network: "6267008582294705964",        // same as welcome_bolt/usdt_auto (✅ automatic/verified status)
+  channelnotif_amount: "5188605164000395914",         // same as qris_saldo (💵 the amount credited)
+  channelnotif_referral_title: "5461151367559141950",    // same as success_title/channelnotif_purchase_title (🎉 New Referral Success!)
+  channelnotif_referral_user: "5249053508681883137",     // same as profile_title (👤 the User line)
+  channelnotif_referral_referredby: "5449800250032143374", // same as referral_title/welcome_gift (🎁 the Referred By line)
+  channelnotif_referral_reward: "5188605164000395914",   // same as channelnotif_amount/qris_saldo (💵 the Reward line)
 
-  // --- Border & footer notifikasi channel (BARU) ---
-  // Sebelumnya karakter "✨" di garis pembatas atas/bawah judul, dan "🔥" di
-  // baris footer "Fast & Trusted!", HARDCODE langsung di teks (bukan lewat
-  // teksEmoji()) - jadi TIDAK PERNAH bisa tampil premium walau ID lain di
-  // notifikasi channel ini sudah premium semua. Sekarang keduanya sudah lewat
-  // teksEmoji() juga (lihat buildChannelPurchaseText/TopupText/ReferralText
-  // di bot.js), supaya SELURUH ikon di notifikasi channel konsisten premium.
-  channelnotif_border: "5422439311196834318", // sama dengan qris_tip/forcejoin_sparkle (nuansa ✨ dekorasi/pembuka)
-  // FIX BUG: sebelumnya dikosongkan ("") -> footer 🔥 SELALU tampil unicode
-  // biasa walau ikon lain di notif channel sudah premium, karena teksEmoji()
-  // cuma treat string kosong sebagai "tidak ada ID" (lihat `id ? ... : fallback`
-  // di teksEmoji()). Sekarang dipinjamkan ID yang sama dengan welcome_bolt/
-  // usdt_auto/ton_auto/forcejoin_bolt (nuansa "cepat/otomatis" - cocok untuk
-  // tagline "Fast & Trusted!"/"Instant & Automatic!"), sama seperti pola
-  // pinjam-ID di slot lain pada object ini. Tetap bisa diganti kapan saja
-  // lewat admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "📢
-  // Notifikasi Channel" -> "Ikon Footer 🔥" (hasil override dari situ selalu menang).
+  // --- Channel notification border & footer (NEW) ---
+  // Previously the "✨" characters in the divider lines above/below the heading,
+  // and the "🔥" in the "Fast & Trusted!" footer line, were HARDCODED straight
+  // into the text (not via teksEmoji()) - so they could NEVER render as premium
+  // even though every other ID in these channel notifications already did. Both
+  // now go through teksEmoji() as well (see buildChannelPurchaseText/TopupText/
+  // ReferralText in bot.js), so EVERY icon in a channel notification is premium.
+  channelnotif_border: "5422439311196834318", // same as qris_tip/forcejoin_sparkle (a ✨ decorative/opening feel)
+  // BUG FIX: previously left empty ("") -> the 🔥 footer ALWAYS rendered as plain
+  // unicode even though every other icon in the channel notification was already
+  // premium, because teksEmoji() treats an empty string as "no ID" (see
+  // `id ? ... : fallback` in teksEmoji()). It now borrows the same ID as
+  // welcome_bolt/usdt_auto/ton_auto/forcejoin_bolt (a "fast/automatic" feel -
+  // fitting for the "Fast & Trusted!"/"Instant & Automatic!" tagline), following
+  // the same ID-borrowing pattern as the other slots in this object. It can still
+  // be changed at any time via admin "🎨 Manage Emoji ID" -> "✍️ Emoji in Message
+  // Text" -> "📢 Channel Notifications" -> "Footer Icon 🔥" (an override there always wins).
   channelnotif_footer: "6267008582294705964",
 
-  // --- Notifikasi Channel: Maintenance Dimulai/Selesai (BARU) ---
-  // Sama pola dengan slot channelnotif_* lain di atas: sengaja pinjam ID
-  // yang SUDAH ADA & sudah kepakai di tempat lain (bukan ID baru),
-  // dicocokkan berdasarkan NUANSA - supaya begitu owner update kode ini,
-  // notifikasi maintenance ke channel langsung tampil pakai emoji Premium
-  // yang sama gaya/setnya. Dipakai oleh buildChannelMaintenanceText() &
-  // handler 'maintenance_toggle' di bot.js. Tetap bisa diganti kapan saja
-  // lewat admin "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "📢
-  // Notifikasi Channel" (hasil override selalu menang).
-  channelnotif_maintenance_start_title: "5285139029333919650",  // sama dengan maintenance_wrench/qty_warning (nuansa "perlu perhatian")
-  channelnotif_maintenance_start_status: "6084396322444544568", // sama dengan maintenance_clock/qris_expire (nuansa waktu/durasi/sementara)
-  channelnotif_maintenance_finish_title: "5188481279963715781", // sama dengan maintenance_finished_rocket/qris_rocket (nuansa "meluncur/comeback")
-  channelnotif_maintenance_finish_status: "6267008582294705964", // sama dengan welcome_bolt/forcejoin_check (✅ status "selesai/otomatis")
+  // --- Channel notifications: Maintenance Started/Finished (NEW) ---
+  // The same pattern as the other channelnotif_* slots above: deliberately
+  // borrowing IDs that ALREADY EXIST and are already used elsewhere (not new
+  // IDs), matched by FEEL - so that as soon as the owner updates this code,
+  // maintenance notifications to the channel render in the same Premium emoji
+  // style/set. Used by buildChannelMaintenanceText() and the 'maintenance_toggle'
+  // handler in bot.js. They can still be changed at any time via admin "🎨 Manage
+  // Emoji ID" -> "✍️ Emoji in Message Text" -> "📢 Channel Notifications" (an
+  // override there always wins).
+  channelnotif_maintenance_start_title: "5285139029333919650",  // same as maintenance_wrench/qty_warning (a "needs attention" feel)
+  channelnotif_maintenance_start_status: "6084396322444544568", // same as maintenance_clock/qris_expire (a time/duration/temporary feel)
+  channelnotif_maintenance_finish_title: "5188481279963715781", // same as maintenance_finished_rocket/qris_rocket (a "launch/comeback" feel)
+  channelnotif_maintenance_finish_status: "6267008582294705964", // same as welcome_bolt/forcejoin_check (✅ a "done/automatic" status)
 
-  // --- Mode Maintenance Bot (BARU) ---
-  // Sama seperti grup slot lain di atas: sengaja dipinjamkan ID yang SUDAH
-  // ADA & sudah kepakai di teks/halaman lain (bukan ID baru), dicocokkan
-  // berdasarkan NUANSA/fungsinya - supaya begitu owner aktifkan "🛠️
-  // Maintenance Bot" dari admin panel, pesannya langsung tampil pakai emoji
-  // Premium yang sama gaya/setnya dengan halaman lain, TANPA admin perlu
-  // forward ulang emoji manapun. Tetap bisa diganti kapan saja lewat admin
-  // "🎨 Kelola Emoji ID" -> "✍️ Emoji di Teks Pesan" -> "🛠️ Mode Maintenance"
-  // (hasil override dari situ selalu menang - lihat prioritas di teksEmoji()).
-  maintenance_wrench: "5285139029333919650",  // sama dengan qty_warning/forcejoin_lock (nuansa "perlu perhatian")
-  maintenance_sparkle: "5422439311196834318", // sama dengan qris_tip/forcejoin_sparkle/success_border (nuansa ✨ dekorasi/pembuka)
-  maintenance_bolt: "6267008582294705964",    // sama dengan welcome_bolt/usdt_auto (nuansa "cepat/otomatis")
-  maintenance_clock: "6084396322444544568",   // sama dengan qris_expire (nuansa waktu/durasi)
-  maintenance_heart: "5197317659779159705",   // sama dengan success_thanks (nuansa ucapan/apresiasi)
+  // --- Bot Maintenance Mode (NEW) ---
+  // Same as the other slot groups above: deliberately borrowing IDs that ALREADY
+  // EXIST and are already used in other text/pages (not new IDs), matched by
+  // their FEEL/purpose - so that as soon as the owner enables "🛠️ Bot
+  // Maintenance" from the admin panel, the message renders in the same Premium
+  // emoji style/set as every other page, WITHOUT the admin having to forward any
+  // emoji again. It can still be changed at any time via admin "🎨 Manage Emoji
+  // ID" -> "✍️ Emoji in Message Text" -> "🛠️ Maintenance Mode"
+  // (an override there always wins - see the priority order in teksEmoji()).
+  maintenance_wrench: "5285139029333919650",  // same as qty_warning/forcejoin_lock (a "needs attention" feel)
+  maintenance_sparkle: "5422439311196834318", // same as qris_tip/forcejoin_sparkle/success_border (a ✨ decorative/opening feel)
+  maintenance_bolt: "6267008582294705964",    // same as welcome_bolt/usdt_auto (a "fast/automatic" feel)
+  maintenance_clock: "6084396322444544568",   // same as qris_expire (a time/duration feel)
+  maintenance_heart: "5197317659779159705",   // same as success_thanks (a thanks/appreciation feel)
 
-  // --- Mode Maintenance SELESAI (BARU) --- dipakai saat admin nonaktifkan
-  // Maintenance dari "🔴 Nonaktifkan", broadcast otomatis ke SEMUA user
-  // (lihat buildMaintenanceFinishedText() & handler 'maintenance_toggle' di
-  // bot.js). Sama seperti grup lain: sengaja pinjam ID yang SUDAH ADA &
-  // sudah kepakai di tempat lain (bukan ID baru), dicocokkan berdasarkan
-  // NUANSA "comeback/selesai/perayaan" - supaya begitu owner update kode
-  // ini, broadcast langsung tampil pakai emoji Premium yang sama gaya/setnya
-  // dengan halaman lain, TANPA admin perlu forward ulang emoji manapun.
-  // Tetap bisa diganti kapan saja lewat admin "🎨 Kelola Emoji ID" -> "✍️
-  // Emoji di Teks Pesan" -> "🛠️ Mode Maintenance" (hasil override selalu menang).
-  maintenance_finished_rocket: "5188481279963715781", // sama dengan qris_rocket (nuansa "meluncur/comeback")
-  maintenance_finished_sparkle: "5422439311196834318", // sama dengan maintenance_sparkle/qris_tip (nuansa ✨ dekorasi/pembuka)
-  maintenance_finished_check: "6267008582294705964",   // sama dengan welcome_bolt/forcejoin_check (✅ status "selesai/otomatis")
-  maintenance_finished_bolt: "6267008582294705964",    // sama dengan welcome_bolt/usdt_auto (nuansa "cepat/otomatis")
-  maintenance_finished_gift: "5449800250032143374",    // sama dengan welcome_gift/referral_title (🎁 nuansa "bisa dipakai lagi/reward")
-  maintenance_finished_heart: "5197317659779159705",   // sama dengan maintenance_heart/success_thanks (nuansa ucapan/apresiasi)
+  // --- Maintenance Mode FINISHED (NEW) --- used when the admin turns
+  // Maintenance off via "🔴 Disable", broadcast automatically to ALL users
+  // (see buildMaintenanceFinishedText() and the 'maintenance_toggle' handler in
+  // bot.js). Same as the other groups: deliberately borrowing IDs that ALREADY
+  // EXIST and are already used elsewhere (not new IDs), matched by a
+  // "comeback/finished/celebration" FEEL - so that as soon as the owner updates
+  // this code, the broadcast renders in the same Premium emoji style/set as every
+  // other page, WITHOUT the admin having to forward any emoji again.
+  // They can still be changed at any time via admin "🎨 Manage Emoji ID" -> "✍️
+  // Emoji in Message Text" -> "🛠️ Maintenance Mode" (an override always wins).
+  maintenance_finished_rocket: "5188481279963715781", // same as qris_rocket (a "launch/comeback" feel)
+  maintenance_finished_sparkle: "5422439311196834318", // same as maintenance_sparkle/qris_tip (a ✨ decorative/opening feel)
+  maintenance_finished_check: "6267008582294705964",   // same as welcome_bolt/forcejoin_check (✅ a "done/automatic" status)
+  maintenance_finished_bolt: "6267008582294705964",    // same as welcome_bolt/usdt_auto (a "fast/automatic" feel)
+  maintenance_finished_gift: "5449800250032143374",    // same as welcome_gift/referral_title (🎁 a "usable again/reward" feel)
+  maintenance_finished_heart: "5197317659779159705",   // same as maintenance_heart/success_thanks (a thanks/appreciation feel)
 };
 
 module.exports = {

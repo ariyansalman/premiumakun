@@ -1,23 +1,24 @@
 // ===== userbot-login.js =====
-// Jalankan SEKALI SAJA secara manual (bukan lewat bot.js) untuk login akun
-// Telegram yang mau dipakai sebagai userbot pengirim gift:
+// Run this ONCE manually (not through bot.js) to log in the Telegram
+// account you want to use as the gift-sending userbot:
 //
 //   node userbot-login.js
 //
-// Akan diminta: nomor HP, kode OTP dari Telegram, dan password 2FA (kalau
-// akun itu punya). Di akhir, script mencetak SESSION_STRING - copy nilai itu
-// ke .env sebagai USERBOT_SESSION. Setelah tersimpan, userbot.js otomatis
-// pakai session ini setiap kali bot jalan, TANPA perlu login ulang.
+// You will be asked for: phone number, the OTP code from Telegram, and the
+// 2FA password (if the account has one). At the end the script prints a
+// SESSION_STRING - copy that value into .env as USERBOT_SESSION. Once it is
+// saved, userbot.js uses this session every time the bot starts, with no
+// need to log in again.
 //
-// Dapatkan USERBOT_API_ID & USERBOT_API_HASH dari https://my.telegram.org
-// -> API Development Tools -> buat aplikasi baru (nama bebas).
+// Get USERBOT_API_ID and USERBOT_API_HASH from https://my.telegram.org
+// -> API Development Tools -> create a new application (any name works).
 //
-// ⚠️ Sebaiknya PAKAI AKUN TELEGRAM TERPISAH (bukan akun pribadi utama kamu)
-// khusus untuk userbot ini, supaya kalau kena limit/flag dari Telegram
-// karena aktivitas otomatis, tidak mengganggu akun pribadimu.
+// ⚠️ Prefer a SEPARATE TELEGRAM ACCOUNT (not your main personal account)
+// for this userbot, so that if Telegram rate-limits or flags it for
+// automated activity, your personal account is unaffected.
 
 require('dotenv').config();
-const input = require('input'); // sudah ikut ter-install sebagai dependency 'telegram'
+const input = require('input'); // already installed as a dependency of 'telegram'
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
@@ -26,22 +27,22 @@ const API_HASH = process.env.USERBOT_API_HASH || '';
 
 (async () => {
   if (!API_ID || !API_HASH) {
-    console.error('❌ Isi dulu USERBOT_API_ID dan USERBOT_API_HASH di .env (dari https://my.telegram.org).');
+    console.error('❌ Set USERBOT_API_ID and USERBOT_API_HASH in .env first (from https://my.telegram.org).');
     process.exit(1);
   }
 
-  console.log('🔐 Login userbot GramJS...\n');
+  console.log('🔐 Logging in the GramJS userbot...\n');
   const client = new TelegramClient(new StringSession(''), API_ID, API_HASH, { connectionRetries: 5 });
 
   await client.start({
-    phoneNumber: async () => await input.text('Nomor HP (format +62...): '),
-    password: async () => await input.text('Password 2FA (kosongkan kalau tidak ada, Enter): '),
-    phoneCode: async () => await input.text('Kode OTP dari Telegram: '),
+    phoneNumber: async () => await input.text('Phone number (international format, e.g. +1...): '),
+    password: async () => await input.text('2FA password (leave empty if none, then press Enter): '),
+    phoneCode: async () => await input.text('OTP code from Telegram: '),
     onError: (err) => console.error(err)
   });
 
-  console.log('\n✅ Login berhasil!\n');
-  console.log('Tempel baris berikut ke file .env kamu:\n');
+  console.log('\n✅ Login successful!\n');
+  console.log('Paste the following line into your .env file:\n');
   console.log(`USERBOT_SESSION=${client.session.save()}\n`);
 
   await client.disconnect();
