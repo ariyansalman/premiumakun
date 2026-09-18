@@ -808,7 +808,6 @@ function setVariantStock(productId, variantId, stock) {
 // DELIBERATELY consistent with how variant.stock has always been used; just avoid
 // mixing the two approaches on the same variant if you do not want the number
 // overwritten.
-//
 function addManualStock(productId, variantId, qty) {
   const db = readDb();
   const product = db.products.find(p => p.id === productId);
