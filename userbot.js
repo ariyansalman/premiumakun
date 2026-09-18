@@ -1,24 +1,24 @@
 // ===== userbot.js =====
-// Userbot GramJS (MTProto, login pakai akun Telegram PRIBADI - bukan bot) -
-// dipakai KHUSUS untuk fitur "🎁 Buy Gift" & "💌 Confess Gift" di bot.js,
-// supaya bisa kirim Telegram Star Gift ke user MANAPUN (termasuk yang belum
-// pernah /start bot ini), karena Bot API resmi (sendGift) mensyaratkan bot
-// punya saldo Stars sendiri dan attribusi pengirim tetap "dari bot" - kalau
-// mau kirim dari akun yang terlihat seperti akun pribadi biasa, itu HANYA
-// bisa lewat MTProto (akun user asli), bukan Bot API.
+// GramJS userbot (MTProto, logged in with a PERSONAL Telegram account - not a
+// bot) - used SPECIFICALLY for the "🎁 Buy Gift" and "💌 Confess Gift" features
+// in bot.js, so gifts can be sent to ANY user (including people who have never
+// pressed /start on this bot). The official Bot API (sendGift) requires the bot
+// to hold its own Stars balance and always attributes the sender as "from the
+// bot" - sending from something that looks like an ordinary personal account is
+// ONLY possible over MTProto (a real user account), not the Bot API.
 //
-// ⚠️ CATATAN PENTING (wajib dibaca sebelum dipakai produksi):
-// 1. Akun yang dipakai login di sini akan melakukan aksi OTOMATIS (kirim
-//    gift+pesan) berulang kali. Telegram menerapkan FloodWait di level
-//    server untuk aksi beruntun ke banyak peer berbeda dalam waktu singkat -
-//    ini TIDAK BISA dihilangkan dari kode manapun, cuma bisa di-retry pelan.
-// 2. Simpan SESSION_STRING hasil login (lihat userbot-login.js) sebagai
-//    rahasia setara password akun itu sendiri - siapapun yang pegang string
-//    itu bisa login penuh sebagai akun tsb tanpa perlu OTP lagi.
-// 3. Field-field RPC di bawah (GetStarGifts / GetPaymentForm / SendStarsForm
-//    / InputInvoiceStarGift) mengikuti skema resmi core.telegram.org per
-//    layer 196+. Kalau versi GramJS yang ke-install beda skema (nama field
-//    berubah), lihat komentar "SESUAIKAN DI SINI" di masing-masing fungsi.
+// ⚠️ IMPORTANT NOTES (read before using this in production):
+// 1. The account logged in here performs AUTOMATED actions (sending gifts and
+//    messages) repeatedly. Telegram applies FloodWait at the server level for
+//    rapid consecutive actions against many different peers - this CANNOT be
+//    coded around, only retried slowly.
+// 2. Treat the SESSION_STRING produced at login (see userbot-login.js) as a
+//    secret equivalent to the account password itself - anyone holding that
+//    string can log in fully as that account without needing an OTP.
+// 3. The RPC fields below (GetStarGifts / GetPaymentForm / SendStarsForm /
+//    InputInvoiceStarGift) follow the official core.telegram.org schema as of
+//    layer 196+. If the installed GramJS version uses a different schema (field
+//    names changed), see the "ADJUST HERE" comments in each function.
 
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
@@ -30,23 +30,23 @@ const SESSION_STRING = process.env.USERBOT_SESSION || '';
 let client = null;
 let connecting = null;
 
-// Cache katalog gift (starGift[]) supaya tidak query ulang tiap kali menu
-// dibuka - di-refresh tiap GIFT_CATALOG_TTL_MS.
+// Cache the gift catalogue (starGift[]) so the menu does not re-query on every
+// open - refreshed every GIFT_CATALOG_TTL_MS.
 let giftCatalogCache = null;
 let giftCatalogCachedAt = 0;
-const GIFT_CATALOG_TTL_MS = 5 * 60 * 1000; // 5 menit
+const GIFT_CATALOG_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function isConfigured() {
   return !!(API_ID && API_HASH && SESSION_STRING);
 }
 
-// Pastikan client GramJS sudah connect - dipanggil otomatis di setiap fungsi
-// publik di bawah, jadi pemanggil (bot.js) tidak perlu urus koneksi manual.
+// Make sure the GramJS client is connected - called automatically by every
+// public function below, so the caller (bot.js) never handles connections itself.
 async function ensureConnected() {
   if (!isConfigured()) {
     throw new Error(
-      'Userbot belum dikonfigurasi. Isi USERBOT_API_ID, USERBOT_API_HASH, ' +
-      'USERBOT_SESSION di .env (lihat userbot-login.js untuk cara dapat session).'
+      'The userbot has not been configured. Set USERBOT_API_ID, USERBOT_API_HASH, ' +
+      'and USERBOT_SESSION in .env (see userbot-login.js for how to get a session).'
     );
   }
   if (client && client.connected) return client;
@@ -58,7 +58,7 @@ async function ensureConnected() {
     });
     await c.connect();
     const me = await c.getMe();
-    console.log(`✅ Userbot GramJS connected sebagai @${me.username || me.id}`);
+    console.log(`✅ GramJS userbot connected as @${me.username || me.id}`);
     client = c;
     return c;
   })();
@@ -70,25 +70,24 @@ async function ensureConnected() {
   }
 }
 
-// Ambil daftar gift Telegram Stars resmi yang bisa dikirim (id, harga stars,
-// batas per-user kalau limited, dll). Dipakai buat render menu inline "🎁
-// Buy Gift" - setiap item disimpan dengan emoji + custom_emoji_id (kalau
-// gift itu punya sticker premium) supaya bot.js bisa render pakai
-// <tg-emoji emoji-id="..."> sama seperti produk biasa (lihat
-// productEmojiHtml() di bot.js).
-// Sticker gift dari Telegram (g.sticker) adalah object Document biasa - TIDAK
-// ada field "customEmojiId" langsung di situ (itu bug versi lama, makanya
-// emojiId selalu null & semua tombol gift jatuh ke 1 ikon fallback yang sama,
-// gak peduli gift-nya beda-beda -> makanya ikon tombol "tidak sesuai" sama
-// gift aslinya). ID custom emoji yang VALID untuk dipakai di field
-// icon_custom_emoji_id itu SAMA DENGAN id dokumennya sendiri (g.sticker.id),
-// TAPI cuma valid dipakai sebagai custom emoji kalau dokumen itu memang
-// terdaftar sebagai custom emoji (attribute DocumentAttributeCustomEmoji ada
-// di g.sticker.attributes). Kalau sticker gift itu cuma sticker biasa (tanpa
-// attribute itu - ini yang paling sering terjadi untuk gift unik/limited),
-// balikin null supaya pemanggilnya fallback dengan aman (lihat giftIconId()
-// di bot.js, yang juga kasih admin opsi override ID manual per-gift lewat
-// "🎁 Kelola Emoji Gift").
+// Fetch the list of official Telegram Stars gifts that can be sent (id, price in
+// stars, per-user limit when limited, and so on). Used to render the inline "🎁
+// Buy Gift" menu - each item is stored with an emoji plus custom_emoji_id (when
+// that gift has a premium sticker) so bot.js can render it with
+// <tg-emoji emoji-id="..."> just like a normal product (see productEmojiHtml()
+// in bot.js).
+// A Telegram gift sticker (g.sticker) is an ordinary Document object - there is
+// NO "customEmojiId" field on it directly (that was an old-version bug, which is
+// why emojiId was always null and every gift button fell back to the same single
+// icon regardless of which gift it was -> hence button icons that "did not match"
+// the actual gift). The custom emoji ID that is VALID for the
+// icon_custom_emoji_id field is THE SAME AS the document's own id (g.sticker.id),
+// BUT it is only valid as a custom emoji when that document is actually
+// registered as one (the DocumentAttributeCustomEmoji attribute is present in
+// g.sticker.attributes). When the gift sticker is just an ordinary sticker
+// (without that attribute - the most common case for unique/limited gifts),
+// return null so the caller falls back safely (see giftIconId() in bot.js, which
+// also lets the admin override the ID per gift via "🎁 Manage Gift Emoji").
 function giftStickerEmojiId(sticker) {
   if (!sticker || !sticker.id || !Array.isArray(sticker.attributes)) return null;
   const isCustomEmoji = sticker.attributes.some(a => a.className === 'DocumentAttributeCustomEmoji');
@@ -102,8 +101,8 @@ async function getGiftCatalog(forceRefresh) {
   }
   const c = await ensureConnected();
 
-  // SESUAIKAN DI SINI kalau GramJS versi kamu memberi nama beda untuk method
-  // ini (skema resminya: payments.getStarGifts, lihat
+  // ADJUST HERE if your GramJS version names this method differently (the
+  // official schema is payments.getStarGifts, see
   // https://core.telegram.org/method/payments.getStarGifts).
   const result = await c.invoke(new Api.payments.GetStarGifts({ hash: 0 }));
   const gifts = (result.gifts || []).filter(g => !g.soldOut);
@@ -113,10 +112,10 @@ async function getGiftCatalog(forceRefresh) {
     stars: Number(g.stars),
     limited: !!g.limited,
     availabilityRemains: g.availabilityRemains || null,
-    // Emoji unicode fallback + custom_emoji_id asli dari sticker gift-nya
-    // (kalau memang terdaftar sebagai custom emoji - lihat giftStickerEmojiId
-    // di atas). Kalau tidak tersedia, tetap null - bot.js/giftIconId() yang
-    // urus fallback berikutnya (override manual admin, baru ikon global).
+    // Unicode emoji fallback plus the real custom_emoji_id from the gift's
+    // sticker (when it is actually registered as a custom emoji - see
+    // giftStickerEmojiId above). When unavailable it stays null - bot.js and
+    // giftIconId() handle the next fallback (an admin override, then the global icon).
     emoji: '🎁',
     emojiId: giftStickerEmojiId(g.sticker)
   }));
@@ -126,61 +125,61 @@ async function getGiftCatalog(forceRefresh) {
   return catalog;
 }
 
-// Resolve target (username TANPA @, atau numeric user id) jadi ENTITY penuh
-// (Api.User) - dipakai buat checkTargetExists() yang butuh detail (username/
-// firstName/lastName/isBot). Melempar error kalau user tidak ditemukan /
-// privacy settings memblokir - bot.js WAJIB tangkap error ini dan refund
-// otomatis saldo wallet buyer (lihat db.updateBalance di bot.js).
+// Resolve a target (a username WITHOUT @, or a numeric user id) into a full
+// ENTITY (Api.User) - used by checkTargetExists(), which needs the details
+// (username/firstName/lastName/isBot). Throws when the user is not found or
+// privacy settings block the lookup - bot.js MUST catch this error and refund
+// the buyer's wallet balance automatically (see db.updateBalance in bot.js).
 async function resolveTargetPeer(client, targetUsernameOrId) {
   const raw = String(targetUsernameOrId).trim().replace(/^@/, '');
   try {
     const entity = await client.getEntity(raw);
     return entity;
   } catch (err) {
-    const notFound = new Error(`Target "${raw}" tidak ditemukan di Telegram.`);
+    const notFound = new Error(`Target "${raw}" was not found on Telegram.`);
     notFound.code = 'TARGET_NOT_FOUND';
     throw notFound;
   }
 }
 
-// ⚠️ FIX BUG "400: PEER_ID_INVALID (caused by payments.GetPaymentForm)":
-// resolveTargetPeer() di atas mengembalikan Api.User APA ADANYA (entity
-// "penuh"), BUKAN Api.InputPeer. Field `peer` di InputInvoiceStarGift wajib
-// diisi Api.InputPeer (mis. InputPeerUser{userId, accessHash}) - kalau
-// diisi Api.User mentah, GramJS TIDAK otomatis mengonversinya untuk
-// pemanggilan c.invoke() manual seperti sendGiftToUser() di bawah (beda
-// dengan method tingkat tinggi semacam client.sendMessage() yang memang
-// auto-convert). Hasilnya Telegram server menolak dengan PEER_ID_INVALID.
-// Fungsi ini pakai client.getInputEntity() bawaan GramJS yang memang
-// tugasnya khusus resolve ke bentuk InputPeer/InputUser yang valid.
+// ⚠️ BUG FIX for "400: PEER_ID_INVALID (caused by payments.GetPaymentForm)":
+// resolveTargetPeer() above returns an Api.User AS IS (a "full" entity), NOT an
+// Api.InputPeer. The `peer` field on InputInvoiceStarGift must hold an
+// Api.InputPeer (for example InputPeerUser{userId, accessHash}) - passing a raw
+// Api.User means GramJS does NOT convert it automatically for a manual
+// c.invoke() call such as sendGiftToUser() below (unlike high-level methods such
+// as client.sendMessage(), which do auto-convert). The result is the Telegram
+// server rejecting the call with PEER_ID_INVALID.
+// This function uses GramJS's built-in client.getInputEntity(), whose specific
+// job is resolving to a valid InputPeer/InputUser form.
 async function resolveInputPeer(client, targetUsernameOrId) {
   const raw = String(targetUsernameOrId).trim().replace(/^@/, '');
   try {
     return await client.getInputEntity(raw);
   } catch (err) {
-    const notFound = new Error(`Target "${raw}" tidak ditemukan di Telegram.`);
+    const notFound = new Error(`Target "${raw}" was not found on Telegram.`);
     notFound.code = 'TARGET_NOT_FOUND';
     throw notFound;
   }
 }
 
-// Cek apakah username/ID Telegram valid & beneran ADA (dipakai buat validasi
-// real-time SEBELUM buyer lanjut ke halaman konfirmasi - lihat
-// verifyTelegramTarget() di bot.js, dipakai fitur Buy Gift/Confess Gift).
-// Tujuannya: kalau target salah ketik/
-// tidak eksis, ketahuan dari awal (saldo belum kepotong sama sekali),
-// bukan baru gagal pas eksekusi kirim (yang walau sudah ada refund
-// otomatis, tetap bikin buyer nunggu proses sia-sia).
+// Check whether a Telegram username/ID is valid and really EXISTS (used for
+// real-time validation BEFORE the buyer reaches the confirmation page - see
+// verifyTelegramTarget() in bot.js, used by the Buy Gift/Confess Gift feature).
+// The point: a mistyped or non-existent target is caught up front (before any
+// balance is deducted at all), rather than failing at send time (which, even
+// with the automatic refund in place, still makes the buyer wait through a
+// pointless process).
 //
-// Return: { id, username, firstName, lastName, isBot } kalau target ketemu.
-// Throw Error dengan code 'TARGET_NOT_FOUND' kalau tidak ketemu/invalid -
-// bot.js WAJIB catch ini dan kasih tau user buat cek ulang ketikannya.
+// Returns: { id, username, firstName, lastName, isBot } when the target is found.
+// Throws an Error with code 'TARGET_NOT_FOUND' when it is missing/invalid -
+// bot.js MUST catch this and tell the user to check their spelling.
 //
-// CATATAN GramJS: khusus input angka (numeric user ID, bukan username),
-// Telegram/GramJS kadang menolak resolve kalau userbot belum pernah
-// "ketemu" ID itu sama sekali (belum ada access_hash tersimpan di sesi
-// userbot - keterbatasan API Telegram, bukan bug). Username biasa (huruf)
-// tidak kena batasan ini karena resolve-nya lewat username langsung.
+// GramJS NOTE: for numeric input specifically (a user ID rather than a username),
+// Telegram/GramJS sometimes refuses to resolve it when the userbot has never
+// "met" that ID at all (no access_hash stored in the userbot session - a
+// Telegram API limitation, not a bug). Ordinary usernames (letters) are not
+// affected, because they resolve through the username directly.
 async function checkTargetExists(targetUsernameOrId) {
   const c = await ensureConnected();
   const peer = await resolveTargetPeer(c, targetUsernameOrId);
@@ -193,28 +192,28 @@ async function checkTargetExists(targetUsernameOrId) {
   };
 }
 
-// Kirim SATU Telegram Star Gift ke target, dengan pesan opsional (dipakai
-// untuk fitur "💌 Confess Gift" - pesan anonim yang nempel di gift).
+// Send ONE Telegram Star Gift to a target, with an optional message (used by the
+// "💌 Confess Gift" feature - the anonymous message attached to the gift).
 //
 // Params:
-//   targetUsernameOrId : string  - username (tanpa @) atau numeric user id
-//   giftId              : string  - id gift dari getGiftCatalog()
-//   message             : string  - pesan yang nempel di gift (opsional,
-//                                    dibatasi Telegram ~255 karakter)
-//   hideName            : boolean - true = identitas pengirim (akun
-//                                    userbot) disembunyikan dari penerima
-//                                    kalau mereka pajang gift itu di profil
-//                                    (sesuai flag hide_name di
-//                                    inputInvoiceStarGift resmi Telegram)
+//   targetUsernameOrId : string  - username (without @) or numeric user id
+//   giftId             : string  - gift id from getGiftCatalog()
+//   message            : string  - message attached to the gift (optional,
+//                                   capped by Telegram at ~255 characters)
+//   hideName           : boolean - true = the sender's identity (the userbot
+//                                   account) is hidden from the recipient if
+//                                   they display the gift on their profile
+//                                   (matching the official Telegram hide_name
+//                                   flag on inputInvoiceStarGift)
 //
-// Return: { success: true } kalau berhasil.
-// Melempar Error kalau gagal (bot.js WAJIB catch + refund otomatis).
+// Returns: { success: true } on success.
+// Throws an Error on failure (bot.js MUST catch it and refund automatically).
 async function sendGiftToUser({ targetUsernameOrId, giftId, message, hideName = true }) {
   const c = await ensureConnected();
   const peer = await resolveInputPeer(c, targetUsernameOrId);
 
-  // SESUAIKAN DI SINI kalau nama constructor GramJS beda dari skema resmi:
-  // - Api.InputInvoiceStarGift (skema: core.telegram.org/constructor/inputInvoiceStarGift)
+  // ADJUST HERE if your GramJS constructor names differ from the official schema:
+  // - Api.InputInvoiceStarGift (schema: core.telegram.org/constructor/inputInvoiceStarGift)
   // - Api.payments.GetPaymentForm
   // - Api.payments.SendStarsForm
   const invoice = new Api.InputInvoiceStarGift({
@@ -228,9 +227,9 @@ async function sendGiftToUser({ targetUsernameOrId, giftId, message, hideName = 
 
   const form = await c.invoke(new Api.payments.GetPaymentForm({ invoice }));
 
-  // Pembayaran Stars langsung dieksekusi dari saldo Stars akun userbot
-  // (tidak perlu konfirmasi form eksternal seperti kartu kredit/QRIS),
-  // makanya cukup panggil SendStarsForm dengan formId dari response di atas.
+  // The Stars payment is charged directly from the userbot account's Stars
+  // balance (no external payment form to confirm, unlike a credit card or QRIS),
+  // so calling SendStarsForm with the formId from the response above is enough.
   const result = await c.invoke(
     new Api.payments.SendStarsForm({
       formId: form.formId,
@@ -241,11 +240,11 @@ async function sendGiftToUser({ targetUsernameOrId, giftId, message, hideName = 
   return { success: true, raw: result };
 }
 
-// Cache saldo Stars userbot supaya cek pra-kirim (lihat bot.js gift:confirm)
-// tidak nembak API tiap kali ada buyer konfirmasi order beruntun.
+// Cache the userbot's Stars balance so the pre-send check (see gift:confirm in
+// bot.js) does not hit the API every time buyers confirm orders back to back.
 let starsBalanceCache = null;
 let starsBalanceCachedAt = 0;
-const STARS_BALANCE_TTL_MS = 20 * 1000; // 20 detik
+const STARS_BALANCE_TTL_MS = 20 * 1000; // 20 seconds
 
 async function getUserbotStarsBalance(forceRefresh) {
   const now = Date.now();
