@@ -4205,7 +4205,7 @@ bot.on('message', async (msg) => {
     const { productId, variantId } = pending.data;
     const lines = msg.text.split('\n').map(s => s.trim()).filter(Boolean);
     if (!lines.length) {
-      return bot.sendMessage(chatId, '⚠️ Tidak ada link/kode yang terbaca. Kirim minimal 1 baris, atau /cancel untuk batal.');
+      return bot.sendMessage(chatId, '⚠️ No links/codes were read. Send at least one line, or /cancel to abort.');
     }
     const result = db.addStockItems(productId, variantId, lines);
     if (!result) {
@@ -4214,16 +4214,16 @@ bot.on('message', async (msg) => {
     }
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
-    // Pending action SENGAJA tidak di-clear, supaya admin bisa lanjut kirim
-    // link/kode berikutnya tanpa perlu buka menu lagi. Selesai = /cancel.
+    // The pending action is DELIBERATELY not cleared, so the admin can keep
+    // sending more links/codes without reopening the menu. /cancel finishes.
     bot.sendMessage(chatId,
-      `✅ *${result.added} link/kode* berhasil ditambahkan ke *${product ? product.name : productId} - ${variant ? variant.label : variantId}*.\n\n` +
-      `📦 Total stok siap auto-kirim sekarang: *${result.total}*\n\n` +
-      `🔔 Notifikasi "Stok Baru Tersedia!" sedang dikirim ke semua user...\n\n` +
-      `Kirim lagi kalau mau tambah lebih banyak, atau /cancel untuk selesai.`,
+      `✅ *${result.added} link(s)/code(s)* added to *${product ? product.name : productId} - ${variant ? variant.label : variantId}*.\n\n` +
+      `📦 Total stock ready for auto-delivery: *${result.total}*\n\n` +
+      `🔔 A "New Stock Available!" notification is being sent to all users...\n\n` +
+      `Send more to add further items, or /cancel when you are done.`,
       { parse_mode: 'Markdown' }
     );
-    // Fire-and-forget - lihat komentar lengkap di broadcastStockAlert().
+    // Fire-and-forget - see the full comment on broadcastStockAlert().
     if (product && variant) {
       broadcastStockAlert(product, variant, result.added, chatId).catch(err => console.error('broadcastStockAlert error:', err.message));
     }
@@ -4233,7 +4233,7 @@ bot.on('message', async (msg) => {
     const { productId, variantId } = pending.data;
     const qty = parseInt(msg.text.trim(), 10);
     if (!qty || isNaN(qty) || qty <= 0) {
-      return bot.sendMessage(chatId, '⚠️ Ketik angka yang valid (lebih dari 0), atau /cancel untuk batal.');
+      return bot.sendMessage(chatId, '⚠️ Type a valid number (greater than 0), or /cancel to abort.');
     }
     const result = db.addManualStock(productId, variantId, qty);
     if (!result) {
@@ -4242,13 +4242,13 @@ bot.on('message', async (msg) => {
     }
     const product = db.findProduct(productId);
     const variant = product && product.variants.find(v => v.id === variantId);
-    // Pending action SENGAJA tidak di-clear juga, sama seperti addstock_items -
-    // admin bisa langsung ketik angka lagi kalau mau nambah lebih banyak lagi.
+    // The pending action is DELIBERATELY not cleared here either, as in
+    // addstock_items - the admin can type another number to add more.
     bot.sendMessage(chatId,
-      `✅ *${result.added} stok* berhasil ditambahkan (manual) ke *${product ? product.name : productId} - ${variant ? variant.label : variantId}*.\n\n` +
-      `📦 Total stok sekarang: *${result.total}*\n\n` +
-      `🔔 Notifikasi "Stok Baru Tersedia!" sedang dikirim ke semua user...\n\n` +
-      `Ketik angka lagi kalau mau tambah lebih banyak, atau /cancel untuk selesai.`,
+      `✅ *${result.added} stock* added (manually) to *${product ? product.name : productId} - ${variant ? variant.label : variantId}*.\n\n` +
+      `📦 Total stock now: *${result.total}*\n\n` +
+      `🔔 A "New Stock Available!" notification is being sent to all users...\n\n` +
+      `Type another number to add more, or /cancel when you are done.`,
       { parse_mode: 'Markdown' }
     );
     if (product && variant) {
@@ -4261,16 +4261,16 @@ bot.on('message', async (msg) => {
     const order = db.getOrderById(orderId);
     db.clearPendingAction(chatId);
     if (!order) {
-      return bot.sendMessage(chatId, `⚠️ Order dengan ID \`${orderId}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, `⚠️ No order was found with the ID \`${orderId}\`.`, { parse_mode: 'Markdown' });
     }
     bot.sendMessage(chatId, formatDeliveryLogEntry(order), { parse_mode: 'HTML' });
   }
 
   else if (pending.type === 'listusers_search_id') {
-    // Deteksi otomatis: kalau input mengandung huruf -> cari by USERNAME
-    // (contains, case-insensitive, boleh pakai "@" di depan atau tidak).
-    // Kalau input cuma angka -> tetap cari by Chat ID seperti sebelumnya
-    // (contains, biar admin bebas ketik sebagian angka saja).
+    // Auto-detection: when the input contains letters -> search by USERNAME
+    // (contains, case-insensitive, with or without a leading "@").
+    // When the input is digits only -> search by Chat ID as before (contains, so
+    // the admin can type just part of the number).
     const rawInput = msg.text.trim();
     const usernameQuery = rawInput.replace(/^@/, '').toLowerCase();
     const isUsernameSearch = /[a-zA-Z]/.test(rawInput);
@@ -4279,7 +4279,7 @@ bot.on('message', async (msg) => {
 
     if (isUsernameSearch) {
       if (!usernameQuery) {
-        return bot.sendMessage(chatId, '⚠️ Ketik username yang valid. Coba lagi lewat /admin -> 📋 List User -> 🔍 Cari User (ID/Username).');
+        return bot.sendMessage(chatId, '⚠️ Type a valid username. Try again via /admin -> 📋 User List -> 🔍 Search User (ID/Username).');
       }
       const matches = db.getUsersList().filter(u => u.username && u.username.toLowerCase().includes(usernameQuery));
       return bot.sendMessage(chatId, usersSearchResultText(matches, rawInput), { parse_mode: 'HTML', reply_markup: usersSearchResultKeyboard() });
@@ -4287,7 +4287,7 @@ bot.on('message', async (msg) => {
 
     const query = rawInput.replace(/\D/g, '');
     if (!query) {
-      return bot.sendMessage(chatId, '⚠️ Ketik Chat ID atau username yang valid. Coba lagi lewat /admin -> 📋 List User -> 🔍 Cari User (ID/Username).');
+      return bot.sendMessage(chatId, '⚠️ Type a valid Chat ID or username. Try again via /admin -> 📋 User List -> 🔍 Search User (ID/Username).');
     }
     const matches = db.getUsersList().filter(u => u.chatId.includes(query));
     bot.sendMessage(chatId, usersSearchResultText(matches, query), { parse_mode: 'HTML', reply_markup: usersSearchResultKeyboard() });
@@ -4296,73 +4296,73 @@ bot.on('message', async (msg) => {
   else if (pending.type === 'addbalance_user') {
     const targetId = msg.text.trim();
     db.setPendingAction(chatId, { type: 'addbalance_amount', data: { targetId } });
-    bot.sendMessage(chatId, 'Nominal saldo (USD) yang ingin ditambahkan? (angka saja, boleh desimal, bisa minus untuk kurangi)');
+    bot.sendMessage(chatId, 'How much balance (USD) do you want to add? (numbers only, decimals allowed; a negative number subtracts)');
   }
   else if (pending.type === 'addbalance_amount') {
     const amount = parseFloat(msg.text.replace(/[^0-9.-]/g, ''));
     const { targetId } = pending.data;
-    // Semua handler input angka lain (addproduct_price, topup_*, custom_qty,
-    // dst) selalu validasi hasil parse sebelum dipakai - handler ini kelewatan
-    // sebelumnya. Tanpa validasi ini, admin salah ketik (mis. cuma spasi,
-    // atau teks tanpa angka sama sekali) bikin parseFloat balikin NaN, lalu
-    // db.updateBalance() nyimpen NaN ke saldo user -> saldo user itu RUSAK
-    // PERMANEN (NaN + apapun = NaN terus, tidak bisa dikoreksi lagi lewat
-    // topup/pembelian normal, cuma bisa diperbaiki manual edit db.json).
+    // Every other numeric input handler (addproduct_price, topup_*, custom_qty
+    // and so on) validates the parse result before using it - this handler used to
+    // be missed. Without this validation, an admin typo (just a space, or text
+    // with no digits at all) makes parseFloat return NaN, and db.updateBalance()
+    // then stores NaN as the user's balance -> that balance is PERMANENTLY BROKEN
+    // (NaN plus anything stays NaN, uncorrectable through a normal topup or
+    // purchase, fixable only by editing db.json by hand).
     if (isNaN(amount)) {
       db.clearPendingAction(chatId);
-      return bot.sendMessage(chatId, '⚠️ Nominal tidak valid (bukan angka). Dibatalkan - ulangi lagi lewat /admin → 💰 Atur Saldo User.');
+      return bot.sendMessage(chatId, '⚠️ Invalid amount (not a number). Cancelled - try again via /admin → 💰 Manage User Balance.');
     }
     const newBalance = db.updateBalance(targetId, amount);
     db.clearPendingAction(chatId);
-    bot.sendMessage(chatId, `✅ Saldo user ${targetId} sekarang: ${usd(newBalance)}`);
-    bot.sendMessage(targetId, `ℹ️ Saldo kamu telah disesuaikan admin. Saldo sekarang: *${usd(newBalance)}*`, { parse_mode: 'Markdown' }).catch(() => {});
+    bot.sendMessage(chatId, `✅ The balance of user ${targetId} is now: ${usd(newBalance)}`);
+    bot.sendMessage(targetId, `ℹ️ Your balance was adjusted by an admin. Current balance: *${usd(newBalance)}*`, { parse_mode: 'Markdown' }).catch(() => {});
   }
 
   else if (pending.type === 'backup_interval') {
     const minutes = parseInt(msg.text.replace(/\D/g, ''), 10);
     db.clearPendingAction(chatId);
     if (!minutes || minutes < 1) {
-      return bot.sendMessage(chatId, '⚠️ Interval tidak valid. Ketik angka menit saja, misal `60`. Coba lagi lewat /admin -> 💾 Auto Backup -> ⏱️ Atur Interval.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ Invalid interval. Type the number of minutes only, for example `60`. Try again via /admin -> 💾 Auto Backup -> ⏱️ Set Interval.', { parse_mode: 'Markdown' });
     }
     const settings = db.setBackupSettings({ intervalMinutes: minutes });
     scheduleBackup();
-    bot.sendMessage(chatId, `✅ Interval backup diatur ke *${minutes} menit*.`, { parse_mode: 'Markdown', reply_markup: backupMenuKeyboard(settings) });
+    bot.sendMessage(chatId, `✅ The backup interval was set to *${minutes} minutes*.`, { parse_mode: 'Markdown', reply_markup: backupMenuKeyboard(settings) });
   }
 
   else if (pending.type === 'backup_groupid') {
     const groupId = msg.text.trim();
     db.clearPendingAction(chatId);
     if (!/^-?\d+$/.test(groupId)) {
-      return bot.sendMessage(chatId, '⚠️ Group ID harus berupa angka (boleh diawali minus). Contoh: `-1001234567890`. Coba lagi lewat /admin -> 💾 Auto Backup -> 🆔 Atur Group ID.', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, '⚠️ The Group ID must be a number (a leading minus is allowed). For example: `-1001234567890`. Try again via /admin -> 💾 Auto Backup -> 🆔 Set Group ID.', { parse_mode: 'Markdown' });
     }
     const settings = db.setBackupSettings({ groupId });
     scheduleBackup();
-    bot.sendMessage(chatId, `✅ Group ID tujuan backup diatur ke \`${groupId}\`.\n\n⚠️ Pastikan bot ini sudah jadi member di group tersebut, kalau belum pengiriman backup akan gagal.`, { parse_mode: 'Markdown', reply_markup: backupMenuKeyboard(settings) });
+    bot.sendMessage(chatId, `✅ The backup destination Group ID was set to \`${groupId}\`.\n\n⚠️ Make sure this bot is already a member of that group, otherwise backup delivery will fail.`, { parse_mode: 'Markdown', reply_markup: backupMenuKeyboard(settings) });
   }
 
   else if (pending.type === 'maintenance_message') {
     const text = embedOwnerCustomEmoji(msg);
     db.clearPendingAction(chatId);
     const settings = db.setMaintenanceSettings({ message: text });
-    bot.sendMessage(chatId, `✅ Pesan custom Mode Maintenance disimpan. Preview:`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `✅ The custom Maintenance Mode message was saved. Preview:`, { parse_mode: 'Markdown' });
     bot.sendMessage(chatId, text, { parse_mode: 'HTML' }).catch(err => {
-      bot.sendMessage(chatId, `⚠️ Preview gagal ditampilkan (biasanya karena tag HTML tidak valid/tidak ketutup): ${err.message}\n\nPesan tetap tersimpan, tapi sebaiknya diperbaiki lagi lewat /admin -> 🛠️ Maintenance Bot -> ✏️ Set Pesan Custom.`);
+      bot.sendMessage(chatId, `⚠️ The preview could not be displayed (usually because of invalid or unclosed HTML tags): ${err.message}\n\nThe message is still saved, but it is best to fix it via /admin -> 🛠️ Bot Maintenance -> ✏️ Set Custom Message.`);
     });
     bot.sendMessage(chatId, maintenanceMenuText(settings), { parse_mode: 'Markdown', reply_markup: maintenanceMenuKeyboard(settings) });
   }
 });
 
-// ================= AUTO BACKUP (zip source code -> kirim ke group) =================
-// Fitur: /admin -> 💾 Auto Backup. Bikin file .zip berisi FULL source code
-// project (kecuali node_modules & .npm - lihat backup.js) lalu kirim
-// otomatis ke sebuah group Telegram tiap interval menit/jam yang diatur
-// admin. Bisa juga dipicu manual lewat tombol "📤 Backup Sekarang".
+// ================= AUTO BACKUP (zip the source code -> send it to a group) =================
+// Feature: /admin -> 💾 Auto Backup. Builds a .zip holding the project's FULL
+// source code (except node_modules and .npm - see backup.js) and sends it
+// automatically to a Telegram group at the interval the admin configures. It can
+// also be triggered manually via the "📤 Backup Now" button.
 
 let backupTimer = null;
 
-// (Re)start timer sesuai settings terbaru di db.json. Dipanggil tiap kali
-// settings berubah (toggle on/off, ganti interval, ganti group id) dan
-// sekali lagi saat bot pertama kali start.
+// (Re)start the timer from the latest settings in db.json. Called whenever the
+// settings change (toggling on/off, changing the interval, changing the group id)
+// and once more when the bot first starts.
 function scheduleBackup() {
   if (backupTimer) {
     clearInterval(backupTimer);
@@ -4376,12 +4376,12 @@ function scheduleBackup() {
   }
 }
 
-// Bikin zip lalu kirim ke group id yang diatur di settings. source: 'scheduled' | 'manual'.
-// Return { ok: true, sizeKb, fileName } atau { ok: false, error }.
+// Build the zip and send it to the group id set in settings. source: 'scheduled' | 'manual'.
+// Returns { ok: true, sizeKb, fileName } or { ok: false, error }.
 async function runBackupJob(source) {
   const settings = db.getBackupSettings();
   if (!settings.groupId) {
-    return { ok: false, error: 'Group ID belum diatur.' };
+    return { ok: false, error: 'The Group ID has not been set.' };
   }
   let zipPath;
   try {
@@ -4389,15 +4389,15 @@ async function runBackupJob(source) {
     zipPath = result.zipPath;
     const sizeKb = (result.sizeBytes / 1024).toFixed(1);
     const caption =
-      `💾 <b>Auto Backup Source Code</b>\n` +
-      `📅 ${new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' })}\n` +
-      `📦 Ukuran: ${sizeKb} KB\n` +
-      `🔖 Dipicu: ${source === 'scheduled' ? 'Otomatis (terjadwal)' : 'Manual oleh admin'}`;
+      `💾 <b>Auto Backup - Source Code</b>\n` +
+      `📅 ${new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'medium' })}\n` +
+      `📦 Size: ${sizeKb} KB\n` +
+      `🔖 Triggered: ${source === 'scheduled' ? 'Automatically (scheduled)' : 'Manually by an admin'}`;
     await bot.sendDocument(settings.groupId, zipPath, { caption, parse_mode: 'HTML' }, { filename: result.fileName, contentType: 'application/zip' });
     backup.cleanupBackupFile(zipPath);
     return { ok: true, sizeKb, fileName: result.fileName };
   } catch (err) {
-    console.error('Auto backup gagal:', err.message);
+    console.error('Auto backup failed:', err.message);
     if (zipPath) backup.cleanupBackupFile(zipPath);
     // Kabari semua admin kalau backup terjadwal gagal (mis. bot belum jadi
     // member group, atau Group ID salah), supaya tidak diam-diam berhenti.
