@@ -4399,109 +4399,109 @@ async function runBackupJob(source) {
   } catch (err) {
     console.error('Auto backup failed:', err.message);
     if (zipPath) backup.cleanupBackupFile(zipPath);
-    // Kabari semua admin kalau backup terjadwal gagal (mis. bot belum jadi
-    // member group, atau Group ID salah), supaya tidak diam-diam berhenti.
+    // Tell every admin when a scheduled backup fails (the bot not being a member
+    // of the group, or a wrong Group ID), so it does not stop silently.
     ADMIN_IDS.forEach(id => {
-      bot.sendMessage(id, `⚠️ Auto backup gagal dikirim ke group \`${settings.groupId}\`:\n${err.message}\n\nPastikan bot sudah jadi member (dan idealnya admin) di group tersebut, dan Group ID-nya benar.`, { parse_mode: 'Markdown' }).catch(() => {});
+      bot.sendMessage(id, `⚠️ The auto backup could not be sent to group \`${settings.groupId}\`:\n${err.message}\n\nMake sure the bot is a member (ideally an admin) of that group, and that the Group ID is correct.`, { parse_mode: 'Markdown' }).catch(() => {});
     });
     return { ok: false, error: err.message };
   }
 }
 
 function backupMenuText(settings) {
-  const statusText = settings.enabled ? '🟢 Aktif' : '🔴 Nonaktif';
+  const statusText = settings.enabled ? '🟢 Active' : '🔴 Inactive';
   const interval = settings.intervalMinutes || 60;
-  const intervalText = (interval >= 60 && interval % 60 === 0) ? `${interval / 60} jam` : `${interval} menit`;
-  const groupText = settings.groupId ? `\`${settings.groupId}\`` : '⚠️ belum diisi';
+  const intervalText = (interval >= 60 && interval % 60 === 0) ? `${interval / 60} hour(s)` : `${interval} minutes`;
+  const groupText = settings.groupId ? `\`${settings.groupId}\`` : '⚠️ not set yet';
   return (
     `💾 *Auto Backup*\n\n` +
     `Status: ${statusText}\n` +
-    `Interval: setiap *${intervalText}*\n` +
-    `Kirim ke Group ID: ${groupText}\n\n` +
-    `Backup berisi *full source code project* (kecuali \`node_modules\` & \`.npm\`) dalam 1 file \`.zip\`, dikirim otomatis ke group di atas. Pastikan bot sudah ditambahkan sebagai member di group tujuan.`
+    `Interval: every *${intervalText}*\n` +
+    `Send to Group ID: ${groupText}\n\n` +
+    `The backup holds the *full project source code* (except \`node_modules\` and \`.npm\`) in a single \`.zip\`, sent automatically to the group above. Make sure the bot has been added as a member of the destination group.`
   );
 }
 
 function backupMenuKeyboard(settings) {
   return {
     inline_keyboard: [
-      [{ text: settings.enabled ? '⏸️ Nonaktifkan' : '▶️ Aktifkan', callback_data: 'admin:backup:toggle' }],
-      [{ text: '⏱️ Atur Interval', callback_data: 'admin:backup:setinterval' }],
-      [{ text: '🆔 Atur Group ID', callback_data: 'admin:backup:setgroup' }],
-      [{ text: '📤 Backup Sekarang', callback_data: 'admin:backup:now' }],
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')],
-      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [{ text: settings.enabled ? '⏸️ Disable' : '▶️ Enable', callback_data: 'admin:backup:toggle' }],
+      [{ text: '⏱️ Set Interval', callback_data: 'admin:backup:setinterval' }],
+      [{ text: '🆔 Set Group ID', callback_data: 'admin:backup:setgroup' }],
+      [{ text: '📤 Backup Now', callback_data: 'admin:backup:now' }],
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')],
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
     ]
   };
 }
 
-// ================= MODE MAINTENANCE BOT =================
-// Dipicu dari /admin -> 🛠️ Maintenance Bot. Kalau diaktifkan, SEMUA user
-// non-admin diblokir dari seluruh interaksi bot (lihat gerbang maintenance
-// di /start, bot.on('callback_query', ...) utama, dan bot.on('message', ...))
-// dan cuma dikasih lihat 1 pesan maintenance - admin selalu tetap bisa akses
-// normal. Pesannya default-nya sudah "keren" & full emoji Premium (dipinjam
-// dari emoji yang SUDAH ADA di file lain, lihat buildMaintenanceText() &
-// emoji-id-teks.js), atau admin boleh tulis pesan sendiri lewat "✏️ Set
-// Pesan Custom".
+// ================= BOT MAINTENANCE MODE =================
+// Triggered from /admin -> 🛠️ Bot Maintenance. When enabled, ALL non-admin users
+// are blocked from every bot interaction (see the maintenance gates in /start,
+// the main bot.on('callback_query', ...), and bot.on('message', ...)) and are
+// shown a single maintenance message - admins always keep normal access. The
+// default message already looks good and is full of Premium emoji (borrowed from
+// emoji that ALREADY EXIST in other files, see buildMaintenanceText() and
+// emoji-id-teks.js), or the admin can write their own via "✏️ Set Custom
+// Message".
 function maintenanceMenuText(settings) {
-  const statusText = settings.enabled ? '🟢 Aktif (user non-admin diblokir)' : '🔴 Nonaktif';
-  const msgText = settings.message ? '✏️ Custom (dari admin)' : '✨ Default (auto-emoji Premium)';
+  const statusText = settings.enabled ? '🟢 Active (non-admin users blocked)' : '🔴 Inactive';
+  const msgText = settings.message ? '✏️ Custom (set by an admin)' : '✨ Default (auto Premium emoji)';
   return (
-    `🛠️ *Maintenance Bot*\n\n` +
+    `🛠️ *Bot Maintenance*\n\n` +
     `Status: ${statusText}\n` +
-    `Pesan: ${msgText}\n\n` +
-    `Kalau aktif, semua user (kecuali admin) tidak bisa pakai fitur apapun di bot - cuma dikasih lihat 1 pesan maintenance di bawah ini. Preview pesannya bisa dilihat lewat tombol "👀 Preview Pesan".`
+    `Message: ${msgText}\n\n` +
+    `While it is on, every user except admins is locked out of all bot features - they only see the single maintenance message below. Use the "👀 Preview Message" button to see it.`
   );
 }
 
 function maintenanceMenuKeyboard(settings) {
   const rows = [
-    [{ text: settings.enabled ? '🔴 Nonaktifkan' : '🟢 Aktifkan', callback_data: 'admin:maintenance_toggle' }],
-    [{ text: '👀 Preview Pesan', callback_data: 'admin:maintenance_preview' }],
-    [{ text: '✏️ Set Pesan Custom', callback_data: 'admin:maintenance_setmsg' }]
+    [{ text: settings.enabled ? '🔴 Disable' : '🟢 Enable', callback_data: 'admin:maintenance_toggle' }],
+    [{ text: '👀 Preview Message', callback_data: 'admin:maintenance_preview' }],
+    [{ text: '✏️ Set Custom Message', callback_data: 'admin:maintenance_setmsg' }]
   ];
   if (settings.message) {
-    rows.push([{ text: '↩️ Pakai Pesan Default Lagi', callback_data: 'admin:maintenance_resetmsg' }]);
+    rows.push([{ text: '↩️ Use the Default Message Again', callback_data: 'admin:maintenance_resetmsg' }]);
   }
-  rows.push([{ text: '🎨 Kelola Emoji Pesan Default', callback_data: 'admin:emojiteksgroup:maintenance' }]);
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([{ text: '🎨 Manage Default Message Emoji', callback_data: 'admin:emojiteksgroup:maintenance' }]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
-// ================= LIST USER =================
-// Dipicu dari /admin -> 📋 List User. Ditampilkan paginated (10 user per
-// halaman) supaya tetap ringan & gampang dibaca walau usernya sudah ratusan/
-// ribuan - data diambil langsung dari db.getUsersList() (lihat db.js).
+// ================= USER LIST =================
+// Triggered from /admin -> 📋 User List. Shown paginated (10 users per page) so
+// it stays light and readable even with hundreds or thousands of users - the data
+// comes straight from db.getUsersList() (see db.js).
 const USERS_PAGE_SIZE = 10;
 
 function usersListText(page) {
   const allUsers = db.getUsersList();
   if (!allUsers.length) {
-    return { text: '📋 <b>List User</b>\n\n<i>Belum ada user yang pernah /start bot.</i>', totalPages: 1, page: 1, totalUsers: 0 };
+    return { text: '📋 <b>User List</b>\n\n<i>No user has pressed /start on the bot yet.</i>', totalPages: 1, page: 1, totalUsers: 0 };
   }
   const totalPages = Math.max(1, Math.ceil(allUsers.length / USERS_PAGE_SIZE));
   const actualPage = Math.min(Math.max(1, page), totalPages);
   const start = (actualPage - 1) * USERS_PAGE_SIZE;
   const pageUsers = allUsers.slice(start, start + USERS_PAGE_SIZE);
-  // PENTING: pakai HTML (bukan Markdown) + escapeHtml() di username - username
-  // Telegram BEBAS isinya (boleh mengandung "_", "*", "`", "[", dll), dan
-  // kalau dikirim apa adanya lewat parse_mode Markdown, karakter-karakter itu
-  // dianggap Telegram sebagai penanda formatting yang "nyangkut" (mis. 1
-  // underscore tanpa pasangan penutup) -> bikin API balas error 400 "can't
-  // parse entities". HTML jauh lebih aman di sini karena cuma < & > & yang
-  // perlu di-escape (lihat escapeHtml()), jauh lebih kecil kemungkinan
-  // konflik dengan karakter yang wajar ada di username asli.
+  // IMPORTANT: use HTML (not Markdown) plus escapeHtml() on the username - a
+  // Telegram username can contain anything ("_", "*", "`", "[" and so on), and
+  // sent as is with parse_mode Markdown those characters are read by Telegram as
+  // formatting markers that never close (a single unpaired underscore, say) ->
+  // making the API return a 400 "can't parse entities". HTML is far safer here
+  // because only < > & need escaping (see escapeHtml()), making a clash with
+  // characters that legitimately appear in a username far less likely.
+  //
   const lines = pageUsers.map(u => {
-    const usernameText = u.username ? `@${escapeHtml(u.username)}` : '<i>(tanpa username)</i>';
+    const usernameText = u.username ? `@${escapeHtml(u.username)}` : '<i>(no username)</i>';
     return (
       `👤 <code>${escapeHtml(u.chatId)}</code> - ${usernameText}\n` +
-      `   💰 ${usd(u.balance)} • 🧾 ${u.orderCount} order • 🎁 ${u.referralCount} referral`
+      `   💰 ${usd(u.balance)} • 🧾 ${u.orderCount} order(s) • 🎁 ${u.referralCount} referral(s)`
     );
   }).join('\n\n');
   return {
-    text: `📋 <b>List User</b> (hal. ${actualPage}/${totalPages}, total ${allUsers.length} user)\n\n${lines}`,
+    text: `📋 <b>User List</b> (page ${actualPage}/${totalPages}, ${allUsers.length} users in total)\n\n${lines}`,
     totalPages,
     page: actualPage,
     totalUsers: allUsers.length
@@ -4510,73 +4510,73 @@ function usersListText(page) {
 
 function usersListKeyboard(page, totalPages) {
   const navRow = [];
-  if (page > 1) navRow.push({ text: '‹ Sebelumnya', callback_data: `admin:listusers:${page - 1}` });
-  if (page < totalPages) navRow.push({ text: 'Berikutnya ›', callback_data: `admin:listusers:${page + 1}` });
+  if (page > 1) navRow.push({ text: '‹ Previous', callback_data: `admin:listusers:${page - 1}` });
+  if (page < totalPages) navRow.push({ text: 'Next ›', callback_data: `admin:listusers:${page + 1}` });
   const rows = [];
   if (navRow.length) rows.push(navRow);
-  rows.push([{ text: '🔍 Cari User (ID/Username)', callback_data: 'admin:listusers_search' }]);
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_users' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([{ text: '🔍 Search User (ID/Username)', callback_data: 'admin:listusers_search' }]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_users' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
-// Hasil pencarian /admin -> 📋 List User -> 🔍 Cari User (ID). Cocokkan
-// dengan CONTAINS (bukan cuma exact match) di Chat ID - admin sering cuma
-// inget SEBAGIAN angkanya (mis. dari notifikasi order baru yang chat id-nya
-// sensor sebagian), jadi lebih berguna daripada exact match doang. Dibatasi
-// tampilkan maksimal 20 hasil per pencarian supaya pesannya tidak kepanjangan
-// kalau query-nya ketik terlalu pendek/umum (mis. cuma "1").
+// Search results for /admin -> 📋 User List -> 🔍 Search User (ID). It matches
+// on CONTAINS (not just an exact match) against the Chat ID - admins often
+// remember only PART of the number (from a new-order notification where the chat
+// id is partly masked), which makes it more useful than exact matching. It is
+// capped at 20 results per search so the message does not run long when the query
+// is too short or generic (just "1", say).
 const USERS_SEARCH_RESULT_LIMIT = 20;
 
 function usersSearchResultText(matches, query) {
   const safeQuery = escapeHtml(query);
   if (!matches.length) {
-    return `🔍 <b>Cari User</b>\n\nTidak ada user dengan Chat ID yang mengandung <code>${safeQuery}</code>.`;
+    return `🔍 <b>Search User</b>\n\nNo user has a Chat ID containing <code>${safeQuery}</code>.`;
   }
   const capped = matches.slice(0, USERS_SEARCH_RESULT_LIMIT);
   const lines = capped.map(u => {
-    const usernameText = u.username ? `@${escapeHtml(u.username)}` : '<i>(tanpa username)</i>';
+    const usernameText = u.username ? `@${escapeHtml(u.username)}` : '<i>(no username)</i>';
     return (
       `👤 <code>${escapeHtml(u.chatId)}</code> - ${usernameText}\n` +
-      `   💰 ${usd(u.balance)} • 🧾 ${u.orderCount} order • 🎁 ${u.referralCount} referral`
+      `   💰 ${usd(u.balance)} • 🧾 ${u.orderCount} order(s) • 🎁 ${u.referralCount} referral(s)`
     );
   }).join('\n\n');
   const moreNote = matches.length > capped.length
-    ? `\n\n<i>…dan ${matches.length - capped.length} user lainnya - coba ketik ID yang lebih lengkap/spesifik.</i>`
+    ? `\n\n<i>…and ${matches.length - capped.length} more users - try typing a longer or more specific ID.</i>`
     : '';
-  return `🔍 <b>Hasil Cari User</b> (mengandung <code>${safeQuery}</code>, ${matches.length} ditemukan)\n\n${lines}${moreNote}`;
+  return `🔍 <b>User Search Results</b> (containing <code>${safeQuery}</code>, ${matches.length} found)\n\n${lines}${moreNote}`;
 }
 
 function usersSearchResultKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '🔍 Cari Lagi', callback_data: 'admin:listusers_search' }],
-      [{ text: '‹ Kembali ke List User', callback_data: 'admin:listusers:1' }]
+      [{ text: '🔍 Search Again', callback_data: 'admin:listusers_search' }],
+      [{ text: '‹ Back to User List', callback_data: 'admin:listusers:1' }]
     ]
   };
 }
 
-// ================= BROADCAST (teks / foto+caption ke semua user) =================
-// Dipicu dari /admin -> 📢 Broadcast. Owner kirim 1 pesan (teks ATAU foto
-// dengan/tanpa caption) -> bot simpan sementara + tampilkan PREVIEW persis
-// seperti yang bakal diterima user -> owner konfirmasi lewat tombol -> baru
-// dikirim ke semua chat ID yang ada di database.
+// ================= BROADCAST (text / photo+caption to all users) =================
+// Triggered from /admin -> 📢 Broadcast. The owner sends one message (text OR a
+// photo with or without a caption) -> the bot stores it temporarily and shows a
+// PREVIEW exactly as users will receive it -> the owner confirms via a button ->
+// only then is it sent to every chat ID in the database.
 async function handleBroadcastContent(msg, chatId) {
   let content;
   if (msg.photo && msg.photo.length) {
-    const largest = msg.photo[msg.photo.length - 1]; // resolusi terbesar ada di elemen terakhir
+    const largest = msg.photo[msg.photo.length - 1]; // the highest resolution is the last element
     const caption = msg.caption ? embedOwnerCustomEmojiFrom(msg.caption, msg.caption_entities) : '';
     content = { kind: 'photo', fileId: largest.file_id, caption };
   } else if (msg.text) {
     content = { kind: 'text', text: embedOwnerCustomEmoji(msg) };
   } else {
-    return bot.sendMessage(chatId, '⚠️ Kirim teks, atau foto (boleh dengan/tanpa caption). Ketik /cancel untuk batal.');
+    return bot.sendMessage(chatId, '⚠️ Send text, or a photo (with or without a caption). Type /cancel to abort.');
   }
 
   db.setPendingAction(chatId, { type: 'broadcast_confirm', data: { content } });
   const totalUsers = Object.keys(db.readDb().users).length;
 
-  await bot.sendMessage(chatId, `📢 *Preview Broadcast* (akan dikirim ke *${totalUsers}* user) - tampilan di bawah ini persis seperti yang diterima user:`, { parse_mode: 'Markdown' });
+  await bot.sendMessage(chatId, `📢 *Broadcast Preview* (will be sent to *${totalUsers}* users) - what you see below is exactly what they receive:`, { parse_mode: 'Markdown' });
 
   try {
     if (content.kind === 'photo') {
@@ -4586,14 +4586,14 @@ async function handleBroadcastContent(msg, chatId) {
     }
   } catch (err) {
     db.clearPendingAction(chatId);
-    return bot.sendMessage(chatId, `⚠️ Preview gagal ditampilkan (biasanya karena tag HTML tidak valid/tidak ketutup): ${err.message}\n\nCoba /admin -> 📢 Broadcast lagi dengan teks yang diperbaiki.`);
+    return bot.sendMessage(chatId, `⚠️ The preview could not be displayed (usually because of invalid or unclosed HTML tags): ${err.message}\n\nTry /admin -> 📢 Broadcast again with corrected text.`);
   }
 
-  await bot.sendMessage(chatId, `Kirim ke semua *${totalUsers}* user sekarang?`, {
+  await bot.sendMessage(chatId, `Send it to all *${totalUsers}* users now?`, {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: [
-      [{ text: `✅ Ya, Kirim Sekarang`, callback_data: 'admin:broadcast:send' }],
-      [{ text: '❌ Batal', callback_data: 'admin:broadcast:cancel' }]
+      [{ text: `✅ Yes, Send Now`, callback_data: 'admin:broadcast:send' }],
+      [{ text: '❌ Cancel', callback_data: 'admin:broadcast:cancel' }]
     ] }
   });
 }
@@ -4643,7 +4643,7 @@ function adminProductsKeyboard() {
         withButtonIcon({ text: '🖼️ Set Logo', callback_data: 'admin:setlogo' }, 'admin_set_logo')
       ],
       [withButtonIcon({ text: '😀 Ganti Emoji Produk', callback_data: 'admin:setemoji' }, 'admin_set_emoji')],
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
@@ -4654,7 +4654,7 @@ function adminUsersKeyboard() {
     inline_keyboard: [
       [withButtonIcon({ text: '💰 Atur Saldo User', callback_data: 'admin:addbalance' }, 'admin_atur_saldo')],
       [withButtonIcon({ text: '📋 List User', callback_data: 'admin:listusers:1' }, 'admin_list_user')],
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
@@ -4668,7 +4668,7 @@ function adminReportsKeyboard() {
         withButtonIcon({ text: '🔍 Cek Order ID', callback_data: 'admin:checkorder' }, 'admin_cek_order')
       ],
       [withButtonIcon({ text: '📊 Statistik', callback_data: 'admin:stats' }, 'admin_statistik')],
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
@@ -4683,7 +4683,7 @@ function adminSettingsKeyboard() {
       [withButtonIcon({ text: '📢 Broadcast', callback_data: 'admin:broadcast' }, 'admin_broadcast')],
       [withButtonIcon({ text: '🔐 Wajib Join Channel/Grup', callback_data: 'admin:forcejoin' }, 'admin_forcejoin')],
       [withButtonIcon({ text: '📣 Set Notifikasi Channel', callback_data: 'admin:channelnotif' }, 'admin_channel_notif')],
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
@@ -4696,7 +4696,7 @@ function adminGiftKeyboard() {
       [withButtonIcon({ text: '📜 Riwayat Gift Order', callback_data: 'admin:gift_history' }, 'admin_gift_history')],
       [withButtonIcon({ text: '🎁 Kelola Emoji Gift', callback_data: 'admin:giftemoji' }, 'admin_gift_emoji')],
       [withButtonIcon({ text: '💲 Atur Harga Gift', callback_data: 'admin:giftpricing' }, 'admin_gift_pricing')],
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:menu' }, 'back')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
@@ -4732,8 +4732,8 @@ function adminGiftPricingKeyboard() {
       ...(pricing.markupPct != null || pricing.starsToUsdRate != null
         ? [[withStyle({ text: '↩️ Reset ke Default .env', callback_data: 'admin:giftpricingreset' }, 'danger')]]
         : []),
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_gift' }, 'back')],
-      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_gift' }, 'back')],
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
     ]
   };
 }
@@ -4760,8 +4760,8 @@ async function adminGiftEmojiListKeyboard() {
   } catch (err) {
     logError('adminGiftEmojiListKeyboard', err);
   }
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_gift' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_gift' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5005,15 +5005,15 @@ function findTeksItemLabel(key) {
 function adminEmojiCategoryKeyboard() {
   const rows = EMOJI_CATEGORIES.map(cat => ([{ text: cat.label, callback_data: `admin:emojicat:${cat.id}` }]));
   rows.push([{ text: '✍️ Emoji di Teks Pesan', callback_data: 'admin:emojiteks' }]);
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
 function adminEmojiTeksGroupKeyboard() {
   const rows = TEKS_GROUPS.map(g => ([{ text: g.label, callback_data: `admin:emojiteksgroup:${g.id}` }]));
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:emojiids' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiids' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5036,8 +5036,8 @@ function adminEmojiTeksItemKeyboard(groupId) {
     const filled = isTeksEmojiFilled(item.key) ? '✅' : '⚪';
     return [{ text: `${filled} ${item.label}`, callback_data: `admin:emojiset:teks:${item.key}` }];
   });
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:emojiteks' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiteks' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5048,8 +5048,8 @@ function adminEmojiKeyListKeyboard(catId) {
     const filled = isMenuEmojiFilled(key) ? '✅' : '⚪';
     rows.push([{ text: `${filled} ${EMOJI_KEY_LABELS[key] || key}`, callback_data: `admin:emojiset:menu:${key}` }]);
   });
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:emojiids' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiids' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5061,8 +5061,8 @@ function adminProductPickKeyboard(action, productsOverride) {
       callback_data: `admin:${action}:${p.id}`
     }, p)
   ]));
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_products' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5072,9 +5072,9 @@ function adminProductPickKeyboard(action, productsOverride) {
 // bisa lompat langsung ke menu utama tanpa harus mundur selangkah-selangkah.
 function adminBackKeyboard(parentTarget) {
   const target = parentTarget || 'admin:menu';
-  const rows = [[withButtonIcon({ text: '‹ Kembali', callback_data: target }, 'back')]];
+  const rows = [[withButtonIcon({ text: '‹ Back', callback_data: target }, 'back')]];
   if (target !== 'admin:menu') {
-    rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+    rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   }
   return { inline_keyboard: rows };
 }
@@ -5106,8 +5106,8 @@ function adminForceJoinKeyboard() {
   channels.forEach(c => {
     rows.push([{ text: `🗑️ Hapus: ${c.title}`, callback_data: `admin:forcejoin_remove:${c.id}` }]);
   });
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5155,8 +5155,8 @@ function adminChannelNotifKeyboard() {
       { text: '🧪 Contoh Referral', callback_data: 'admin:channelnotif_test_referral' }
     ]);
   }
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5168,8 +5168,8 @@ function adminVariantPickKeyboard(product, action, backCallback) {
   const rows = product.variants.map((v, i) => ([
     { text: `${v.label} (stok saat ini: ${db.getTotalStock(v)})`, callback_data: `admin:${action}:${product.id}:${i}` }
   ]));
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: backCallback || 'admin:addstock' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: backCallback || 'admin:addstock' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5188,8 +5188,8 @@ function adminSupplierVariantPickKeyboard(product, action, backCallback) {
     const costLabel = typeof v.supplierCost === 'number' ? usd(v.supplierCost) : '?';
     rows.push([{ text: `${v.label} (modal: ${costLabel})`, callback_data: `admin:${action}:${product.id}:${i}` }]);
   });
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: backCallback || 'admin:supplier' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: backCallback || 'admin:supplier' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5198,8 +5198,8 @@ function adminSupplierVariantPickKeyboard(product, action, backCallback) {
 function supplierBackKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:supplier' }, 'back')],
-      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:supplier' }, 'back')],
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
     ]
   };
 }
@@ -5270,8 +5270,8 @@ function supplierMenuKeyboard() {
       { text: '🗑️ Putus', callback_data: `admin:supplierunlinkconfirm:${i}` }
     ]);
   });
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_products' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5298,7 +5298,7 @@ async function showSupplierServicePicker(chatId, messageId, productId, variantId
     text: `${s.name || s.service_id} - Modal ${usd(s.price)} (stok: ${s.stock})`,
     callback_data: `admin:supplierlink_set:${i}`
   }]));
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:supplierlink' }, 'back')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:supplierlink' }, 'back')]);
   await sendOrEditAdmin(chatId, messageId, 'Pilih produk Supplier yang mau dihubungkan:', { inline_keyboard: rows });
 }
 
@@ -5675,8 +5675,8 @@ function supplierLinkPriceKeyboard(chatId, productId, variantId) {
 function canbosoBackKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:canboso' }, 'back')],
-      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:canboso' }, 'back')],
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
     ]
   };
 }
@@ -5730,8 +5730,8 @@ function canbosoMenuKeyboard() {
       { text: '🗑️ Putus', callback_data: `admin:canbosounlinkconfirm:${i}` }
     ]);
   });
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:cat_products' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
 }
 
@@ -5759,7 +5759,7 @@ async function showCanbosoProductPicker(chatId, messageId, productId, variantId)
     callback_data: `admin:canbosolink_set:${i}`
   }]));
   rows.push([{ text: '🐞 Lihat Raw Response (debug)', callback_data: 'admin:canbosodebug' }]);
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:canbosolink' }, 'back')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:canbosolink' }, 'back')]);
   const naNote = products.some(p => isNaN(p.price))
     ? '\n\n⚠️ Ada produk yang modalnya tampil ❓ (field harga di response API tidak dikenali). Tetap bisa dihubungkan lalu isi harga jual manual lewat ✏️ Harga Custom, atau tekan 🐞 Lihat Raw Response untuk cek nama field aslinya.'
     : '';
@@ -5916,11 +5916,11 @@ async function supplierOrdersText(page) {
 
 function supplierOrdersKeyboard(page, totalPages) {
   const navRow = [];
-  if (page > 1) navRow.push({ text: '‹ Sebelumnya', callback_data: `admin:supplierorders:${page - 1}` });
-  if (page < totalPages) navRow.push({ text: 'Berikutnya ›', callback_data: `admin:supplierorders:${page + 1}` });
+  if (page > 1) navRow.push({ text: '‹ Previous', callback_data: `admin:supplierorders:${page - 1}` });
+  if (page < totalPages) navRow.push({ text: 'Next ›', callback_data: `admin:supplierorders:${page + 1}` });
   const rows = [];
   if (navRow.length) rows.push(navRow);
-  rows.push([withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:supplier' }, 'back')]);
+  rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:supplier' }, 'back')]);
   return { inline_keyboard: rows };
 }
 
@@ -5985,8 +5985,8 @@ function addStockModeKeyboard(productId, variantId) {
     inline_keyboard: [
       [withButtonIcon({ text: '📋 Kirim Link/Kode (Auto-Kirim)', callback_data: `admin:addstockmode:${ref}:items` }, 'admin_tambah_stock')],
       [withButtonIcon({ text: '🔢 Tambah Angka Saja (Manual)', callback_data: `admin:addstockmode:${ref}:qty` }, 'admin_tambah_stock')],
-      [withButtonIcon({ text: '‹ Kembali', callback_data: 'admin:addstock' }, 'back')],
-      [withButtonIcon({ text: '🏠 Menu Utama', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '‹ Back', callback_data: 'admin:addstock' }, 'back')],
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
     ]
   };
 }
@@ -6803,7 +6803,7 @@ bot.on('callback_query', async (query) => {
         {
           inline_keyboard: [
             [{ text: '✅ Ya, Putuskan', callback_data: `admin:supplierunlink:${linkedIdx}` }],
-            [{ text: '❌ Batal', callback_data: 'admin:supplier' }]
+            [{ text: '❌ Cancel', callback_data: 'admin:supplier' }]
           ]
         }
       );
@@ -6967,7 +6967,7 @@ bot.on('callback_query', async (query) => {
         {
           inline_keyboard: [
             [{ text: '✅ Ya, Putuskan', callback_data: `admin:canbosounlink:${linkedIdx}` }],
-            [{ text: '❌ Batal', callback_data: 'admin:canboso' }]
+            [{ text: '❌ Cancel', callback_data: 'admin:canboso' }]
           ]
         }
       );
