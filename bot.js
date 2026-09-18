@@ -4492,7 +4492,6 @@ function usersListText(page) {
   // making the API return a 400 "can't parse entities". HTML is far safer here
   // because only < > & need escaping (see escapeHtml()), making a clash with
   // characters that legitimately appear in a username far less likely.
-  //
   const lines = pageUsers.map(u => {
     const usernameText = u.username ? `@${escapeHtml(u.username)}` : '<i>(no username)</i>';
     return (
