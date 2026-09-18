@@ -4599,113 +4599,113 @@ async function handleBroadcastContent(msg, chatId) {
 
 // ================= ADMIN PANEL (FULL INLINE) =================
 
-// ===== Menu utama /admin — DIKELOMPOKKAN jadi 4 kategori =====
-// Sebelumnya 22 tombol admin ditumpuk jadi 1 daftar flat (20 baris) di menu
-// utama - kebanyakan scroll & susah nyari tombol tertentu begitu fitur admin
-// makin banyak. Sekarang menu utama cuma tampilkan 4 kategori; tiap kategori
-// buka submenu-nya sendiri (lihat adminProductsKeyboard() dst di bawah).
-// PENTING: callback_data tiap tombol AKSI (mis. 'admin:listproducts') TIDAK
-// diubah sama sekali - cuma dipindah pengelompokannya di UI - jadi semua
-// handler 'admin:xxx' yang sudah ada tetap jalan tanpa perlu diubah.
+// ===== The main /admin menu — GROUPED into 4 categories =====
+// The 22 admin buttons used to be stacked in one flat list (20 rows) on the main
+// menu - too much scrolling, and hard to find a particular button as the admin
+// features grew. The main menu now shows only 4 categories; each opens its own
+// submenu (see adminProductsKeyboard() and friends below).
+// IMPORTANT: the callback_data of every ACTION button ('admin:listproducts', say)
+// is UNCHANGED - only the UI grouping moved - so every existing 'admin:xxx'
+// handler keeps working untouched.
 function adminMainKeyboard() {
   return {
     inline_keyboard: [
-      [withStyle(withButtonIcon({ text: '📦 Produk & Stok', callback_data: 'admin:cat_products' }, 'admin_cat_products'), 'primary')],
-      [withStyle(withButtonIcon({ text: '💰 User & Saldo', callback_data: 'admin:cat_users' }, 'admin_cat_users'), 'primary')],
-      [withStyle(withButtonIcon({ text: '📊 Laporan & Statistik', callback_data: 'admin:cat_reports' }, 'admin_cat_reports'), 'primary')],
+      [withStyle(withButtonIcon({ text: '📦 Products & Stock', callback_data: 'admin:cat_products' }, 'admin_cat_products'), 'primary')],
+      [withStyle(withButtonIcon({ text: '💰 Users & Balance', callback_data: 'admin:cat_users' }, 'admin_cat_users'), 'primary')],
+      [withStyle(withButtonIcon({ text: '📊 Reports & Statistics', callback_data: 'admin:cat_reports' }, 'admin_cat_reports'), 'primary')],
       [withStyle(withButtonIcon({ text: '🎁 Gift (Userbot)', callback_data: 'admin:cat_gift' }, 'admin_cat_gift'), 'primary')],
-      [withStyle(withButtonIcon({ text: '⚙️ Pengaturan Toko', callback_data: 'admin:cat_settings' }, 'admin_cat_settings'), 'primary')]
+      [withStyle(withButtonIcon({ text: '⚙️ Store Settings', callback_data: 'admin:cat_settings' }, 'admin_cat_settings'), 'primary')]
     ]
   };
 }
 
-// ---- Kategori 1: Produk & Stok (11 tombol aksi, sama persis seperti sebelumnya) ----
+// ---- Category 1: Products & Stock (11 action buttons, exactly as before) ----
 function adminProductsKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '📦 Daftar Produk', callback_data: 'admin:listproducts' }, 'admin_daftar_produk')],
+      [withButtonIcon({ text: '📦 Product List', callback_data: 'admin:listproducts' }, 'admin_daftar_produk')],
       [
-        withButtonIcon({ text: '➕ Tambah Produk', callback_data: 'admin:addproduct' }, 'admin_tambah_produk'),
-        withButtonIcon({ text: '🗑️ Hapus Produk', callback_data: 'admin:removeproduct' }, 'admin_hapus_produk')
+        withButtonIcon({ text: '➕ Add Product', callback_data: 'admin:addproduct' }, 'admin_tambah_produk'),
+        withButtonIcon({ text: '🗑️ Delete Product', callback_data: 'admin:removeproduct' }, 'admin_hapus_produk')
       ],
-      [withButtonIcon({ text: '➕ Tambah Varian (produk multi-varian)', callback_data: 'admin:addvariant' }, 'admin_tambah_varian')],
-      [withButtonIcon({ text: '📥 Tambah Stock', callback_data: 'admin:addstock' }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '➕ Add Variant (multi-variant products)', callback_data: 'admin:addvariant' }, 'admin_tambah_varian')],
+      [withButtonIcon({ text: '📥 Add Stock', callback_data: 'admin:addstock' }, 'admin_tambah_stock')],
       [withButtonIcon({ text: '🔌 Supplier API', callback_data: 'admin:supplier' }, 'admin_supplier_api')],
       [withButtonIcon({ text: '🔌 Canboso API', callback_data: 'admin:canboso' }, 'admin_supplier_api')],
       [
-        withButtonIcon({ text: '💲 Set Harga', callback_data: 'admin:setprice' }, 'admin_set_harga'),
-        withButtonIcon({ text: '📝 Set Deskripsi', callback_data: 'admin:setdesc' }, 'admin_set_deskripsi')
+        withButtonIcon({ text: '💲 Set Price', callback_data: 'admin:setprice' }, 'admin_set_harga'),
+        withButtonIcon({ text: '📝 Set Description', callback_data: 'admin:setdesc' }, 'admin_set_deskripsi')
       ],
-      [withButtonIcon({ text: '🎁 Set Tier Diskon Grosir', callback_data: 'admin:settierprice' }, 'admin_set_tier_diskon')],
+      [withButtonIcon({ text: '🎁 Set Bulk Discount Tiers', callback_data: 'admin:settierprice' }, 'admin_set_tier_diskon')],
       [
         withButtonIcon({ text: '✏️ Set How to Use', callback_data: 'admin:sethowto' }, 'admin_set_howto'),
         withButtonIcon({ text: '🖼️ Set Logo', callback_data: 'admin:setlogo' }, 'admin_set_logo')
       ],
-      [withButtonIcon({ text: '😀 Ganti Emoji Produk', callback_data: 'admin:setemoji' }, 'admin_set_emoji')],
+      [withButtonIcon({ text: '😀 Change Product Emoji', callback_data: 'admin:setemoji' }, 'admin_set_emoji')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
 
-// ---- Kategori 2: User & Saldo ----
+// ---- Category 2: Users & Balance ----
 function adminUsersKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '💰 Atur Saldo User', callback_data: 'admin:addbalance' }, 'admin_atur_saldo')],
-      [withButtonIcon({ text: '📋 List User', callback_data: 'admin:listusers:1' }, 'admin_list_user')],
+      [withButtonIcon({ text: '💰 Manage User Balance', callback_data: 'admin:addbalance' }, 'admin_atur_saldo')],
+      [withButtonIcon({ text: '📋 User List', callback_data: 'admin:listusers:1' }, 'admin_list_user')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
 
-// ---- Kategori 3: Laporan & Statistik ----
+// ---- Category 3: Reports & Statistics ----
 function adminReportsKeyboard() {
   return {
     inline_keyboard: [
       [
-        withButtonIcon({ text: '📜 Log Pengiriman', callback_data: 'admin:deliverylog' }, 'admin_log_pengiriman'),
-        withButtonIcon({ text: '🔍 Cek Order ID', callback_data: 'admin:checkorder' }, 'admin_cek_order')
+        withButtonIcon({ text: '📜 Delivery Log', callback_data: 'admin:deliverylog' }, 'admin_log_pengiriman'),
+        withButtonIcon({ text: '🔍 Check Order ID', callback_data: 'admin:checkorder' }, 'admin_cek_order')
       ],
-      [withButtonIcon({ text: '📊 Statistik', callback_data: 'admin:stats' }, 'admin_statistik')],
+      [withButtonIcon({ text: '📊 Statistics', callback_data: 'admin:stats' }, 'admin_statistik')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
 
-// ---- Kategori 4: Pengaturan Toko ----
+// ---- Category 4: Store Settings ----
 function adminSettingsKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '🛠️ Maintenance Bot', callback_data: 'admin:maintenance' }, 'admin_maintenance')],
-      [withButtonIcon({ text: '🎨 Kelola Emoji ID', callback_data: 'admin:emojiids' }, 'admin_kelola_emoji')],
+      [withButtonIcon({ text: '🛠️ Bot Maintenance', callback_data: 'admin:maintenance' }, 'admin_maintenance')],
+      [withButtonIcon({ text: '🎨 Manage Emoji ID', callback_data: 'admin:emojiids' }, 'admin_kelola_emoji')],
       [withButtonIcon({ text: '💾 Auto Backup', callback_data: 'admin:backup' }, 'admin_auto_backup')],
       [withButtonIcon({ text: '📢 Broadcast', callback_data: 'admin:broadcast' }, 'admin_broadcast')],
-      [withButtonIcon({ text: '🔐 Wajib Join Channel/Grup', callback_data: 'admin:forcejoin' }, 'admin_forcejoin')],
-      [withButtonIcon({ text: '📣 Set Notifikasi Channel', callback_data: 'admin:channelnotif' }, 'admin_channel_notif')],
+      [withButtonIcon({ text: '🔐 Force Join Channel/Group', callback_data: 'admin:forcejoin' }, 'admin_forcejoin')],
+      [withButtonIcon({ text: '📣 Set Channel Notifications', callback_data: 'admin:channelnotif' }, 'admin_channel_notif')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
 
-// ---- Kategori 5: Gift (Userbot) ----
+// ---- Category 5: Gift (Userbot) ----
 function adminGiftKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '🌟 Cek Saldo Stars', callback_data: 'admin:gift_balance' }, 'admin_gift_balance')],
-      [withButtonIcon({ text: '📜 Riwayat Gift Order', callback_data: 'admin:gift_history' }, 'admin_gift_history')],
-      [withButtonIcon({ text: '🎁 Kelola Emoji Gift', callback_data: 'admin:giftemoji' }, 'admin_gift_emoji')],
-      [withButtonIcon({ text: '💲 Atur Harga Gift', callback_data: 'admin:giftpricing' }, 'admin_gift_pricing')],
+      [withButtonIcon({ text: '🌟 Check Stars Balance', callback_data: 'admin:gift_balance' }, 'admin_gift_balance')],
+      [withButtonIcon({ text: '📜 Gift Order History', callback_data: 'admin:gift_history' }, 'admin_gift_history')],
+      [withButtonIcon({ text: '🎁 Manage Gift Emoji', callback_data: 'admin:giftemoji' }, 'admin_gift_emoji')],
+      [withButtonIcon({ text: '💲 Set Gift Pricing', callback_data: 'admin:giftpricing' }, 'admin_gift_pricing')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
 }
 
-// ===== Fitur "💲 Atur Harga Gift" =====
-// Override live (tanpa restart) untuk GIFT_MARKUP_PCT & STARS_TO_USD_RATE
-// dari .env - dipakai giftPriceUsd() di fitur Buy Gift/Confess Gift.
-// Disimpan di db.settings.giftPricing (lihat db.js) - null berarti
-// masih pakai default .env, jadi kalau admin belum pernah sentuh menu ini
-// harga tetap sama persis kayak sebelumnya.
+// ===== The "💲 Set Gift Pricing" feature =====
+// A live override (no restart needed) for GIFT_MARKUP_PCT and STARS_TO_USD_RATE
+// from .env - used by giftPriceUsd() in the Buy Gift/Confess Gift features.
+// Stored in db.settings.giftPricing (see db.js) - null means the .env default is
+// still in use, so if an admin has never touched this menu the pricing stays
+// exactly as it was.
 function adminGiftPricingText() {
   const pricing = db.getGiftPricingSettings();
   const effectiveMarkup = pricing.markupPct != null ? pricing.markupPct : GIFT_MARKUP_PCT;
@@ -4713,12 +4713,12 @@ function adminGiftPricingText() {
   const sampleStars = 50;
   const samplePrice = usd((sampleStars * effectiveRate) * (1 + effectiveMarkup / 100));
   return (
-    `💲 <b>Atur Harga Gift</b>\n\n` +
-    `Berlaku untuk 🎁 Buy Gift/Confess Gift.\n\n` +
-    `📈 Markup: <b>${effectiveMarkup}%</b>${pricing.markupPct == null ? ' <i>(default .env)</i>' : ' <i>(custom)</i>'}\n` +
-    `💱 Kurs Stars→USD: <b>${effectiveRate}</b>${pricing.starsToUsdRate == null ? ' <i>(default .env)</i>' : ' <i>(custom)</i>'}\n\n` +
-    `Contoh: gift ${sampleStars}⭐ → harga jual ≈ <b>${samplePrice}</b>\n\n` +
-    `Pilih yang mau diubah:`
+    `💲 <b>Set Gift Pricing</b>\n\n` +
+    `Applies to 🎁 Buy Gift / Confess Gift.\n\n` +
+    `📈 Markup: <b>${effectiveMarkup}%</b>${pricing.markupPct == null ? ' <i>(.env default)</i>' : ' <i>(custom)</i>'}\n` +
+    `💱 Stars→USD rate: <b>${effectiveRate}</b>${pricing.starsToUsdRate == null ? ' <i>(.env default)</i>' : ' <i>(custom)</i>'}\n\n` +
+    `Example: a ${sampleStars}⭐ gift → sale price ≈ <b>${samplePrice}</b>\n\n` +
+    `Choose what to change:`
   );
 }
 
@@ -4726,10 +4726,10 @@ function adminGiftPricingKeyboard() {
   const pricing = db.getGiftPricingSettings();
   return {
     inline_keyboard: [
-      [{ text: '📈 Ubah Markup %', callback_data: 'admin:giftpricingmarkup' }],
-      [{ text: '💱 Ubah Kurs Stars→USD', callback_data: 'admin:giftpricingrate' }],
+      [{ text: '📈 Change Markup %', callback_data: 'admin:giftpricingmarkup' }],
+      [{ text: '💱 Change Stars→USD Rate', callback_data: 'admin:giftpricingrate' }],
       ...(pricing.markupPct != null || pricing.starsToUsdRate != null
-        ? [[withStyle({ text: '↩️ Reset ke Default .env', callback_data: 'admin:giftpricingreset' }, 'danger')]]
+        ? [[withStyle({ text: '↩️ Reset to the .env Default', callback_data: 'admin:giftpricingreset' }, 'danger')]]
         : []),
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_gift' }, 'back')],
       [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
@@ -4737,13 +4737,13 @@ function adminGiftPricingKeyboard() {
   };
 }
 
-// Beda dari "🎨 Kelola Emoji ID" biasa (yang daftar key-nya STATIS di
-// EMOJI_CATEGORIES) - daftar di sini DINAMIS, diambil live dari katalog gift
-// Telegram (userbot.getGiftCatalog()), soalnya katalog gift bisa berubah
-// (item limited baru muncul / sold out). Tetap PAKAI ALUR CAPTURE yang SAMA
-// (pending.type 'set_emoji_id', lihat handler-nya) - cuma scope-nya "gift"
-// dan key-nya giftId (bukan stars), supaya 2 gift beda yang harganya
-// kebetulan sama tetap bisa dikasih ikon beda-beda.
+// Unlike the ordinary "🎨 Manage Emoji ID" (whose key list is STATIC in
+// EMOJI_CATEGORIES), the list here is DYNAMIC, pulled live from the Telegram gift
+// catalogue (userbot.getGiftCatalog()), because that catalogue changes (new
+// limited items appear, others sell out). It still uses the SAME CAPTURE FLOW
+// (pending.type 'set_emoji_id', see its handler) - only the scope is "gift" and
+// the key is the giftId (not the star amount), so two different gifts that happen
+// to cost the same can still have different icons.
 function isGiftEmojiFilled(giftId) {
   return !!db.getEmojiId(`gift:${giftId}`);
 }
@@ -4766,23 +4766,23 @@ async function adminGiftEmojiListKeyboard() {
 
 function adminGiftEmojiListText() {
   return (
-    `🎁 <b>Kelola Emoji Gift</b>\n\n` +
-    `Daftar gift Telegram Stars yang lagi aktif di katalog (🎁 Buy Gift / 💌 Confess Gift). Tap salah satu buat pasang/ganti ikon custom emoji-nya.\n\n` +
-    `✅ = sudah ada ID custom (override manual)\n` +
-    `⚪ = masih pakai ikon dari Telegram (kalau ada) / fallback default\n\n` +
-    `<i>Catatan: kalau katalog gift Telegram berubah (item baru muncul / limited habis), daftar di bawah ikut berubah otomatis - gift lama yang sudah di-set ikonnya tidak hilang dari database, cuma tidak muncul lagi di daftar ini kalau sudah tidak dijual.</i>`
+    `🎁 <b>Manage Gift Emoji</b>\n\n` +
+    `The Telegram Stars gifts currently active in the catalogue (🎁 Buy Gift / 💌 Confess Gift). Tap one to set or change its custom emoji icon.\n\n` +
+    `✅ = a custom ID is set (a manual override)\n` +
+    `⚪ = still using Telegram's own icon (where available) / the default fallback\n\n` +
+    `<i>Note: when the Telegram gift catalogue changes (new items appearing, limited ones selling out), the list below changes with it automatically - a gift whose icon you already set is not removed from the database, it simply stops appearing in this list once it is no longer sold.</i>`
   );
 }
 
-// ===== Data buat fitur "🎨 Kelola Emoji ID" (tangkap custom_emoji_id otomatis) =====
-// Dikelompokkan sama persis dengan komentar section di emoji-id-menu-inline.js,
-// supaya gampang dicocokkan kalau admin lebih suka edit manual di file itu.
+// ===== Data for the "🎨 Manage Emoji ID" feature (automatic custom_emoji_id capture) =====
+// Grouped exactly like the section comments in emoji-id-menu-inline.js, so they
+// are easy to match up if an admin prefers editing that file by hand.
 const EMOJI_CATEGORIES = [
-  { id: 'main', label: '🎯 Menu Utama', keys: ['buy_produk', 'profile', 'saldo_saya', 'topup', 'riwayat_pembelian', 'how_to_use', 'referral', 'support'] },
-  { id: 'nav', label: '🧭 Navigasi Umum', keys: ['back', 'go_back'] },
-  { id: 'desc', label: '📄 Halaman Deskripsi Produk', keys: ['how_to_use', 'buy_now'] },
-  { id: 'qty', label: '🛒 Jumlah & Konfirmasi', keys: ['jumlah_custom', 'place_order', 'cancel_order'] },
-  { id: 'wallet', label: '💳 Menu Wallet / Topup', keys: [
+  { id: 'main', label: '🎯 Main Menu', keys: ['buy_produk', 'profile', 'saldo_saya', 'topup', 'riwayat_pembelian', 'how_to_use', 'referral', 'support'] },
+  { id: 'nav', label: '🧭 General Navigation', keys: ['back', 'go_back'] },
+  { id: 'desc', label: '📄 Product Description Page', keys: ['how_to_use', 'buy_now'] },
+  { id: 'qty', label: '🛒 Quantity & Confirmation', keys: ['jumlah_custom', 'place_order', 'cancel_order'] },
+  { id: 'wallet', label: '💳 Wallet / Topup Menu', keys: [
     'topup_qris', 'topup_usdt', 'topup_ton', 'topup_binance', 'batal',
     'nominal_cepat', 'nominal_custom', 'batalkan_qris',
     'copy_address_usdt', 'batalkan_usdt',
@@ -4790,9 +4790,9 @@ const EMOJI_CATEGORIES = [
     'copy_id_binance', 'batalkan_binance'
   ] },
   { id: 'admin', label: '🔧 Admin Panel', keys: [
-    // 4 tombol kategori di menu utama /admin (lihat adminMainKeyboard())
+    // The 4 category buttons in the main /admin menu (see adminMainKeyboard())
     'admin_cat_products', 'admin_cat_users', 'admin_cat_reports', 'admin_cat_gift', 'admin_cat_settings',
-    // Tombol shortcut "🏠 Menu Utama" di semua submenu/halaman admin
+    // The "🏠 Main Menu" shortcut button on every admin submenu/page
     'admin_menu_utama',
     'admin_daftar_produk', 'admin_tambah_produk', 'admin_hapus_produk', 'admin_tambah_stock', 'admin_supplier_api',
     'admin_tambah_varian', 'admin_set_harga', 'admin_set_howto', 'admin_set_deskripsi', 'admin_set_logo', 'admin_set_emoji', 'admin_atur_saldo', 'admin_topup_pending',
