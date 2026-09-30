@@ -5202,18 +5202,18 @@ function supplierBackKeyboard() {
   };
 }
 
-// Tampilan utama "Supplier API": status koneksi (saldo toko di AIVerse
-// Hub, kalau API key sudah diisi) + daftar varian yang sedang terhubung.
+// The main "Supplier API" screen: connection status (the store's balance on
+// AIVerse Hub, when the API key is set) plus the list of currently linked variants.
 async function supplierMenuText() {
   let statusLine;
   if (!AIVERSEHUB_API_KEY) {
-    statusLine = '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env` - fitur ini belum bisa dipakai.';
+    statusLine = '⚠️ *AIVERSEHUB_API_KEY* has not been set in `.env` - this feature cannot be used yet.';
   } else {
     try {
       const me = await supplier.getMe();
-      statusLine = `🟢 Terhubung - saldo toko di Supplier: *${usd(me.wallet_balance)}*`;
+      statusLine = `🟢 Connected - the store's balance at the supplier: *${usd(me.wallet_balance)}*`;
     } catch (err) {
-      statusLine = `🔴 Gagal cek koneksi ke Supplier: _${err.message}_`;
+      statusLine = `🔴 Failed to check the connection to the supplier: _${err.message}_`;
     }
   }
 
@@ -5224,48 +5224,47 @@ async function supplierMenuText() {
         const sell = db.getBasePrice(l.variant);
         const cost = l.variant.supplierCost;
         const marginTag = (typeof cost === 'number')
-          ? (sell <= cost ? ' ⚠️ RUGI/IMPAS' : ` (untung ${usd(sell - cost)}/pcs)`)
+          ? (sell <= cost ? ' ⚠️ LOSS/BREAK-EVEN' : ` (profit ${usd(sell - cost)}/pcs)`)
           : '';
-        return `• *${label}* → \`${l.variant.supplierServiceId}\`\n   Modal: ${typeof cost === 'number' ? usd(cost) : '?'} • Jual: ${usd(sell)}${marginTag}`;
+        return `• *${label}* → \`${l.variant.supplierServiceId}\`\n   Cost: ${typeof cost === 'number' ? usd(cost) : '?'} • Sale: ${usd(sell)}${marginTag}`;
       }).join('\n')
-    : '_Belum ada varian yang terhubung._';
+    : '_No variant is linked yet._';
 
   return (
     `*Supplier API*\n\n` +
     `${statusLine}\n\n` +
-    `Varian produk yang dihubungkan ke sini akan dipesan & dipenuhi OTOMATIS lewat Supplier setiap ada buyer beli (bukan dari stok lokal lagi).\n\n` +
-    `🔄 Auto-sync modal & stok: ${(AIVERSEHUB_API_KEY && SUPPLIER_SYNC_INTERVAL_MINUTES > 0) ? `*aktif*, tiap *${SUPPLIER_SYNC_INTERVAL_MINUTES} menit*` : '*mati* (ubah `SUPPLIER_SYNC_INTERVAL_MINUTES` di .env untuk mengaktifkan, atau refresh manual di bawah)'}\n\n` +
-    `📋 *Varian Terhubung:*\n${list}`
+    `Product variants linked here are ordered and fulfilled AUTOMATICALLY through the supplier whenever a buyer purchases (no longer from local stock).\n\n` +
+    `🔄 Auto-sync of cost & stock: ${(AIVERSEHUB_API_KEY && SUPPLIER_SYNC_INTERVAL_MINUTES > 0) ? `*on*, every *${SUPPLIER_SYNC_INTERVAL_MINUTES} minutes*` : '*off* (change `SUPPLIER_SYNC_INTERVAL_MINUTES` in .env to enable it, or refresh manually below)'}\n\n` +
+    `📋 *Linked Variants:*\n${list}`
   );
 }
 
 function supplierMenuKeyboard() {
   const linked = db.getSupplierLinkedVariants();
   const rows = [];
-  rows.push([{ text: '➕ Hubungkan Produk', callback_data: 'admin:supplierlink' }]);
+  rows.push([{ text: '➕ Link a Product', callback_data: 'admin:supplierlink' }]);
   if (linked.length) {
-    rows.push([{ text: '📊 Atur Markup 3-Tier', callback_data: 'admin:suppliertiermarkuppick' }]);
+    rows.push([{ text: '📊 Set 3-Tier Markup', callback_data: 'admin:suppliertiermarkuppick' }]);
   }
   rows.push([
-    { text: '🧾 Riwayat Order', callback_data: 'admin:supplierorders:1' },
-    { text: '📊 Statistik', callback_data: 'admin:supplierstats' }
+    { text: '🧾 Order History', callback_data: 'admin:supplierorders:1' },
+    { text: '📊 Statistics', callback_data: 'admin:supplierstats' }
   ]);
-  rows.push([{ text: '🔍 Cek Order ID (API)', callback_data: 'admin:supplierorderid' }]);
+  rows.push([{ text: '🔍 Check Order ID (API)', callback_data: 'admin:supplierorderid' }]);
   if (linked.length) {
-    rows.push([{ text: '🔄 Refresh Modal & Stok', callback_data: 'admin:supplierrefresh' }]);
+    rows.push([{ text: '🔄 Refresh Cost & Stock', callback_data: 'admin:supplierrefresh' }]);
   }
-  // PENTING: callback_data di sini pakai INDEX ke `linked` (bukan
-  // productId+variantId ditulis utuh) - gabungan keduanya gampang lewat
-  // batas 64 byte Telegram (sama seperti bug BUTTON_DATA_INVALID yang
-  // sudah diperbaiki di tempat lain). Index dihitung ulang dari
-  // db.getSupplierLinkedVariants() tiap handler dipanggil, jadi selama
-  // tidak ada perubahan link di tengah-tengah admin mengetuk tombol,
-  // urutannya konsisten.
+  // IMPORTANT: the callback_data here uses an INDEX into `linked` (rather than
+  // writing out productId+variantId in full) - together they easily exceed
+  // Telegram's 64-byte limit (the same BUTTON_DATA_INVALID bug already fixed
+  // elsewhere). The index is recomputed from db.getSupplierLinkedVariants() every
+  // time a handler runs, so as long as no link changes while the admin is tapping
+  // buttons, the ordering stays consistent.
   linked.forEach((l, i) => {
     const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
     rows.push([
-      { text: `💲 Harga: ${label}`, callback_data: `admin:supplierharga:${i}` },
-      { text: '🗑️ Putus', callback_data: `admin:supplierunlinkconfirm:${i}` }
+      { text: `💲 Price: ${label}`, callback_data: `admin:supplierharga:${i}` },
+      { text: '🗑️ Unlink', callback_data: `admin:supplierunlinkconfirm:${i}` }
     ]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
@@ -5273,46 +5272,46 @@ function supplierMenuKeyboard() {
   return { inline_keyboard: rows };
 }
 
-// Ambil daftar service Supplier via API, lalu tampilkan sebagai keyboard
-// pilihan untuk dihubungkan ke productId/variantId lokal. Daftar service
-// mentah disimpan sementara di pendingAction (bukan di-encode ke
-// callback_data) karena service_id/nama dari API bisa mengandung karakter
-// apapun yang tidak aman dipakai langsung sebagai bagian callback_data.
+// Fetch the supplier's service list via the API, then show it as a keyboard of
+// options to link to a local productId/variantId. The raw service list is stored
+// temporarily in pendingAction (rather than encoded into callback_data) because a
+// service_id/name from the API can contain any character, which is not safe to
+// use directly as part of callback_data.
 async function showSupplierServicePicker(chatId, messageId, productId, variantId) {
   if (!AIVERSEHUB_API_KEY) {
-    return sendOrEditAdmin(chatId, messageId, '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`, tidak bisa ambil daftar produk Supplier.', supplierBackKeyboard());
+    return sendOrEditAdmin(chatId, messageId, '⚠️ *AIVERSEHUB_API_KEY* has not been set in `.env`, so the supplier product list cannot be fetched.', supplierBackKeyboard());
   }
   let services;
   try {
     services = await supplier.getProducts();
   } catch (err) {
-    return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil daftar produk dari Supplier:\n_${err.message}_`, supplierBackKeyboard());
+    return sendOrEditAdmin(chatId, messageId, `⚠️ Failed to fetch the product list from the supplier:\n_${err.message}_`, supplierBackKeyboard());
   }
   if (!services.length) {
-    return sendOrEditAdmin(chatId, messageId, '⚠️ Supplier tidak mengembalikan produk apapun saat ini.', supplierBackKeyboard());
+    return sendOrEditAdmin(chatId, messageId, '⚠️ The supplier returned no products at the moment.', supplierBackKeyboard());
   }
   db.setPendingAction(chatId, { type: 'supplier_link_pick', data: { productId, variantId, services } });
   const rows = services.map((s, i) => ([{
-    text: `${s.name || s.service_id} - Modal ${usd(s.price)} (stok: ${s.stock})`,
+    text: `${s.name || s.service_id} - Cost ${usd(s.price)} (stock: ${s.stock})`,
     callback_data: `admin:supplierlink_set:${i}`
   }]));
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:supplierlink' }, 'back')]);
-  await sendOrEditAdmin(chatId, messageId, 'Pilih produk Supplier yang mau dihubungkan:', { inline_keyboard: rows });
+  await sendOrEditAdmin(chatId, messageId, 'Pick the supplier product you want to link:', { inline_keyboard: rows });
 }
 
-// Teks perbandingan modal (harga API Supplier) vs harga jual lokal saat
-// ini - dipakai begitu admin baru menghubungkan/mengubah harga varian.
-// Kalau harga jual <= modal, tampilkan peringatan jelas (bukan cuma angka)
-// supaya tidak kelewat tanpa sadar jual rugi/impas.
-// Sinkron modal & stok SEMUA varian yang terhubung ke Supplier API dalam 1
-// panggilan (dipakai baik oleh tombol manual "🔄 Refresh Modal & Stok" MAUPUN
-// oleh auto-sync terjadwal, lihat scheduleSupplierSync() - supaya logikanya
-// cuma ada di 1 tempat, tidak dobel/gampang beda perilaku). Return
-// { updated, missing, lines[] } - pemanggil tinggal pilih mau ditampilkan
-// Hitung ulang array tiers dari 1 angka modal + config markup% - dipakai
-// baik oleh refreshSupplierData() (auto-sync berkala) MAUPUN handler
-// 'supplierlink_set' (saat admin baru menghubungkan varian), supaya
-// rumusnya cuma ada di 1 tempat dan konsisten di kedua alur itu.
+// Text comparing the cost (the supplier API price) against the current local sale
+// price - shown as soon as an admin links a variant or changes its price.
+// When the sale price is <= the cost, a clear warning is shown (not just numbers)
+// so selling at a loss or break-even is not missed.
+// Sync the cost and stock of EVERY variant linked to the Supplier API in one call
+// (used by both the manual "🔄 Refresh Cost & Stock" button AND the scheduled
+// auto-sync, see scheduleSupplierSync() - so the logic lives in one place and
+// cannot drift between the two). Returns { updated, missing, lines[] } - the
+// caller decides whether to display it
+// Recompute the tiers array from a single cost number plus the markup% config -
+// used by both refreshSupplierData() (the periodic auto-sync) AND the
+// 'supplierlink_set' handler (when an admin first links a variant), so the formula
+// lives in one place and stays consistent across both flows.
 function computeTiersFromCost(cost, markup) {
   return markup.map(m => ({
     min: m.min,
@@ -5321,31 +5320,31 @@ function computeTiersFromCost(cost, markup) {
   }));
 }
 
-// Minta admin ketik 3 harga jual (USD) buat tier 1-49 / 50-499 / 500+ satu
-// varian - dipakai oleh handler 'settierprice_pick'/'settierprice_variant'
-// di atas. Kalau varian belum punya tiers sama sekali (harusnya tidak
-// pernah terjadi karena addVariant/addSimpleProduct selalu isi 1 tier
-// default), tampilkan harga dasar saja sebagai gambaran "harga sekarang".
+// Ask the admin to type 3 sale prices (USD) for the 1-49 / 50-499 / 500+ tiers of
+// one variant - used by the 'settierprice_pick'/'settierprice_variant' handlers
+// above. When a variant has no tiers at all (which should never happen, because
+// addVariant/addSimpleProduct always create one default tier), only the base price
+// is shown as an indication of the "current price".
 function askSetTierPrice(chatId, messageId, product, variant) {
   db.setPendingAction(chatId, { type: 'set_tier_price', data: { productId: product.id, variantId: variant.id } });
   const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
   const currentLine = (variant.tiers && variant.tiers.length > 1)
-    ? `Tier saat ini: ${tierPricesSummary(variant.tiers)}`
-    : `Harga saat ini: ${usd(db.getBasePrice(variant))} (belum ada tier bertingkat)`;
-  // Kalau varian.priceLocked true, tier manual AMAN dari auto-sync (lihat
-  // refreshSupplierData()) - beda pesan dari kondisi default (belum dikunci)
-  // supaya admin tahu status kunci saat ini tanpa perlu buka menu lain.
+    ? `Current tiers: ${tierPricesSummary(variant.tiers)}`
+    : `Current price: ${usd(db.getBasePrice(variant))} (no tiered pricing yet)`;
+  // When variant.priceLocked is true, the manual tiers are SAFE from auto-sync
+  // (see refreshSupplierData()) - a different message from the default (unlocked)
+  // state, so the admin knows the current lock status without opening another menu.
   const supplierNote = variant.supplierServiceId
     ? (variant.priceLocked
-        ? '\n\n🔒 Harga manual varian ini DIKUNCI - auto-sync Supplier tetap update modal & stok, tapi tier harga TIDAK akan ditimpa. Tekan tombol di bawah buat buka kunci lagi.'
-        : '\n\n⚠️ Varian ini terhubung Supplier API - tier manual ini akan TERTIMPA lagi begitu sync modal berikutnya jalan (otomatis atau lewat "🔄 Refresh Modal & Stok"). Tekan "🔒 Kunci Harga Manual" di bawah kalau tidak mau ketimpa, atau pakai "📊 Atur Markup 3-Tier" kalau memang mau harga selalu ikut modal.')
+        ? '\n\n🔒 This variant\'s manual price is LOCKED - the Supplier auto-sync still updates cost and stock, but the price tiers will NOT be overwritten. Press the button below to unlock it again.'
+        : '\n\n⚠️ This variant is linked to the Supplier API - these manual tiers will be OVERWRITTEN as soon as the next cost sync runs (automatically or via "🔄 Refresh Cost & Stock"). Press "🔒 Lock Manual Price" below if you do not want that, or use "📊 Set 3-Tier Markup" if you do want the price to always follow the cost.')
     : '';
   let keyboard = adminBackKeyboard('admin:cat_products');
   if (variant.supplierServiceId) {
     const variantIndex = product.variants.findIndex(v => v.id === variant.id);
     const lockButton = variant.priceLocked
-      ? { text: '🔓 Buka Kunci Harga Manual', callback_data: `admin:pricelocktoggle:${product.id}:${variantIndex}` }
-      : { text: '🔒 Kunci Harga Manual', callback_data: `admin:pricelocktoggle:${product.id}:${variantIndex}` };
+      ? { text: '🔓 Unlock Manual Price', callback_data: `admin:pricelocktoggle:${product.id}:${variantIndex}` }
+      : { text: '🔒 Lock Manual Price', callback_data: `admin:pricelocktoggle:${product.id}:${variantIndex}` };
     keyboard = {
       inline_keyboard: [
         [lockButton],
@@ -5354,20 +5353,20 @@ function askSetTierPrice(chatId, messageId, product, variant) {
     };
   }
   return sendOrEditAdmin(chatId, messageId,
-    `🎁 *Set Tier Diskon Grosir - ${label}*\n\n${currentLine}\n\n` +
-    `Ketik 3 harga USD dipisah koma buat tier *1-49 / 50-499 / 500+* (boleh desimal, TANPA tanda $).\n` +
-    `Contoh: \`0.65,0.69,0.65\` artinya 1-49 pcs = $0.65, 50-499 pcs = $0.69, 500+ pcs = $0.65.\n\n` +
-    `Ketik /cancel untuk batal.${supplierNote}`,
+    `🎁 *Set Bulk Discount Tiers - ${label}*\n\n${currentLine}\n\n` +
+    `Type 3 USD prices separated by commas for the *1-49 / 50-499 / 500+* tiers (decimals allowed, WITHOUT a $ sign).\n` +
+    `Example: \`0.65,0.69,0.65\` means 1-49 pcs = $0.65, 50-499 pcs = $0.69, 500+ pcs = $0.65.\n\n` +
+    `Type /cancel to abort.${supplierNote}`,
     keyboard
   );
 }
 
-// Minta admin ketik 3 angka PERSEN markup (dari modal Supplier) buat tier
-// 1-49 / 50-499 / 500+ satu varian - versi "markup%" dari askSetTierPrice()
-// di atas, dipakai KHUSUS varian yang terhubung Supplier API (butuh modal
-// live buat dihitung). Dipanggil dari 2 alur (lihat handler 'suppliertiermarkup'
-// dan 'suppliertiermarkuppick_variant' di atas) supaya tampilan & pending
-// action-nya konsisten di keduanya.
+// Ask the admin to type 3 markup PERCENTAGES (on the supplier cost) for the
+// 1-49 / 50-499 / 500+ tiers of one variant - the "markup%" version of
+// askSetTierPrice() above, used SPECIFICALLY for variants linked to the Supplier
+// API (which need a live cost to compute from). Called from 2 flows (see the
+// 'suppliertiermarkup' and 'suppliertiermarkuppick_variant' handlers above) so the
+// display and pending action stay consistent in both.
 function askSetTierMarkup(chatId, messageId, product, variant) {
   db.setPendingAction(chatId, { type: 'set_tier_markup', data: { productId: product.id, variantId: variant.id } });
   const label = variant.label && variant.label !== product.name ? `${product.name} - ${variant.label}` : product.name;
@@ -5377,12 +5376,12 @@ function askSetTierMarkup(chatId, messageId, product, variant) {
     ? tierPricesSummary(computeTiersFromCost(cost, currentMarkup))
     : '?';
   return sendOrEditAdmin(chatId, messageId,
-    `📊 *Atur Markup 3-Tier - ${label}*\n\n` +
-    `${typeof cost === 'number' ? `Modal Supplier saat ini: ${usd(cost)}\n` : ''}Markup dipakai sekarang: ${currentMarkup.map(m => `${m.markupPct}%`).join(' / ')}\n` +
-    `Harga sekarang (kalau dihitung dari markup itu): ${previewNow}\n\n` +
-    `Ketik 3 angka persen dipisah koma buat tier *1-49 / 50-499 / 500+* (boleh desimal, TANPA tanda %).\n` +
-    `Contoh: \`10,7,5\` artinya tier 1-49 = modal+10%, 50-499 = modal+7%, 500+ = modal+5%.\n\n` +
-    `Harga langsung dihitung ulang dari modal SAAT INI setelah kamu kirim. Ketik /cancel untuk batal.`,
+    `📊 *Set 3-Tier Markup - ${label}*\n\n` +
+    `${typeof cost === 'number' ? `Current supplier cost: ${usd(cost)}\n` : ''}Markup in use now: ${currentMarkup.map(m => `${m.markupPct}%`).join(' / ')}\n` +
+    `Current price (if computed from that markup): ${previewNow}\n\n` +
+    `Type 3 percentage numbers separated by commas for the *1-49 / 50-499 / 500+* tiers (decimals allowed, WITHOUT a % sign).\n` +
+    `Example: \`10,7,5\` means tier 1-49 = cost+10%, 50-499 = cost+7%, 500+ = cost+5%.\n\n` +
+    `The price is recalculated from the CURRENT cost as soon as you send it. Type /cancel to abort.`,
     supplierBackKeyboard()
   );
 }
@@ -5394,7 +5393,7 @@ function tierPricesSummary(tiers) {
   }).join(' • ');
 }
 
-// sebagai pesan admin atau cuma dicek diam-diam (auto-sync).
+// as an admin message or merely checked silently (auto-sync).
 async function refreshSupplierData() {
   const linked = db.getSupplierLinkedVariants();
   if (!linked.length) return { updated: 0, missing: 0, priceAlerts: [], lines: [], linkedCount: 0 };
