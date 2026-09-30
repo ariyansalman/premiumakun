@@ -5810,36 +5810,35 @@ async function refreshCanbosoData() {
       }
     }
     updated++;
-    const stockDisplay = isNaN(remote.stock) ? '❓ (field stok belum dikenali - lihat 🐞 Raw Response)' : remote.stock;
-    lines.push(`✅ *${label}* - Modal: ${isNaN(remote.price) ? '❓' : usd(remote.price)} • Stok: ${stockDisplay}`);
+    const stockDisplay = isNaN(remote.stock) ? '❓ (stock field not recognised - see 🐞 Raw Response)' : remote.stock;
+    lines.push(`✅ *${label}* - Cost: ${isNaN(remote.price) ? '❓' : usd(remote.price)} • Stock: ${stockDisplay}`);
   }
   return { updated, missing, lines, stockChanges };
 }
 
 let canbosoSyncTimer = null;
 
-// Auto-sync modal & stok Canboso API secara berkala TANPA admin perlu klik
-// "🔄 Refresh Harga & Stok" manual - lihat CANBOSO_SYNC_INTERVAL_SECONDS di
-// config.js/.env. Mirip scheduleSupplierSync() di atas, tapi pakai satuan
-// DETIK (bukan menit, lihat penjelasan di config.js) dan TIDAK ada
-// perhitungan ulang tier dari markup% (Canboso tidak simpan markup per-
-// varian seperti Supplier API - refreshCanbosoData() cuma update modal &
-// stok, harga jual tetap manual). Kalau ada link yang rusak (product_id
-// sudah tidak ada lagi di Canboso) ATAU stok gagal diparse (NaN, nama
-// field belum dikenali), admin dikabari; kalau normal, jalan diam-diam
-// (tidak spam chat admin tiap sync).
+// Periodically auto-sync the Canboso API cost and stock WITHOUT the admin having
+// to click "🔄 Refresh Price & Stock" - see CANBOSO_SYNC_INTERVAL_SECONDS in
+// config.js/.env. Similar to scheduleSupplierSync() above, but in SECONDS (not
+// minutes, see the explanation in config.js) and WITHOUT recomputing tiers from a
+// markup% (Canboso stores no per-variant markup like the Supplier API -
+// refreshCanbosoData() only updates cost and stock, the sale price stays manual).
+// When a link is broken (the product_id no longer exists at Canboso) OR stock
+// fails to parse (NaN, an unrecognised field name), admins are notified; when all
+// is normal it runs quietly (so the admin chat is not spammed on every sync).
 function scheduleCanbosoSync() {
   if (canbosoSyncTimer) {
     clearInterval(canbosoSyncTimer);
     canbosoSyncTimer = null;
   }
   if (!CANBOSO_API_KEY || !CANBOSO_SYNC_INTERVAL_SECONDS || CANBOSO_SYNC_INTERVAL_SECONDS <= 0) return;
-  // Pengaman rate limit: nilai 1-9 detik dianggap terlalu rapat (bisa
-  // memicu 429 Too Many Requests di Canboso kalau banyak varian
-  // terhubung), otomatis dinaikkan ke minimum 10 detik.
+  // A rate-limit safeguard: a value of 1-9 seconds counts as too frequent (it
+  // could trigger a 429 Too Many Requests at Canboso when many variants are
+  // linked), so it is raised automatically to a minimum of 10 seconds.
   const intervalSec = CANBOSO_SYNC_INTERVAL_SECONDS < 10 ? 10 : CANBOSO_SYNC_INTERVAL_SECONDS;
   if (intervalSec !== CANBOSO_SYNC_INTERVAL_SECONDS) {
-    console.warn(`⚠️ CANBOSO_SYNC_INTERVAL_SECONDS=${CANBOSO_SYNC_INTERVAL_SECONDS} terlalu rapat, dinaikkan ke ${intervalSec} detik untuk jaga rate limit Canboso.`);
+    console.warn(`⚠️ CANBOSO_SYNC_INTERVAL_SECONDS=${CANBOSO_SYNC_INTERVAL_SECONDS} is too frequent; raised to ${intervalSec} seconds to protect the Canboso rate limit.`);
   }
   canbosoSyncTimer = setInterval(async () => {
     try {
@@ -5850,53 +5849,53 @@ function scheduleCanbosoSync() {
         broadcastStockSyncChanges(stockChanges).catch(err => console.error('broadcastStockSyncChanges (Canboso) error:', err.message));
       }
       if (missing > 0) {
-        const brokenLines = lines.filter(l => l.startsWith('⚠️') && l.includes('sudah tidak ada di Canboso'));
+        const brokenLines = lines.filter(l => l.startsWith('⚠️') && l.includes('no longer exists at Canboso'));
         notifyAdmins(
-          `⚠️ <b>Auto-sync Canboso API</b>: ${missing} varian bermasalah saat sinkron otomatis (${updated} lainnya berhasil diperbarui).\n\n${brokenLines.map(l => escapeHtml(l)).join('\n')}`
+          `⚠️ <b>Canboso API auto-sync</b>: ${missing} variant(s) had problems during the automatic sync (${updated} others updated successfully).\n\n${brokenLines.map(l => escapeHtml(l)).join('\n')}`
         );
       }
-      const unknownStockLines = lines.filter(l => l.includes('field stok belum dikenali'));
+      const unknownStockLines = lines.filter(l => l.includes('stock field not recognised'));
       if (unknownStockLines.length > 0) {
         notifyAdmins(
-          `⚠️ <b>Auto-sync Canboso API</b>: stok ${unknownStockLines.length} varian masih gagal terbaca (field belum dikenali).\n\n${unknownStockLines.map(l => escapeHtml(l)).join('\n')}\n\nCek 🐞 Lihat Raw Response untuk lihat nama field aslinya.`
+          `⚠️ <b>Canboso API auto-sync</b>: the stock of ${unknownStockLines.length} variant(s) still could not be read (the field is unrecognised).\n\n${unknownStockLines.map(l => escapeHtml(l)).join('\n')}\n\nCheck 🐞 View Raw Response to see the real field name.`
         );
       }
     } catch (err) {
-      console.error('Auto-sync Canboso API gagal:', err.message);
+      console.error('Canboso API auto-sync failed:', err.message);
     }
   }, intervalSec * 1000);
 }
 
 
 
-// biar gampang dibaca admin - fallback ke string mentah kalau parsing gagal.
+// so it reads easily for admins - falls back to the raw string when parsing fails.
 function formatSupplierDate(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return String(iso);
-  const bulan = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const pad = n => String(n).padStart(2, '0');
-  return `${pad(d.getDate())} ${bulan[d.getMonth()]} ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${pad(d.getDate())} ${months[d.getMonth()]} ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 const SUPPLIER_ORDERS_PAGE_SIZE = 10;
 
-// GET /api/v1/orders - riwayat order toko kita DI SISI Supplier (beda
-// dari "🧾 My Orders" buyer yang lihat riwayat beli mereka sendiri di bot
-// ini). Berguna buat admin audit: order mana yang sukses/gagal di sisi
-// supplier, tanpa perlu buka dashboard Supplier secara terpisah.
+// GET /api/v1/orders - our store's order history ON THE SUPPLIER's SIDE (different
+// from the buyer's "🧾 My Orders", which shows their own purchases in this bot).
+// Useful for admin audits: which orders succeeded or failed at the supplier,
+// without opening the supplier dashboard separately.
 async function supplierOrdersText(page) {
   if (!AIVERSEHUB_API_KEY) {
-    return { text: '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`, tidak bisa ambil riwayat order.', totalPages: 1 };
+    return { text: '⚠️ *AIVERSEHUB_API_KEY* has not been set in `.env`, so the order history cannot be fetched.', totalPages: 1 };
   }
   let json;
   try {
     json = await supplier.getOrders({ page, limit: SUPPLIER_ORDERS_PAGE_SIZE });
   } catch (err) {
-    return { text: `⚠️ Gagal ambil riwayat order dari Supplier:\n_${err.message}_`, totalPages: 1 };
+    return { text: `⚠️ Failed to fetch the order history from the supplier:\n_${err.message}_`, totalPages: 1 };
   }
   const orders = Array.isArray(json.orders) ? json.orders : [];
   if (!orders.length) {
-    return { text: '🧾 *Riwayat Order Supplier*\n\n_Belum ada order sama sekali._', totalPages: 1 };
+    return { text: '🧾 *Supplier Order History*\n\n_No orders at all yet._', totalPages: 1 };
   }
   const statusIcon = s => s === 'success' ? '✅' : s === 'pending' ? '⏳' : '❌';
   const lines = orders.map(o =>
@@ -5905,7 +5904,7 @@ async function supplierOrdersText(page) {
   ).join('\n\n');
   const totalPages = Math.max(1, Number(json.total_pages) || 1);
   return {
-    text: `🧾 *Riwayat Order Supplier* (hal. ${json.page || page}/${totalPages}, total ${json.total_orders ?? orders.length} order)\n\n${lines}`,
+    text: `🧾 *Supplier Order History* (page ${json.page || page}/${totalPages}, ${json.total_orders ?? orders.length} orders in total)\n\n${lines}`,
     totalPages,
     page: json.page || page
   };
@@ -5921,22 +5920,22 @@ function supplierOrdersKeyboard(page, totalPages) {
   return { inline_keyboard: rows };
 }
 
-// GET /api/v1/stats - ringkasan deposit, sales, dan breakdown per produk di
-// sisi Supplier. Tanpa filter start/end (pakai default periode API).
+// GET /api/v1/stats - a summary of deposits, sales, and a per-product breakdown on
+// the supplier's side. Without a start/end filter (using the API's default period).
 async function supplierStatsText() {
   if (!AIVERSEHUB_API_KEY) {
-    return '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`, tidak bisa ambil statistik.';
+    return '⚠️ *AIVERSEHUB_API_KEY* has not been set in `.env`, so statistics cannot be fetched.';
   }
   let stats;
   try {
     stats = await supplier.getStats();
   } catch (err) {
-    return `⚠️ Gagal ambil statistik dari Supplier:\n_${err.message}_`;
+    return `⚠️ Failed to fetch statistics from the supplier:\n_${err.message}_`;
   }
   const d = stats.deposits || {};
   const s = stats.sales || {};
-  // API bisa saja tidak mengembalikan sebagian field (mis. periode baru
-  // tanpa transaksi) - fallback ke 0 supaya tidak muncul "$NaN" di teks.
+  // The API may not return some fields (a new period with no transactions, say) -
+  // falling back to 0 so "$NaN" never appears in the text.
   const u = n => usd(n || 0);
   const breakdown = Array.isArray(stats.products_breakdown) ? stats.products_breakdown : [];
   const breakdownText = breakdown.length
@@ -5944,35 +5943,35 @@ async function supplierStatsText() {
         .slice()
         .sort((a, b) => (b.revenue || 0) - (a.revenue || 0))
         .slice(0, 10)
-        .map(p => `• ${p.name || p.service_id}: ${p.quantity_sold || 0} terjual - ${u(p.revenue)}`)
+        .map(p => `• ${p.name || p.service_id}: ${p.quantity_sold || 0} sold - ${u(p.revenue)}`)
         .join('\n')
-    : '_Belum ada penjualan._';
+    : '_No sales yet._';
 
   return (
-    `📊 *Statistik Supplier*\n\n` +
-    `💰 *Deposit*\n` +
-    `Hari ini: ${u(d.today)} • 7 hari: ${u(d['7d'])} • 30 hari: ${u(d['30d'])}\n` +
-    `1 tahun: ${u(d['365d'])} • Sepanjang waktu: ${u(d.all_time)}\n\n` +
-    `🛒 *Penjualan (Order via API)*\n` +
-    `Hari ini: ${u(s.today)} • 7 hari: ${u(s['7d'])} • 30 hari: ${u(s['30d'])}\n` +
-    `1 tahun: ${u(s['365d'])} • Sepanjang waktu: ${u(s.all_time)}\n\n` +
-    `📦 *Produk Terlaris*\n${breakdownText}`
+    `📊 *Supplier Statistics*\n\n` +
+    `💰 *Deposits*\n` +
+    `Today: ${u(d.today)} • 7 days: ${u(d['7d'])} • 30 days: ${u(d['30d'])}\n` +
+    `1 year: ${u(d['365d'])} • All time: ${u(d.all_time)}\n\n` +
+    `🛒 *Sales (Orders via the API)*\n` +
+    `Today: ${u(s.today)} • 7 days: ${u(s['7d'])} • 30 days: ${u(s['30d'])}\n` +
+    `1 year: ${u(s['365d'])} • All time: ${u(s.all_time)}\n\n` +
+    `📦 *Best Sellers*\n${breakdownText}`
   );
 }
 
-// Layar pilih CARA nambah stok - 📋 Link/Kode (auto-kirim, lewat
-// addStockItems) ATAU 🔢 Angka Saja (manual, lewat addManualStock, buat
-// produk yang dikirim admin sendiri secara manual ke buyer). Ditampilkan
-// begitu admin sudah pilih produk/varian tujuan di /admin -> 📥 Tambah Stock.
+// The screen for choosing HOW to add stock - 📋 Link/Code (auto-delivered, via
+// addStockItems) OR 🔢 Number Only (manual, via addManualStock, for products the
+// admin sends to the buyer themselves). Shown once the admin has picked the
+// destination product/variant under /admin -> 📥 Add Stock.
 function addStockModeText(productName, variantLabel, currentStock) {
   const title = variantLabel && variantLabel !== productName ? `${productName} - ${variantLabel}` : productName;
   return (
-    `📥 *Tambah Stock - ${title}*\n` +
-    `📦 Total stok saat ini: *${currentStock}*\n\n` +
-    `Pilih cara nambah stok:\n\n` +
-    `📋 *Link/Kode (Auto-Kirim)* - tempel link/kode redeem, otomatis terkirim ke buyer begitu ada yang beli.\n` +
-    `🔢 *Angka Saja (Manual)* - cuma nambah JUMLAH stok tanpa link/kode, cocok untuk produk yang kamu kirim manual sendiri ke buyer.\n\n` +
-    `_Begitu stok berhasil ditambah (cara manapun), bot otomatis kirim notifikasi "🔔 Stok Baru Tersedia!" + tombol Buy Now ke SEMUA user._`
+    `📥 *Add Stock - ${title}*\n` +
+    `📦 Current total stock: *${currentStock}*\n\n` +
+    `Choose how to add stock:\n\n` +
+    `📋 *Link/Code (Auto-Delivery)* - paste redeem links/codes, delivered automatically as soon as someone buys.\n` +
+    `🔢 *Number Only (Manual)* - just increases the stock COUNT without links/codes, suited to products you send to buyers manually.\n\n` +
+    `_However the stock is added, the bot automatically sends a "🔔 New Stock Available!" notification plus a Buy Now button to ALL users._`
   );
 }
 
@@ -5980,23 +5979,23 @@ function addStockModeKeyboard(productId, variantId) {
   const ref = productRef(productId, variantId);
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '📋 Kirim Link/Kode (Auto-Kirim)', callback_data: `admin:addstockmode:${ref}:items` }, 'admin_tambah_stock')],
-      [withButtonIcon({ text: '🔢 Tambah Angka Saja (Manual)', callback_data: `admin:addstockmode:${ref}:qty` }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '📋 Send Link/Code (Auto-Delivery)', callback_data: `admin:addstockmode:${ref}:items` }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '🔢 Add Number Only (Manual)', callback_data: `admin:addstockmode:${ref}:qty` }, 'admin_tambah_stock')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:addstock' }, 'back')],
       [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
     ]
   };
 }
 
-// Instruksi "Tambah Stock" dengan contoh 2 cara: satu-satu (1/1) & bulk.
+// "Add Stock" instructions with examples of both ways: one at a time and in bulk.
 function stockInstructionsText(productName, variantLabel, currentStock) {
   const title = variantLabel && variantLabel !== productName ? `${productName} - ${variantLabel}` : productName;
   return (
-    `📥 *Tambah Stock - ${title}*\n` +
-    `📦 Stok siap auto-kirim saat ini: *${currentStock}*\n\n` +
-    `Kirim data stok. *1 baris = 1 unit stok*, boleh ketik satu-satu (1 baris per pesan) atau bulk (banyak baris dalam 1 pesan sekaligus) — bebas dicampur.\n\n` +
-    `Setiap baris boleh salah satu dari 2 format ini, boleh dicampur bebas dalam kiriman yang sama:\n\n` +
-    `*1️⃣ Link/kode saja*\n` +
+    `📥 *Add Stock - ${title}*\n` +
+    `📦 Stock ready for auto-delivery: *${currentStock}*\n\n` +
+    `Send the stock data. *1 line = 1 unit of stock*; you can type them one at a time (one line per message) or in bulk (many lines in a single message) — mix freely.\n\n` +
+    `Each line may use either of these 2 formats, freely mixed in the same message:\n\n` +
+    `*1️⃣ Link/code only*\n` +
     '`https://link-redeem-1...`\n\n' +
     `*2️⃣ Kombo akun (Email + Password + Kode 2FA + Link)*\n` +
     `Pisahkan tiap field pakai tanda \`|\` (pipe), urutan tetap: Email, Password, Kode 2FA, Link.\n` +
