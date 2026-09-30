@@ -6598,7 +6598,7 @@ bot.on('callback_query', async (query) => {
       if (!productsWithVariants.length) {
         await sendOrEditAdmin(chatId, messageId, '*Link a Product to the Supplier API*\n\nThere is no product with variants yet. Add a variant first via ➕ Add Variant.', supplierBackKeyboard());
       } else {
-        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Supplier API*\n\nPilih produk lokal yang mau dihubungkan:', adminProductPickKeyboard('supplierlink_pick', productsWithVariants));
+        await sendOrEditAdmin(chatId, messageId, '*Link a Product to the Supplier API*\n\nPick the local product you want to link:', adminProductPickKeyboard('supplierlink_pick', productsWithVariants));
       }
     }
     else if (action === 'supplierlink_pick') {
@@ -6609,7 +6609,7 @@ bot.on('callback_query', async (query) => {
       if (product.variants.length === 1) {
         await showSupplierServicePicker(chatId, messageId, param, product.variants[0].id);
       } else {
-        await sendOrEditAdmin(chatId, messageId, `Hubungkan varian mana dari *${product.name}*?`, adminVariantPickKeyboard(product, 'supplierlink_variant', 'admin:supplierlink'));
+        await sendOrEditAdmin(chatId, messageId, `Which variant of *${product.name}* should be linked?`, adminVariantPickKeyboard(product, 'supplierlink_variant', 'admin:supplierlink'));
       }
     }
     else if (action === 'supplierlink_variant') {
@@ -6622,7 +6622,7 @@ bot.on('callback_query', async (query) => {
       const idx = Number(param);
       const pending = db.getPendingAction(chatId);
       if (!pending || pending.type !== 'supplier_link_pick' || !pending.data.services[idx]) {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi pilih service sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ The service-selection session has expired, start again from the Supplier API menu.', show_alert: true });
       }
       const { productId, variantId, services } = pending.data;
       const service = services[idx];
@@ -6630,21 +6630,21 @@ bot.on('callback_query', async (query) => {
       const variant = product && product.variants.find(v => v.id === variantId);
       db.clearPendingAction(chatId);
       if (!product || !variant) {
-        return sendOrEditAdmin(chatId, messageId, '⚠️ Produk/varian tidak ditemukan lagi, dibatalkan.', supplierBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, '⚠️ The product/variant no longer exists, cancelled.', supplierBackKeyboard());
       }
       const cost = typeof service.price === 'number' ? service.price : parseFloat(service.price);
       db.setVariantSupplier(productId, variantId, service.service_id, cost);
-      // Sinkron stok lokal ke stok live Supplier begitu link dibuat,
-      // supaya menu admin nggak nampilin angka manual lama yang sudah tidak
-      // relevan lagi buat varian bersupplier ini.
+      // Sync the local stock to the supplier's live stock as soon as the link is
+      // made, so the admin menu does not show a stale manual number that is no
+      // longer relevant for this supplier-backed variant.
       const liveStockOnLink = Number(service.stock);
       if (!isNaN(liveStockOnLink)) db.setVariantStock(productId, variantId, liveStockOnLink);
-      // Langsung hitung 3 tier harga jual dari modal + markup% (config.js
-      // DEFAULT_SUPPLIER_TIER_MARKUP / variant.tierMarkup) SAAT link dibuat -
-      // supaya buyer tidak sempat lihat tier lama/manual yang sudah basi
-      // sambil nunggu jadwal auto-sync berikutnya. Admin tetap bisa override
-      // pakai tombol markup cepat / harga custom di bawah kalau mau harga
-      // flat (bukan 3 tier) untuk varian ini.
+      // Compute the 3 sale price tiers from the cost plus the markup% (config.js
+      // DEFAULT_SUPPLIER_TIER_MARKUP / variant.tierMarkup) AT link time - so buyers
+      // never see stale old/manual tiers while waiting for the next scheduled
+      // auto-sync. The admin can still override with the quick markup / custom price
+      // buttons below if they want a flat price (rather than 3 tiers) for this
+      // variant.
       if (!isNaN(cost) && cost > 0) {
         const initialMarkup = db.getVariantTierMarkup(variant, DEFAULT_SUPPLIER_TIER_MARKUP);
         const initialTiers = computeTiersFromCost(cost, initialMarkup);
@@ -6653,11 +6653,11 @@ bot.on('callback_query', async (query) => {
       }
       const currentSellPrice = db.getBasePrice(variant);
       await sendOrEditAdmin(chatId, messageId,
-        `✅ *${product.name}${variant.label ? ' - ' + variant.label : ''}* berhasil dihubungkan ke Supplier API!\n\n` +
-        `Service ID: \`${service.service_id}\`\n🌐 Nama di Supplier: ${service.name || '-'}\n\n` +
-        `Mulai sekarang, tiap ada buyer beli varian ini, bot akan otomatis pesan lewat Supplier dan langsung teruskan hasilnya ke buyer - stok lokal/manual varian ini (kalau ada) tetap dipakai LEBIH DULU, baru sisa kekurangannya dipesan otomatis ke Supplier.\n\n` +
+        `✅ *${product.name}${variant.label ? ' - ' + variant.label : ''}* was linked to the Supplier API!\n\n` +
+        `Service ID: \`${service.service_id}\`\n🌐 Name at the supplier: ${service.name || '-'}\n\n` +
+        `From now on, whenever a buyer purchases this variant, the bot orders automatically through the supplier and forwards the result straight to them - this variant's local/manual stock (if any) is still used FIRST, and only the shortfall is ordered automatically from the supplier.\n\n` +
         `${marginText(cost, currentSellPrice)}\n\n` +
-        `Mau atur harga jual sekarang? Pilih markup cepat dari modal (${typeof cost === 'number' && !isNaN(cost) ? usd(cost) : '?'}), atau isi harga custom - atau langsung "Selesai" kalau harga jual sekarang sudah pas.`,
+        `Want to set the sale price now? Pick a quick markup on the cost (${typeof cost === 'number' && !isNaN(cost) ? usd(cost) : '?'}), or enter a custom price - or just press "Done" if the current sale price is already right.`,
         supplierLinkPriceKeyboard(chatId, productId, variantId)
       );
     }
@@ -6665,7 +6665,7 @@ bot.on('callback_query', async (query) => {
       const pct = Number(param);
       const priceCtx = db.getPendingAction(chatId);
       if (!priceCtx || priceCtx.type !== 'supplier_link_price_ctx') {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ This session has expired, start again from the Supplier API menu.', show_alert: true });
       }
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
@@ -6673,20 +6673,20 @@ bot.on('callback_query', async (query) => {
       if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const cost = variant.supplierCost;
       if (typeof cost !== 'number' || isNaN(cost)) {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Harga modal tidak diketahui untuk varian ini (linked sebelum fitur ini ada) - pakai ✏️ Harga Custom saja.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ The cost is unknown for this variant (it was linked before this feature existed) - use ✏️ Custom Price instead.', show_alert: true });
       }
       const newPrice = Math.round(cost * (1 + pct / 100) * 100) / 100;
       db.setVariantPrice(productId, variantId, newPrice);
-      await bot.answerCallbackQuery(query.id, { text: `✅ Harga jual di-set ${usd(newPrice)} (modal +${pct}%)` }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: `✅ Sale price set to ${usd(newPrice)} (cost +${pct}%)` }).catch(() => {});
       await sendOrEditAdmin(chatId, messageId,
-        `✅ Harga jual *${product.name}${variant.label ? ' - ' + variant.label : ''}* di-set ke ${usd(newPrice)}.\n\n${marginText(cost, newPrice)}`,
+        `✅ The sale price of *${product.name}${variant.label ? ' - ' + variant.label : ''}* was set to ${usd(newPrice)}.\n\n${marginText(cost, newPrice)}`,
         supplierLinkPriceKeyboard(chatId, productId, variantId)
       );
     }
     else if (action === 'supplierlinkcustomprice') {
       const priceCtx = db.getPendingAction(chatId);
       if (!priceCtx || priceCtx.type !== 'supplier_link_price_ctx') {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ This session has expired, start again from the Supplier API menu.', show_alert: true });
       }
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
@@ -6695,30 +6695,30 @@ bot.on('callback_query', async (query) => {
       db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId, variantId } });
       const cost = variant.supplierCost;
       await sendOrEditAdmin(chatId, messageId,
-        `✏️ *Set Harga Custom - ${product.name}${variant.label ? ' - ' + variant.label : ''}*\n\n` +
-        `${typeof cost === 'number' ? `Modal Supplier: ${usd(cost)}\n` : ''}Harga jual saat ini: ${usd(db.getBasePrice(variant))}\n\n` +
-        `Ketik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+        `✏️ *Set Custom Price - ${product.name}${variant.label ? ' - ' + variant.label : ''}*\n\n` +
+        `${typeof cost === 'number' ? `Supplier cost: ${usd(cost)}\n` : ''}Current sale price: ${usd(db.getBasePrice(variant))}\n\n` +
+        `Type the new price in USD (numbers only, decimals allowed, for example \`5\` or \`5.99\`). Type /cancel to abort.`,
         supplierBackKeyboard()
       );
     }
-    // Atur markup 3-tier (1-49/50-499/500+) KHUSUS 1 varian ini - override
-    // DEFAULT_SUPPLIER_TIER_MARKUP global di config.js. Sekali diset, tiap
-    // sync berikutnya (auto tiap SUPPLIER_SYNC_INTERVAL_MINUTES atau refresh
-    // manual) akan pakai markup INI buat hitung ulang tier dari modal live -
-    // jadi harga tetap "ikut" modal Supplier, tapi persentase untungnya
-    // sesuai yang admin mau untuk produk ini secara spesifik (mis. Gemini
-    // yang marginnya lebih tipis dari produk lain).
-    // Tombol ini muncul di 2 tempat: (1) langsung setelah admin buka "💲
-    // Harga" 1 varian tertentu (lewat pendingAction ctx 'supplier_link_price_ctx',
-    // lihat di bawah), DAN (2) standalone lewat "📊 Atur Markup 3-Tier" di
-    // menu utama Supplier API (lihat handler 'suppliertiermarkuppick' dst -
-    // alurnya sama seperti "🎁 Set Tier Diskon Grosir": pilih produk -> pilih
-    // varian -> ketik). Keduanya berakhir memanggil askSetTierMarkup() yang
-    // sama, supaya tampilan & pending action-nya konsisten di 2 alur itu.
+    // Set a 3-tier markup (1-49/50-499/500+) FOR THIS ONE variant - overriding the
+    // global DEFAULT_SUPPLIER_TIER_MARKUP in config.js. Once set, every subsequent
+    // sync (automatically every SUPPLIER_SYNC_INTERVAL_MINUTES, or a manual
+    // refresh) uses THIS markup to recompute the tiers from the live cost - so the
+    // price still follows the supplier cost, but with the profit percentage the
+    // admin wants for this specific product (a product whose margin is thinner than
+    // the others, say).
+    // This button appears in 2 places: (1) right after the admin opens "💲 Price"
+    // for one particular variant (via the 'supplier_link_price_ctx' pendingAction
+    // ctx, see below), AND (2) standalone via "📊 Set 3-Tier Markup" in the main
+    // Supplier API menu (see the 'suppliertiermarkuppick' handler and friends - the
+    // flow mirrors "🎁 Set Bulk Discount Tiers": pick a product -> pick a variant ->
+    // type). Both end up calling the same askSetTierMarkup(), so the display and
+    // pending action stay consistent across the two flows.
     else if (action === 'suppliertiermarkup') {
       const priceCtx = db.getPendingAction(chatId);
       if (!priceCtx || priceCtx.type !== 'supplier_link_price_ctx') {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Supplier API.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ This session has expired, start again from the Supplier API menu.', show_alert: true });
       }
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
@@ -6726,14 +6726,14 @@ bot.on('callback_query', async (query) => {
       if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       askSetTierMarkup(chatId, messageId, product, variant);
     }
-    // Entry point standalone (dari menu utama Supplier API) - lihat catatan
-    // di atas. Cuma tawarkan produk/varian yang MEMANG terhubung Supplier
-    // API, karena markup% ini dihitung dari modal live Supplier - kalau
-    // dipakai di varian manual, tidak ada modal buat dihitung.
+    // The standalone entry point (from the main Supplier API menu) - see the notes
+    // above. It offers only products/variants that ARE linked to the Supplier API,
+    // because this markup% is computed from the live supplier cost - on a manual
+    // variant there would be no cost to compute from.
     else if (action === 'suppliertiermarkuppick') {
       const linked = db.getSupplierLinkedVariants();
       if (!linked.length) {
-        return sendOrEditAdmin(chatId, messageId, '📊 *Atur Markup 3-Tier*\n\nBelum ada varian yang terhubung ke Supplier API. Hubungkan dulu lewat "➕ Hubungkan Produk".', supplierBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, '📊 *Set 3-Tier Markup*\n\nNo variant is linked to the Supplier API yet. Link one first via "➕ Link a Product".', supplierBackKeyboard());
       }
       const seenIds = new Set();
       const linkedProducts = [];
@@ -6749,29 +6749,29 @@ bot.on('callback_query', async (query) => {
         const variant = product.variants.find(v => v.supplierServiceId);
         return askSetTierMarkup(chatId, messageId, product, variant);
       }
-      await sendOrEditAdmin(chatId, messageId, '📊 *Atur Markup 3-Tier*\n\nPilih produk yang mau diatur (khusus varian yang terhubung Supplier API):', adminProductPickKeyboard('suppliertiermarkuppick_pick', linkedProducts));
+      await sendOrEditAdmin(chatId, messageId, '📊 *Set 3-Tier Markup*\n\nPick the product to configure (Supplier API linked variants only):', adminProductPickKeyboard('suppliertiermarkuppick_pick', linkedProducts));
     }
     else if (action === 'suppliertiermarkuppick_pick') {
       const product = db.findProduct(param);
       const linkedVariants = product ? product.variants.filter(v => v.supplierServiceId) : [];
       if (!product || !linkedVariants.length) {
-        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* tidak punya varian yang terhubung Supplier API.`, supplierBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Product *${product ? product.name : param}* has no variant linked to the Supplier API.`, supplierBackKeyboard());
       }
       if (linkedVariants.length === 1) {
         return askSetTierMarkup(chatId, messageId, product, linkedVariants[0]);
       }
-      await sendOrEditAdmin(chatId, messageId, `📊 Atur markup tier untuk *${product.name}*\n\nPilih varian (Supplier API):`, adminSupplierVariantPickKeyboard(product, 'suppliertiermarkuppick_variant', 'admin:suppliertiermarkuppick'));
+      await sendOrEditAdmin(chatId, messageId, `📊 Set the tier markup for *${product.name}*\n\nPick a variant (Supplier API):`, adminSupplierVariantPickKeyboard(product, 'suppliertiermarkuppick_variant', 'admin:suppliertiermarkuppick'));
     }
     else if (action === 'suppliertiermarkuppick_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant || !variant.supplierServiceId) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan / belum terhubung Supplier API.' });
+      if (!product || !variant || !variant.supplierServiceId) return bot.answerCallbackQuery(query.id, { text: 'Variant not found / not linked to the Supplier API.' });
       askSetTierMarkup(chatId, messageId, product, variant);
     }
     else if (action === 'supplierorderid') {
       db.setPendingAction(chatId, { type: 'supplier_orderid_lookup' });
       await sendOrEditAdmin(chatId, messageId,
-        '🔍 *Cek Order ID (Supplier)*\n\nKetik Order ID yang mau dicek (contoh: `TRXN12345`). Ini order ID DI SISI Supplier, bukan Order ID lokal bot ini. Ketik /cancel untuk batal.',
+        '🔍 *Check Order ID (Supplier)*\n\nType the Order ID to look up (for example `TRXN12345`). This is the order ID ON THE SUPPLIER\'s SIDE, not this bot\'s local Order ID. Type /cancel to abort.',
         supplierBackKeyboard()
       );
     }
@@ -6783,7 +6783,7 @@ bot.on('callback_query', async (query) => {
       const cost = variant.supplierCost;
       const currentSellPrice = db.getBasePrice(variant);
       await sendOrEditAdmin(chatId, messageId,
-        `💲 *Atur Harga - ${productName}${variant.label ? ' - ' + variant.label : ''}*\n\n${marginText(cost, currentSellPrice)}\n\nPilih markup cepat dari modal, atau isi harga custom.`,
+        `💲 *Set Price - ${productName}${variant.label ? ' - ' + variant.label : ''}*\n\n${marginText(cost, currentSellPrice)}\n\nPick a quick markup on the cost, or enter a custom price.`,
         supplierLinkPriceKeyboard(chatId, productId, variant.id)
       );
     }
@@ -6795,7 +6795,7 @@ bot.on('callback_query', async (query) => {
       const { variant, productName } = l;
       const label = `${productName}${variant.label ? ' - ' + variant.label : ''}`;
       await sendOrEditAdmin(chatId, messageId,
-        `⚠️ Yakin mau putuskan *${label}* dari Supplier API?\n\nVarian ini akan balik pakai stok lokal/manual - pastikan sudah ada stok yang diisi lewat 📥 Tambah Stock kalau mau tetap auto-kirim ke buyer.`,
+        `⚠️ Are you sure you want to unlink *${label}* from the Supplier API?\n\nThis variant goes back to local/manual stock - make sure stock has been added via 📥 Add Stock if you still want auto-delivery to buyers.`,
         {
           inline_keyboard: [
             [{ text: '✅ Ya, Putuskan', callback_data: `admin:supplierunlink:${linkedIdx}` }],
