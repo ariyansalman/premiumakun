@@ -712,7 +712,7 @@ function pollBinanceDeposit(depositId) {
             ).join('\n');
             rawTxDetail = `\n\n<b>Binance Pay transactions in this time window (no automatic match, check manually):</b>\n${escapeHtml(lines)}`;
           } else {
-            rawTxDetail = `\n\n<i>Tidak ada transaksi Binance Pay sama sekali di rentang waktu ini - kemungkinan buyer belum benar-benar transfer, salah kirim ke ID lain, atau transfer belum settle.</i>`;
+            rawTxDetail = `\n\n<i>There were no Binance Pay transactions at all in this time window - the buyer probably has not really transferred, sent to a different ID, or the transfer has not settled yet.</i>`;
           }
         } catch (rawErr) {
           rawTxDetail = `\n\n<i>Failed to fetch transaction diagnostics: ${escapeHtml(rawErr.message)}</i>`;
@@ -2134,7 +2134,7 @@ function buildStockSyncBroadcastText(changes, chatId) {
     const arrow = c.newTotal > c.oldTotal ? '📈' : '📉';
     return (
       `${productEmojiHtml(c.product)} <b>${escapeHtml(title)}</b>\n` +
-      `${teksEmoji('stockalert_total', '📊')} Stok: ${c.oldTotal} → <b>${c.newTotal}</b> pcs ${arrow}\n` +
+      `${teksEmoji('stockalert_total', '📊')} Stock: ${c.oldTotal} → <b>${c.newTotal}</b> pcs ${arrow}\n` +
       `${teksEmoji('stockalert_price', '💲')} ${usd(db.getBasePrice(c.variant), chatId)}`
     );
   });
@@ -2341,7 +2341,6 @@ bot.onText(/^\/start(?:\s+(.+))?/, async (msg, match) => {
   // never locked out of their own bot), but EVERY other user is shown the
   // maintenance message and stops here - never reaching the referral step, the
   // force-join gate, or the main menu at all.
-  // utama sama sekali.
   if (!isAdmin(chatId) && db.getMaintenanceSettings().enabled) {
     return bot.sendMessage(chatId, buildMaintenanceText(chatId), { parse_mode: 'HTML' });
   }
@@ -2408,7 +2407,6 @@ bot.on('callback_query', async (query) => {
   // callback query first with an EMPTY toast - Telegram only allows one answer per
   // callback query, so the real toast/alert from the admin handler ("⚠️ Product
   // not found.", say) would silently FAIL TO APPEAR. This guard prevents that bug.
-  // secara diam-diam. Guard ini mencegah bug itu.
   if (data.startsWith('admin:')) return;
 
   // ===== Guard for the live-repaint feature (see openProductListMsg and
@@ -5003,7 +5001,7 @@ function findTeksItemLabel(key) {
 
 function adminEmojiCategoryKeyboard() {
   const rows = EMOJI_CATEGORIES.map(cat => ([{ text: cat.label, callback_data: `admin:emojicat:${cat.id}` }]));
-  rows.push([{ text: '✍️ Emoji di Teks Pesan', callback_data: 'admin:emojiteks' }]);
+  rows.push([{ text: '✍️ Emoji in Message Text', callback_data: 'admin:emojiteks' }]);
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
   rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
   return { inline_keyboard: rows };
@@ -6030,7 +6028,6 @@ async function sendOrEditAdmin(chatId, messageId, text, keyboard, parseMode) {
 // type /cancel in the support group...") would also trigger this handler and
 // SILENTLY cancel the admin's running pending action (while they were typing a
 // long how-to-use text, say) - losing the text with no clear explanation why.
-// sudah diketik hilang tanpa peringatan jelas kenapa.
 bot.onText(/^\/cancel(?:\s|$)/, (msg) => {
   db.clearPendingAction(msg.chat.id);
   bot.sendMessage(msg.chat.id, 'Cancelled.');
