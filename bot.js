@@ -7202,14 +7202,14 @@ bot.on('callback_query', async (query) => {
             await bot.sendMessage(uid, text, { parse_mode: 'HTML' });
             success++;
           } catch (err) {
-            failed++; // biasanya karena user sudah blokir/hapus bot - lanjut ke user berikutnya
+            failed++; // usually the user has blocked or deleted the bot - move on to the next
           }
-          // Jeda kecil antar pesan supaya tidak kena rate limit Telegram (sama seperti 📢 Broadcast).
+          // A small delay between messages to stay under Telegram's rate limit (as in 📢 Broadcast).
           await new Promise(r => setTimeout(r, 40));
         }
-        const label = turningOn ? 'Maintenance Dimulai' : 'Maintenance Selesai';
+        const label = turningOn ? 'Maintenance Started' : 'Maintenance Finished';
         await bot.sendMessage(chatId,
-          `📤 *Broadcast "${label}" terkirim.*\n\n📨 Berhasil: *${success}*\n⚠️ Gagal (kemungkinan user sudah blokir bot): *${failed}*`,
+          `📤 *The "${label}" broadcast was sent.*\n\n📨 Succeeded: *${success}*\n⚠️ Failed (the user probably blocked the bot): *${failed}*`,
           { parse_mode: 'Markdown' }
         ).catch(() => {});
       }
@@ -7223,7 +7223,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'maintenance_setmsg') {
       db.setPendingAction(chatId, { type: 'maintenance_message' });
       await sendOrEditAdmin(chatId, messageId,
-        '✏️ *Set Pesan Custom Maintenance*\n\nKetik pesan yang mau ditampilkan ke user non-admin selama Mode Maintenance aktif - bebas, boleh banyak baris, boleh tag HTML `<b>...</b>`, dan kalau kamu pilih *emoji premium* langsung dari panel emoji Telegram Premium-mu, emoji itu otomatis ikut kesimpan sebagai premium juga.\n\nKetik /cancel untuk batal.',
+        '✏️ *Set the Custom Maintenance Message*\n\nType the message to show non-admin users while Maintenance Mode is on - free text, as many lines as you like, HTML tags such as `<b>...</b>` are fine, and if you pick a *premium emoji* straight from your Telegram Premium emoji panel it is saved as premium too.\n\nType /cancel to abort.',
         adminBackKeyboard('admin:cat_settings')
       );
     }
@@ -7231,11 +7231,11 @@ bot.on('callback_query', async (query) => {
     else if (action === 'maintenance_resetmsg') {
       const settings = db.setMaintenanceSettings({ message: null });
       await sendOrEditAdmin(chatId, messageId, maintenanceMenuText(settings), maintenanceMenuKeyboard(settings));
-      await bot.answerCallbackQuery(query.id, { text: '↩️ Balik pakai pesan default.' }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: '↩️ Back to the default message.' }).catch(() => {});
     }
 
     else if (action === 'backup') {
-      const sub = param; // undefined = tampilkan menu, atau 'toggle'/'setinterval'/'setgroup'/'now'
+      const sub = param; // undefined = show the menu, or 'toggle'/'setinterval'/'setgroup'/'now'
 
       if (!sub) {
         db.clearPendingAction(chatId);
@@ -7246,7 +7246,7 @@ bot.on('callback_query', async (query) => {
       else if (sub === 'toggle') {
         const current = db.getBackupSettings();
         if (!current.enabled && !current.groupId) {
-          return bot.answerCallbackQuery(query.id, { text: '⚠️ Isi dulu Group ID tujuan sebelum mengaktifkan.', show_alert: true });
+          return bot.answerCallbackQuery(query.id, { text: '⚠️ Set the destination Group ID before enabling this.', show_alert: true });
         }
         const settings = db.setBackupSettings({ enabled: !current.enabled });
         scheduleBackup();
@@ -7256,7 +7256,7 @@ bot.on('callback_query', async (query) => {
       else if (sub === 'setinterval') {
         db.setPendingAction(chatId, { type: 'backup_interval' });
         await sendOrEditAdmin(chatId, messageId,
-          '⏱️ *Atur Interval Backup*\n\nKetik interval backup dalam *MENIT* (angka saja).\n\nContoh: `60` untuk tiap jam, `15` untuk tiap 15 menit, `1440` untuk tiap hari. Minimal `1`.\n\nKetik /cancel untuk batal.',
+          '⏱️ *Set the Backup Interval*\n\nType the backup interval in *MINUTES* (numbers only).\n\nFor example: `60` for hourly, `15` for every 15 minutes, `1440` for daily. Minimum `1`.\n\nType /cancel to abort.',
           adminBackKeyboard('admin:cat_settings')
         );
       }
@@ -7264,9 +7264,9 @@ bot.on('callback_query', async (query) => {
       else if (sub === 'setgroup') {
         db.setPendingAction(chatId, { type: 'backup_groupid' });
         await sendOrEditAdmin(chatId, messageId,
-          '🆔 *Atur Group ID Tujuan*\n\nKetik Group ID Telegram tujuan (angka, group/supergroup biasanya diawali minus, contoh: `-1001234567890`).\n\n' +
-          'Cara dapat Group ID: tambahkan bot ini ke group tujuan, lalu forward pesan apapun dari group itu ke @userinfobot atau @RawDataBot untuk melihat ID-nya.\n\n' +
-          '⚠️ Bot wajib sudah jadi member di group tersebut, kalau tidak pengiriman backup akan gagal.\n\nKetik /cancel untuk batal.',
+          '🆔 *Set the Destination Group ID*\n\nType the destination Telegram Group ID (a number; groups/supergroups usually start with a minus, for example `-1001234567890`).\n\n' +
+          'How to get the Group ID: add this bot to the destination group, then forward any message from that group to @userinfobot or @RawDataBot to see it.\n\n' +
+          '⚠️ The bot must already be a member of that group, or backup delivery will fail.\n\nType /cancel to abort.',
           adminBackKeyboard('admin:cat_settings')
         );
       }
@@ -7274,49 +7274,49 @@ bot.on('callback_query', async (query) => {
       else if (sub === 'now') {
         const settings = db.getBackupSettings();
         if (!settings.groupId) {
-          return bot.answerCallbackQuery(query.id, { text: '⚠️ Isi dulu Group ID tujuan.', show_alert: true });
+          return bot.answerCallbackQuery(query.id, { text: '⚠️ Set the destination Group ID first.', show_alert: true });
         }
-        await bot.answerCallbackQuery(query.id, { text: '⏳ Membuat & mengirim backup...' });
+        await bot.answerCallbackQuery(query.id, { text: '⏳ Building and sending the backup...' });
         const result = await runBackupJob('manual');
         const followUpText = result.ok
-          ? `✅ Backup berhasil dikirim ke group \`${settings.groupId}\` (${result.sizeKb} KB).`
-          : `⚠️ Backup gagal: ${result.error}`;
+          ? `✅ The backup was sent to group \`${settings.groupId}\` (${result.sizeKb} KB).`
+          : `⚠️ The backup failed: ${result.error}`;
         await bot.sendMessage(chatId, followUpText, { parse_mode: 'Markdown' }).catch(() => {});
-        return; // sudah answerCallbackQuery manual di atas
+        return; // answerCallbackQuery was already called manually above
       }
     }
 
     else if (action === 'broadcast') {
-      const sub = param; // undefined = mulai broadcast baru, atau 'send'/'cancel'
+      const sub = param; // undefined = start a new broadcast, or 'send'/'cancel'
 
       if (!sub) {
         db.clearPendingAction(chatId);
         db.setPendingAction(chatId, { type: 'broadcast_content' });
         const totalUsers = Object.keys(db.readDb().users).length;
         await sendOrEditAdmin(chatId, messageId,
-          `📢 *Broadcast ke Semua User*\n\nTotal user saat ini: *${totalUsers}*\n\n` +
-          `Kirim sekarang pesan yang mau di-broadcast:\n` +
-          `• Ketik *teks* aja, atau\n` +
-          `• Kirim *foto* (boleh + caption, boleh tanpa caption)\n\n` +
-          `Teks/caption *bebas* — boleh banyak baris, boleh tag HTML (\`<b>bold</b>\`, \`<i>italic</i>\`, \`<u>underline</u>\`, \`<s>coret</s>\`, \`<a href="...">link</a>\`, \`<blockquote>kutipan</blockquote>\`, dll), dan kalau kamu pilih *emoji premium* langsung dari panel emoji Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga ke semua user penerima.\n\n` +
-          `Setelah dikirim ke bot, kamu akan lihat *preview* dulu sebelum benar-benar di-broadcast.\n\nKetik /cancel untuk batal.`,
+          `📢 *Broadcast to All Users*\n\nCurrent total users: *${totalUsers}*\n\n` +
+          `Send the message you want to broadcast now:\n` +
+          `• Type *text* only, or\n` +
+          `• Send a *photo* (with or without a caption)\n\n` +
+          `The text/caption is *free form* — as many lines as you like, HTML tags allowed (\`<b>bold</b>\`, \`<i>italic</i>\`, \`<u>underline</u>\`, \`<s>strikethrough</s>\`, \`<a href="...">link</a>\`, \`<blockquote>quote</blockquote>\`, etc.), and if you pick a *premium emoji* straight from your own Telegram Premium emoji panel, it reaches every recipient as premium too.\n\n` +
+          `Once you send it to the bot, you will see a *preview* before it is actually broadcast.\n\nType /cancel to abort.`,
           adminBackKeyboard('admin:cat_settings')
         );
       }
 
       else if (sub === 'cancel') {
         db.clearPendingAction(chatId);
-        await sendOrEditAdmin(chatId, messageId, '❌ Broadcast dibatalkan.', adminBackKeyboard('admin:cat_settings'));
+        await sendOrEditAdmin(chatId, messageId, '❌ The broadcast was cancelled.', adminBackKeyboard('admin:cat_settings'));
       }
 
       else if (sub === 'send') {
         const pendingBroadcast = db.getPendingAction(chatId);
         if (!pendingBroadcast || pendingBroadcast.type !== 'broadcast_confirm') {
-          return bot.answerCallbackQuery(query.id, { text: '⚠️ Tidak ada broadcast yang menunggu dikirim. Buat broadcast baru dulu.', show_alert: true });
+          return bot.answerCallbackQuery(query.id, { text: '⚠️ There is no broadcast waiting to be sent. Create a new broadcast first.', show_alert: true });
         }
         const { content } = pendingBroadcast.data;
         db.clearPendingAction(chatId);
-        await bot.answerCallbackQuery(query.id, { text: '📤 Mengirim broadcast...' });
+        await bot.answerCallbackQuery(query.id, { text: '📤 Sending the broadcast...' });
 
         const allDb = db.readDb();
         const userIds = Object.keys(allDb.users);
@@ -7330,32 +7330,32 @@ bot.on('callback_query', async (query) => {
             }
             success++;
           } catch (err) {
-            failed++; // biasanya karena user sudah blokir/hapus bot - lanjut ke user berikutnya
+            failed++; // usually the user has blocked or deleted the bot - move on to the next
           }
-          // Jeda kecil antar pesan supaya tidak kena rate limit Telegram.
+          // A small delay between messages to stay under Telegram's rate limit.
           await new Promise(r => setTimeout(r, 40));
         }
 
         await bot.sendMessage(chatId,
-          `✅ *Broadcast selesai.*\n\n📨 Berhasil terkirim: *${success}*\n⚠️ Gagal (kemungkinan user sudah blokir bot): *${failed}*`,
+          `✅ *The broadcast is finished.*\n\n📨 Sent successfully: *${success}*\n⚠️ Failed (the user probably blocked the bot): *${failed}*`,
           { parse_mode: 'Markdown' }
         );
-        return; // sudah answerCallbackQuery manual di atas
+        return; // answerCallbackQuery was already called manually above
       }
     }
 
     bot.answerCallbackQuery(query.id).catch(() => {});
   } catch (err) {
     logError('callback_query_broadcast', err);
-    bot.answerCallbackQuery(query.id, { text: 'Terjadi kesalahan.' }).catch(() => {});
+    bot.answerCallbackQuery(query.id, { text: 'An error occurred.' }).catch(() => {});
   }
 });
 
 resumePendingDeposits();
 
-// Seed sekali dari .env kalau db.json belum pernah diisi settingan backup-nya
-// - supaya bisa pre-configure BACKUP_GROUP_ID / BACKUP_INTERVAL_MINUTES di
-// .env sebelum run pertama. Setelahnya, pengaturan selalu lewat /admin.
+// Seed once from .env when db.json has never had its backup settings filled in -
+// so BACKUP_GROUP_ID / BACKUP_INTERVAL_MINUTES can be pre-configured in .env
+// before the first run. After that, settings always go through /admin.
 (function seedBackupSettingsFromEnv() {
   const current = db.getBackupSettings();
   const patch = {};
@@ -7373,4 +7373,4 @@ scheduleSupplierSync();
 scheduleCanbosoSync();
 scheduleProductListRepaint();
 
-console.log('🤖 Bot berjalan...');
+console.log('🤖 Bot is running...');
