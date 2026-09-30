@@ -5399,45 +5399,45 @@ async function refreshSupplierData() {
   if (!linked.length) return { updated: 0, missing: 0, priceAlerts: [], lines: [], linkedCount: 0 };
 
   const services = await supplier.getProducts();
-  // 1 panggilan API buat SEMUA varian sekaligus (bukan per-varian) - hemat
-  // rate limit Supplier (3 req/detik) walau varian yang terhubung banyak.
+  // One API call for ALL variants at once (rather than per variant) - saving the
+  // supplier's rate limit (3 req/sec) even with many linked variants.
   const byServiceId = new Map(services.map(s => [String(s.service_id), s]));
   let updated = 0, missing = 0, invalidPrice = 0;
-  const priceAlerts = []; // dipakai scheduleSupplierSync() buat kabari admin proaktif kalau ada lonjakan modal
-  const stockChanges = []; // dipakai scheduleSupplierSync() buat broadcast "🔔 Stok Diperbarui" ke semua user
+  const priceAlerts = []; // used by scheduleSupplierSync() to proactively alert admins to a cost spike
+  const stockChanges = []; // used by scheduleSupplierSync() to broadcast "🔔 Stock Updated" to all users
   const lines = linked.map(l => {
     const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
     const svc = byServiceId.get(String(l.variant.supplierServiceId));
     if (!svc) {
       missing++;
-      return `⚠️ *${label}* → service \`${l.variant.supplierServiceId}\` sudah tidak ada lagi di Supplier! Cek/putuskan link ini.`;
+      return `⚠️ *${label}* → service \`${l.variant.supplierServiceId}\` no longer exists at the supplier! Check or unlink it.`;
     }
     const newCost = typeof svc.price === 'number' ? svc.price : parseFloat(svc.price);
     const oldCost = typeof l.variant.supplierCost === 'number' ? l.variant.supplierCost : null;
 
-    // ===== SAFETY: jangan pernah proses modal <= 0 / bukan angka =====
-    // Kalau API Supplier sempat balas price 0/null/rusak (bug sesaat di
-    // sisi mereka), JANGAN update apapun (cost, stok, tiers) untuk varian
-    // ini di siklus sync ini - daripada harga jual ikut ke-set $0 (rugi
-    // total/produk kejual gratis). Modal & harga lama tetap dipakai sampai
-    // sync berikutnya dapat angka yang valid.
+    // ===== SAFETY: never process a cost of <= 0 or a non-number =====
+    // If the supplier API ever returns a price of 0/null/broken (a momentary bug
+    // on their side), do NOT update anything (cost, stock, tiers) for this variant
+    // in this sync cycle - rather than letting the sale price be set to $0 (a total
+    // loss / products sold for free). The old cost and price stay in use until a
+    // later sync returns a valid number.
     if (isNaN(newCost) || newCost <= 0) {
       invalidPrice++;
-      priceAlerts.push(`⚠️ *${label}*: modal dari Supplier tidak valid (${svc.price}) - harga/stok LAMA tetap dipakai, dilewati siklus ini. Cek manual!`);
-      return `⚠️ *${label}* → modal dari Supplier tidak valid (${svc.price}), DILEWATI - harga/stok lama tetap dipakai. Cek manual!`;
+      priceAlerts.push(`⚠️ *${label}*: the cost from the supplier is invalid (${svc.price}) - the OLD price/stock stays in use and this cycle was skipped. Check it manually!`);
+      return `⚠️ *${label}* → the cost from the supplier is invalid (${svc.price}), SKIPPED - the old price/stock stays in use. Check it manually!`;
     }
 
     db.setVariantSupplier(l.productId, l.variant.id, l.variant.supplierServiceId, newCost);
-    // Sinkron juga stok LOKAL varian ini ke stok live Supplier - dulu
-    // cuma ditampilkan di teks laporan tapi tidak pernah ditulis ke
-    // variant.stock, jadi menu admin & daftar produk buyer selalu nampilin
-    // angka lama/manual yang basi.
+    // Also sync this variant's LOCAL stock to the supplier's live stock - it used
+    // to be shown only in the report text and never written to variant.stock, so
+    // the admin menu and the buyer's product list always showed a stale
+    // old/manual number.
     const liveStock = Number(svc.stock);
     if (!isNaN(liveStock)) {
-      // ===== FITUR BARU: deteksi perubahan TOTAL stok (live+manual) buat
-      // trigger broadcast "🔔 Stok Diperbarui" - dibandingkan SEBELUM
-      // db.setVariantStock() menimpa liveStock, supaya oldTotal beneran
-      // representasi angka SEBELUM sync ini (bukan sudah ke-update).
+      // ===== FEATURE: detect a change in TOTAL stock (live+manual) to trigger
+      // the "🔔 Stock Updated" broadcast - compared BEFORE db.setVariantStock()
+      // overwrites liveStock, so oldTotal really represents the number BEFORE
+      // this sync (rather than an already-updated one).
       const oldTotal = db.getTotalStock(l.variant);
       db.setVariantStock(l.productId, l.variant.id, liveStock);
       const newTotal = (l.variant.stock || 0) + Math.max(0, Math.round(liveStock));
@@ -5446,64 +5446,64 @@ async function refreshSupplierData() {
         if (product) stockChanges.push({ product, variant: l.variant, oldTotal, newTotal });
       }
     }
-    // Hitung ULANG tier harga jual (1-49 / 50-499 / 500+, dst) dari modal
-    // live + markup% (lihat DEFAULT_SUPPLIER_TIER_MARKUP di config.js, atau
-    // variant.tierMarkup untuk override khusus produk ini) - supaya harga
-    // yang dilihat buyer otomatis ikut naik/turun sesuai modal terbaru
-    // Supplier, bukan angka manual yang gampang basi/rugi kalau modal naik.
-    // KECUALI kalau variant.priceLocked true ("🔒 Kunci Harga Manual" -
-    // lihat askSetTierPrice()) - admin sudah set harga manual lewat "🎁 Set
-    // Tier Diskon Grosir" dan tidak mau ketimpa lagi, jadi tier LAMA
-    // dipertahankan; modal & stok tetap ikut update seperti biasa di atas.
+    // RECOMPUTE the sale price tiers (1-49 / 50-499 / 500+, and so on) from the
+    // live cost plus the markup% (see DEFAULT_SUPPLIER_TIER_MARKUP in config.js,
+    // or variant.tierMarkup for a per-product override) - so the price buyers see
+    // automatically rises and falls with the supplier's latest cost, rather than
+    // being a manual number that goes stale or loses money when the cost rises.
+    // UNLESS variant.priceLocked is true ("🔒 Lock Manual Price" - see
+    // askSetTierPrice()) - the admin has set a manual price via "🎁 Set Bulk
+    // Discount Tiers" and does not want it overwritten, so the OLD tiers are kept;
+    // cost and stock still update as usual above.
     let newTiers = l.variant.tiers;
     if (!l.variant.priceLocked) {
       const markup = db.getVariantTierMarkup(l.variant, DEFAULT_SUPPLIER_TIER_MARKUP);
       newTiers = computeTiersFromCost(newCost, markup);
       db.setVariantTiers(l.productId, l.variant.id, newTiers);
-      l.variant.tiers = newTiers; // biar `sell`/laporan di bawah pakai tier baru, bukan yang lama di memori
+      l.variant.tiers = newTiers; // so `sell` and the report below use the new tiers, not the stale in-memory ones
     }
     updated++;
 
-    // ===== Deteksi lonjakan modal >20% dibanding sync sebelumnya =====
-    // Cuma dibandingkan kalau oldCost ada & valid (bukan link pertama kali).
-    // Dipakai scheduleSupplierSync() buat kabari admin PROAKTIF (bukan cuma
-    // kelihatan kalau admin buka menu Supplier API manual), soalnya harga
-    // jual buyer ikut berubah otomatis - admin perlu tahu kalau lonjakannya
-    // gede supaya bisa cek apakah masih masuk akal / perlu ubah markup.
+    // ===== Detect a cost swing of >20% since the previous sync =====
+    // Only compared when oldCost exists and is valid (not a first-time link).
+    // Used by scheduleSupplierSync() to alert admins PROACTIVELY (rather than only
+    // showing if an admin opens the Supplier API menu by hand), because the buyer's
+    // sale price changes automatically too - an admin needs to know about a large
+    // swing so they can check it still makes sense or change the markup.
     if (oldCost !== null && oldCost > 0) {
       const changePct = ((newCost - oldCost) / oldCost) * 100;
       if (Math.abs(changePct) >= 20) {
-        const arrow = changePct > 0 ? '📈 naik' : '📉 turun';
-        // Kalau harganya dikunci, harga JUAL tidak ikut berubah otomatis
-        // (beda dari kondisi normal) - admin tetap perlu tahu modalnya
-        // melonjak supaya bisa cek manual apakah margin masih masuk akal.
+        const arrow = changePct > 0 ? '📈 up' : '📉 down';
+        // When the price is locked, the SALE price does not change automatically
+        // (unlike the normal case) - the admin still needs to know the cost has
+        // jumped so they can check manually whether the margin still makes sense.
         const impactNote = l.variant.priceLocked
-          ? 'harga jual TIDAK berubah (dikunci) - cek margin manual!'
-          : 'harga jual ikut ter-update otomatis.';
-        priceAlerts.push(`⚠️ *${label}*: modal ${arrow} ${Math.abs(changePct).toFixed(0)}% (${usd(oldCost)} → ${usd(newCost)}) - ${impactNote}`);
+          ? 'the sale price did NOT change (locked) - check the margin manually!'
+          : 'the sale price was updated automatically.';
+        priceAlerts.push(`⚠️ *${label}*: cost ${arrow} ${Math.abs(changePct).toFixed(0)}% (${usd(oldCost)} → ${usd(newCost)}) - ${impactNote}`);
       }
     }
 
     const sell = db.getBasePrice(l.variant);
-    const marginTag = sell <= newCost ? ' ⚠️ RUGI/IMPAS' : ` (untung ${usd(sell - newCost)}/pcs)`;
+    const marginTag = sell <= newCost ? ' ⚠️ LOSS/BREAK-EVEN' : ` (profit ${usd(sell - newCost)}/pcs)`;
     const lockTag = l.variant.priceLocked ? ' 🔒' : '';
     const stockNum = Number(svc.stock);
-    const stockTag = !isNaN(stockNum) && stockNum <= 5 ? ` • ⚠️ stok Supplier tersisa ${stockNum}` : ` • stok Supplier: ${svc.stock}`;
-    // Tampilkan SEMUA tier hasil hitung (bukan cuma 1 harga dasar) supaya
-    // admin langsung lihat harga di ketiga rentang qty tanpa buka db.json.
-    return `• *${label}*${lockTag}\n   Modal: ${usd(newCost)} • Jual dasar: ${usd(sell)}${marginTag}${stockTag}\n   Tiers: ${tierPricesSummary(newTiers)}`;
+    const stockTag = !isNaN(stockNum) && stockNum <= 5 ? ` • ⚠️ only ${stockNum} left at the supplier` : ` • supplier stock: ${svc.stock}`;
+    // Show ALL the computed tiers (not just one base price) so the admin can see
+    // the price across all three qty ranges without opening db.json.
+    return `• *${label}*${lockTag}\n   Cost: ${usd(newCost)} • Base sale: ${usd(sell)}${marginTag}${stockTag}\n   Tiers: ${tierPricesSummary(newTiers)}`;
   });
   return { updated, missing, invalidPrice, priceAlerts, lines, linkedCount: linked.length, stockChanges };
 }
 
 let supplierSyncTimer = null;
 
-// Auto-sync modal & stok Supplier API secara berkala TANPA admin perlu klik
-// "🔄 Refresh Modal & Stok" manual - lihat SUPPLIER_SYNC_INTERVAL_MINUTES di
-// config.js/.env. Kalau ada link yang rusak (service_id sudah tidak ada lagi
-// di Supplier) ATAU modal Supplier melonjak/anjlok >=20% (harga jual ikut
-// ke-update otomatis), semua admin dikabari; kalau normal, jalan diam-diam
-// (tidak spam chat admin tiap N menit).
+// Periodically auto-sync the Supplier API cost and stock WITHOUT the admin having
+// to click "🔄 Refresh Cost & Stock" - see SUPPLIER_SYNC_INTERVAL_MINUTES in
+// config.js/.env. When a link is broken (the service_id no longer exists at the
+// supplier) OR the supplier cost swings by >=20% (with the sale price updating
+// automatically), every admin is notified; when all is normal it runs quietly (so
+// the admin chat is not spammed every N minutes).
 function scheduleSupplierSync() {
   if (supplierSyncTimer) {
     clearInterval(supplierSyncTimer);
@@ -5520,50 +5520,50 @@ function scheduleSupplierSync() {
       if (priceAlerts.length > 0) {
         ADMIN_IDS.forEach(id => {
           bot.sendMessage(id,
-            `📊 *Auto-sync Supplier API*: ada perubahan modal signifikan pada ${priceAlerts.length} varian.\n\n${priceAlerts.join('\n')}`,
+            `📊 *Supplier API auto-sync*: a significant cost change on ${priceAlerts.length} variant(s).\n\n${priceAlerts.join('\n')}`,
             { parse_mode: 'Markdown' }
           ).catch(() => {});
         });
       }
       if (missing > 0) {
-        const brokenLines = lines.filter(l => l.startsWith('⚠️') && l.includes('sudah tidak ada lagi di Supplier'));
+        const brokenLines = lines.filter(l => l.startsWith('⚠️') && l.includes('no longer exists at the supplier'));
         ADMIN_IDS.forEach(id => {
           bot.sendMessage(id,
-            `⚠️ *Auto-sync Supplier API*: ${missing} varian bermasalah saat sinkron otomatis (${updated} lainnya berhasil diperbarui).\n\n${brokenLines.join('\n')}`,
+            `⚠️ *Supplier API auto-sync*: ${missing} variant(s) had problems during the automatic sync (${updated} others updated successfully).\n\n${brokenLines.join('\n')}`,
             { parse_mode: 'Markdown' }
           ).catch(() => {});
         });
       }
     } catch (err) {
-      console.error('Auto-sync Supplier API gagal:', err.message);
+      console.error('Supplier API auto-sync failed:', err.message);
     }
   }, SUPPLIER_SYNC_INTERVAL_MINUTES * 60 * 1000);
 }
 
-const PRODUCT_LIST_REPAINT_INTERVAL_MS = 30 * 1000; // sapu ulang tiap 30 detik
+const PRODUCT_LIST_REPAINT_INTERVAL_MS = 30 * 1000; // sweep again every 30 seconds
 let productListRepaintTimer = null;
 
-// ===== Live-repaint warna tombol daftar produk (🟢/🔴 style) =====
-// productListKeyboard() sudah menghitung warna tombol (hijau/merah) SEGAR
-// tiap kali dipanggil - tapi itu cuma kepakai begitu buyer BARU buka menu
-// "🛒 Buy Product". Kalau buyer sudah punya menu itu KEBUKA di layarnya dari
-// beberapa menit lalu, lalu stok berubah (auto-sync Supplier/Canboso, admin
-// tambah stock, atau buyer LAIN menghabiskan stok lewat pembelian), tombol
-// yang sudah kebuka itu TIDAK ikut berubah warna sendiri - Telegram tidak
-// mendorong update apapun ke pesan yang sudah terkirim tanpa bot secara
-// eksplisit memanggil editMessageReplyMarkup lagi.
+// ===== Live repaint of the product list button colours (🟢/🔴 style) =====
+// productListKeyboard() already computes FRESH button colours (green/red) every
+// time it is called - but that only applies when a buyer has just opened the
+// "🛒 Buy Product" menu. If a buyer already had that menu open on screen from a
+// few minutes ago and then stock changes (a Supplier/Canboso auto-sync, an admin
+// adding stock, or ANOTHER buyer consuming stock through a purchase), the already-
+// open buttons do NOT change colour by themselves - Telegram pushes no update to
+// an already-sent message unless the bot explicitly calls editMessageReplyMarkup
+// again.
 //
-// Fungsi ini menyapu SEMUA pesan yang sedang ter-track (lihat
-// openProductListMsg di atas) tiap PRODUCT_LIST_REPAINT_INTERVAL_MS, dan
-// panggil editMessageReplyMarkup dengan keyboard yang baru dihitung ulang.
-// - Kalau isinya ternyata SAMA PERSIS (tidak ada stok yang berubah),
-//   Telegram balas error "message is not modified" - ini NORMAL & di-skip
-//   diam-diam (bukan tanda ada yang salah).
-// - Kalau gagal karena alasan LAIN (pesan sudah dihapus user, bot diblokir,
-//   chat tidak ditemukan, dst), entry itu dibuang dari tracking supaya
-//   tidak terus dicoba ulang tiap 30 detik selamanya.
-// - Jeda kecil antar user (sama seperti broadcast) supaya tidak memicu
-//   rate limit Telegram kalau jumlah user yang lagi buka menu ini banyak.
+// This function sweeps EVERY currently tracked message (see openProductListMsg
+// above) once per PRODUCT_LIST_REPAINT_INTERVAL_MS and calls
+// editMessageReplyMarkup with a freshly recomputed keyboard.
+// - When the content turns out to be EXACTLY the same (no stock changed),
+//   Telegram replies with a "message is not modified" error - this is NORMAL and
+//   skipped quietly (not a sign anything is wrong).
+// - When it fails for ANY OTHER reason (the user deleted the message, the bot was
+//   blocked, the chat was not found, and so on), that entry is dropped from
+//   tracking so it is not retried every 30 seconds forever.
+// - A small delay between users (as in a broadcast) so Telegram's rate limit is
+//   not triggered when many users have this menu open.
 function scheduleProductListRepaint() {
   if (productListRepaintTimer) {
     clearInterval(productListRepaintTimer);
@@ -5581,11 +5581,11 @@ function scheduleProductListRepaint() {
       }
       await new Promise(r => setTimeout(r, 40));
     }
-    // ===== PATCH v4: repaint juga halaman DETAIL (tombol "Buy Now") yang
-    // lagi ter-track - live-check Canboso dulu kalau varian itu terhubung
-    // (sama pola seperti handler 'desc:'), baru bangun ulang descKeyboard()
-    // dan timpa reply_markup-nya. Kalau produk/varian sudah dihapus admin
-    // di antara waktu itu, entry-nya dibuang diam-diam dari tracking.
+    // ===== PATCH v4: also repaint the tracked DETAIL pages (the "Buy Now"
+    // button) - live-check Canboso first when that variant is linked (the same
+    // pattern as the 'desc:' handler), then rebuild descKeyboard() and overwrite
+    // its reply_markup. If the product/variant was deleted by an admin in the
+    // meantime, the entry is dropped quietly from tracking.
     for (const [uid, entry] of Array.from(openProductDescMsg.entries())) {
       const { messageId, productId, variantId } = entry;
       const product = db.findProduct(productId);
