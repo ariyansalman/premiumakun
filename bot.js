@@ -6204,11 +6204,11 @@ bot.on('callback_query', async (query) => {
     else if (action === 'channelnotif_toggle') {
       const current = db.getChannelNotifSettings();
       if (!current.enabled && !current.chatRef) {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set dulu Channel Tujuan sebelum mengaktifkan.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set the Destination Channel before enabling this.', show_alert: true });
       }
       db.setChannelNotifSettings({ enabled: !current.enabled });
       await sendOrEditAdmin(chatId, messageId, adminChannelNotifText(), adminChannelNotifKeyboard());
-      await bot.answerCallbackQuery(query.id, { text: !current.enabled ? '🟢 Notifikasi channel diaktifkan!' : '🔴 Notifikasi channel dinonaktifkan.' }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: !current.enabled ? '🟢 Channel notifications enabled!' : '🔴 Channel notifications disabled.' }).catch(() => {});
     }
 
     else if (action === 'channelnotif_toggle_purchase') {
@@ -6242,10 +6242,10 @@ bot.on('callback_query', async (query) => {
     else if (action === 'channelnotif_setchannel') {
       db.setPendingAction(chatId, { type: 'channelnotif_setchannel' });
       await sendOrEditAdmin(chatId, messageId,
-        '🆔 *Set Channel Tujuan Notifikasi*\n\n' +
-        'Kirim *Username channel/group* (contoh: `@namachannel`) ATAU *Chat ID numerik* (contoh: `-1001234567890`).\n\n' +
-        '💡 Untuk channel/group *private* (tidak punya username publik), WAJIB pakai Chat ID numerik. Cara dapat Chat ID: tambahkan bot ini sebagai admin di channel/group tujuan, lalu forward pesan apapun dari situ ke @userinfobot / @RawDataBot.\n\n' +
-        '⚠️ Bot WAJIB sudah jadi admin di channel/group tersebut, kalau tidak pengiriman notifikasi akan gagal.\n\nKetik /cancel untuk batal.',
+        '🆔 *Set the Notification Destination Channel*\n\n' +
+        'Send the *channel/group username* (for example `@channelname`) OR a *numeric Chat ID* (for example `-1001234567890`).\n\n' +
+        '💡 For a *private* channel/group (with no public username), a numeric Chat ID is REQUIRED. How to get the Chat ID: add this bot as an admin in the destination channel/group, then forward any message from there to @userinfobot / @RawDataBot.\n\n' +
+        '⚠️ The bot MUST already be an admin in that channel/group, or notification delivery will fail.\n\nType /cancel to abort.',
         adminBackKeyboard('admin:cat_settings')
       );
     }
@@ -6253,32 +6253,32 @@ bot.on('callback_query', async (query) => {
     else if (action === 'channelnotif_test') {
       const settings = db.getChannelNotifSettings();
       if (!settings.chatRef) {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set dulu Channel Tujuan.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set the Destination Channel first.', show_alert: true });
       }
       const sampleProduct = db.findProduct('gemini-pro-18-bulan') || { name: 'Gemini Pro', emoji: '🔍', emojiId: null };
       const sampleVariant = (sampleProduct.variants && sampleProduct.variants[0]) || { label: '18 Months' };
       const sampleText = buildChannelPurchaseText(chatId, sampleProduct, sampleVariant, 100, 49.99);
       try {
         await bot.sendMessage(settings.chatRef, sampleText, { parse_mode: 'HTML', reply_markup: channelNotifKeyboard() });
-        await bot.answerCallbackQuery(query.id, { text: '✅ Contoh notifikasi terkirim ke channel!' }).catch(() => {});
+        await bot.answerCallbackQuery(query.id, { text: '✅ The sample notification was sent to the channel!' }).catch(() => {});
       } catch (err) {
-        console.error('Gagal kirim contoh notifikasi channel:', err.message);
-        await bot.answerCallbackQuery(query.id, { text: `⚠️ Gagal kirim: ${err.message}`, show_alert: true }).catch(() => {});
+        console.error('Failed to send the sample channel notification:', err.message);
+        await bot.answerCallbackQuery(query.id, { text: `⚠️ Send failed: ${err.message}`, show_alert: true }).catch(() => {});
       }
     }
 
     else if (action === 'channelnotif_test_referral') {
       const settings = db.getChannelNotifSettings();
       if (!settings.chatRef) {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set dulu Channel Tujuan.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Set the Destination Channel first.', show_alert: true });
       }
       const sampleText = buildChannelReferralText(chatId, chatId, REFERRAL_REWARD);
       try {
         await bot.sendMessage(settings.chatRef, sampleText, { parse_mode: 'HTML', reply_markup: channelNotifKeyboard() });
-        await bot.answerCallbackQuery(query.id, { text: '✅ Contoh notifikasi terkirim ke channel!' }).catch(() => {});
+        await bot.answerCallbackQuery(query.id, { text: '✅ The sample notification was sent to the channel!' }).catch(() => {});
       } catch (err) {
-        console.error('Gagal kirim contoh notifikasi channel:', err.message);
-        await bot.answerCallbackQuery(query.id, { text: `⚠️ Gagal kirim: ${err.message}`, show_alert: true }).catch(() => {});
+        console.error('Failed to send the sample channel notification:', err.message);
+        await bot.answerCallbackQuery(query.id, { text: `⚠️ Send failed: ${err.message}`, show_alert: true }).catch(() => {});
       }
     }
 
@@ -6289,114 +6289,114 @@ bot.on('callback_query', async (query) => {
         (p.variants.length
           ? p.variants.map(v => {
               const autoCount = db.getStockItemCount(p.id, v.id);
-              const autoTag = Array.isArray(v.stockItems) ? ` 🤖 auto-kirim: ${autoCount}` : '';
+              const autoTag = Array.isArray(v.stockItems) ? ` 🤖 auto-delivery: ${autoCount}` : '';
               const supplierTag = v.supplierServiceId ? ` API: ${escapeHtml(v.supplierServiceId)}` : '';
               const canbosoTag = v.canbosoProductId ? ` Canboso: ${escapeHtml(String(v.canbosoProductId))}` : '';
-              return `   - ${escapeHtml(v.label)}: mulai ${usd(db.getBasePrice(v))}, stok ${db.getTotalStock(v)} (id: ${escapeHtml(v.id)})${autoTag}${supplierTag}${canbosoTag}`;
+              return `   - ${escapeHtml(v.label)}: from ${usd(db.getBasePrice(v))}, stock ${db.getTotalStock(v)} (id: ${escapeHtml(v.id)})${autoTag}${supplierTag}${canbosoTag}`;
             }).join('\n')
-          : '   (belum ada varian)')
-      ).join('\n\n') || 'Belum ada produk.';
-      await sendOrEditAdmin(chatId, messageId, `📦 <b>Daftar Produk</b>\n\n${text}`, adminBackKeyboard('admin:cat_products'), 'HTML');
+          : '   (no variants yet)')
+      ).join('\n\n') || 'No products yet.';
+      await sendOrEditAdmin(chatId, messageId, `📦 <b>Product List</b>\n\n${text}`, adminBackKeyboard('admin:cat_products'), 'HTML');
     }
 
     else if (action === 'addproduct') {
       db.setPendingAction(chatId, { type: 'addproduct_name' });
       await sendOrEditAdmin(chatId, messageId,
-        '➕ *Tambah Produk*\n\nCukup 3 langkah: nama → harga → deskripsi.\n\n' +
-        'Ketik *emoji premium* (pilih langsung dari panel emoji Telegram Premium kamu) diikuti *nama produk*, contoh:\n' +
-        '`✨ Gemini Pro 18 Bulan`\n\n' +
-        '⚠️ Emoji-nya wajib dipilih dari panel emoji Telegram Premium kamu sendiri (bukan cuma ngetik unicode biasa), supaya kesimpan sebagai emoji premium asli. Kalau dilewati / owner belum Premium, produk tetap dibuat pakai emoji default 📦.',
+        '➕ *Add Product*\n\nJust 3 steps: name → price → description.\n\n' +
+        'Type a *premium emoji* (picked straight from your Telegram Premium emoji panel) followed by the *product name*, for example:\n' +
+        '`✨ Gemini Pro 18 Months`\n\n' +
+        '⚠️ The emoji must be picked from your own Telegram Premium emoji panel (not just typed as plain unicode) so it is saved as a real premium emoji. If it is skipped, or the owner is not Premium, the product is still created with the default 📦 icon.',
         adminBackKeyboard('admin:cat_products')
       );
     }
 
     else if (action === 'addvariant') {
-      await sendOrEditAdmin(chatId, messageId, '➕ *Tambah Varian*\n\nPilih produk tujuan:', adminProductPickKeyboard('addvariant_pick'));
+      await sendOrEditAdmin(chatId, messageId, '➕ *Add Variant*\n\nPick the destination product:', adminProductPickKeyboard('addvariant_pick'));
     }
     else if (action === 'addvariant_pick') {
       const product = db.findProduct(param);
-      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Product not found.' });
       db.setPendingAction(chatId, { type: 'addvariant_label', data: { productId: param } });
-      await sendOrEditAdmin(chatId, messageId, `➕ Tambah varian untuk *${product.name}*\n\nKetik label varian (contoh: "18 Bulan"):`, adminBackKeyboard('admin:cat_products'));
+      await sendOrEditAdmin(chatId, messageId, `➕ Add a variant to *${product.name}*\n\nType the variant label (for example "18 Months"):`, adminBackKeyboard('admin:cat_products'));
     }
 
     else if (action === 'setprice') {
       const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
       if (!productsWithVariants.length) {
-        await sendOrEditAdmin(chatId, messageId, '💲 *Set Harga Produk*\n\nBelum ada produk dengan varian. Tambah produk dulu lewat ➕ Tambah Produk.', adminBackKeyboard('admin:cat_products'));
+        await sendOrEditAdmin(chatId, messageId, '💲 *Set Product Price*\n\nThere is no product with variants yet. Add a product first via ➕ Add Product.', adminBackKeyboard('admin:cat_products'));
       } else {
-        await sendOrEditAdmin(chatId, messageId, '💲 *Set Harga Produk*\n\nPilih produk yang mau diubah harganya:', adminProductPickKeyboard('setprice_pick', productsWithVariants));
+        await sendOrEditAdmin(chatId, messageId, '💲 *Set Product Price*\n\nPick the product whose price you want to change:', adminProductPickKeyboard('setprice_pick', productsWithVariants));
       }
     }
     else if (action === 'setprice_pick') {
       const product = db.findProduct(param);
       if (!product || !product.variants.length) {
-        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, adminBackKeyboard('admin:cat_products'));
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Product *${product ? product.name : param}* has no variants yet.`, adminBackKeyboard('admin:cat_products'));
       }
       if (product.variants.length === 1) {
         const variant = product.variants[0];
         db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId: param, variantId: variant.id } });
         await sendOrEditAdmin(chatId, messageId,
-          `💲 *Set Harga - ${product.name}*\n\nHarga saat ini: ${usd(db.getBasePrice(variant))}\n\nKetik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+          `💲 *Set Price - ${product.name}*\n\nCurrent price: ${usd(db.getBasePrice(variant))}\n\nType the new price in USD (numbers only, decimals allowed, for example \`5\` or \`5.99\`). Type /cancel to abort.`,
           adminBackKeyboard('admin:cat_products')
         );
       } else {
-        await sendOrEditAdmin(chatId, messageId, `💲 Set harga untuk *${product.name}*\n\nPilih varian:`, adminVariantPickKeyboard(product, 'setprice_variant', 'admin:setprice'));
+        await sendOrEditAdmin(chatId, messageId, `💲 Set the price for *${product.name}*\n\nPick a variant:`, adminVariantPickKeyboard(product, 'setprice_variant', 'admin:setprice'));
       }
     }
     else if (action === 'setprice_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const variantId = variant.id;
       db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId: param, variantId } });
       await sendOrEditAdmin(chatId, messageId,
-        `💲 *Set Harga - ${product.name} ${variant.label}*\n\nHarga saat ini: ${usd(db.getBasePrice(variant))}\n\nKetik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+        `💲 *Set Price - ${product.name} ${variant.label}*\n\nCurrent price: ${usd(db.getBasePrice(variant))}\n\nType the new price in USD (numbers only, decimals allowed, for example \`5\` or \`5.99\`). Type /cancel to abort.`,
         adminBackKeyboard('admin:cat_products')
       );
     }
 
-    // Set tier diskon grosir (1-49 / 50-499 / 500+) langsung pakai harga USD
-    // manual - berlaku untuk SEMUA varian (produk manual maupun yang
-    // terhubung Supplier API). Beda dengan "📊 Atur Markup 3-Tier" (khusus
-    // Supplier API, lihat action 'suppliertiermarkup') yang inputnya PERSEN
-    // markup dari modal - fitur ini inputnya harga JUAL langsung per tier,
-    // jadi cocok juga dipakai produk manual yang tidak punya modal Supplier.
+    // Set the bulk discount tiers (1-49 / 50-499 / 500+) using manual USD prices
+    // directly - applies to ALL variants (both manual products and those linked to
+    // the Supplier API). Unlike "📊 Set 3-Tier Markup" (specific to the Supplier
+    // API, see the 'suppliertiermarkup' action), whose input is a markup PERCENTAGE
+    // of the cost, this feature takes the SALE price per tier directly, so it also
+    // suits manual products that have no supplier cost.
     else if (action === 'settierprice') {
       const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
       if (!productsWithVariants.length) {
-        await sendOrEditAdmin(chatId, messageId, '🎁 *Set Tier Diskon Grosir*\n\nBelum ada produk dengan varian. Tambah produk dulu lewat ➕ Tambah Produk.', adminBackKeyboard('admin:cat_products'));
+        await sendOrEditAdmin(chatId, messageId, '🎁 *Set Bulk Discount Tiers*\n\nThere is no product with variants yet. Add a product first via ➕ Add Product.', adminBackKeyboard('admin:cat_products'));
       } else {
-        await sendOrEditAdmin(chatId, messageId, '🎁 *Set Tier Diskon Grosir*\n\nPilih produk yang mau diatur tier harganya:', adminProductPickKeyboard('settierprice_pick', productsWithVariants));
+        await sendOrEditAdmin(chatId, messageId, '🎁 *Set Bulk Discount Tiers*\n\nPick the product whose price tiers you want to set:', adminProductPickKeyboard('settierprice_pick', productsWithVariants));
       }
     }
     else if (action === 'settierprice_pick') {
       const product = db.findProduct(param);
       if (!product || !product.variants.length) {
-        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, adminBackKeyboard('admin:cat_products'));
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Product *${product ? product.name : param}* has no variants yet.`, adminBackKeyboard('admin:cat_products'));
       }
       if (product.variants.length === 1) {
         const variant = product.variants[0];
         askSetTierPrice(chatId, messageId, product, variant);
       } else {
-        await sendOrEditAdmin(chatId, messageId, `🎁 Set tier diskon untuk *${product.name}*\n\nPilih varian:`, adminVariantPickKeyboard(product, 'settierprice_variant', 'admin:settierprice'));
+        await sendOrEditAdmin(chatId, messageId, `🎁 Set the discount tiers for *${product.name}*\n\nPick a variant:`, adminVariantPickKeyboard(product, 'settierprice_variant', 'admin:settierprice'));
       }
     }
     else if (action === 'settierprice_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       askSetTierPrice(chatId, messageId, product, variant);
     }
 
-    // Toggle "🔒 Kunci Harga Manual" per varian - dipanggil dari tombol di
-    // askSetTierPrice() (khusus varian Supplier API). Kalau dikunci,
-    // refreshSupplierData() skip perhitungan ulang tier dari markup tapi
-    // tetap sinkron modal & stok seperti biasa (lihat komentarnya di sana).
+    // Toggle "🔒 Lock Manual Price" per variant - called from the button in
+    // askSetTierPrice() (specific to Supplier API variants). When locked,
+    // refreshSupplierData() skips recomputing the tiers from the markup but still
+    // syncs cost and stock as usual (see its comments there).
     else if (action === 'pricelocktoggle') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const newLocked = !variant.priceLocked;
       db.setVariantPriceLock(product.id, variant.id, newLocked);
       variant.priceLocked = newLocked; // biar askSetTierPrice() di bawah langsung pakai status baru, bukan yang basi di memori
@@ -6447,7 +6447,7 @@ bot.on('callback_query', async (query) => {
     }
     else if (action === 'setlogo_pick') {
       const product = db.findProduct(param);
-      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Product not found.' });
       db.setPendingAction(chatId, { type: 'setlogo_url', data: { productId: param } });
       await sendOrEditAdmin(chatId, messageId,
         `🖼️ *Set Logo - ${product.name}*\n\n` +
@@ -6463,7 +6463,7 @@ bot.on('callback_query', async (query) => {
     }
     else if (action === 'setemoji_pick') {
       const product = db.findProduct(param);
-      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Product not found.' });
       db.setPendingAction(chatId, { type: 'setemoji_capture', data: { productId: param } });
       await sendOrEditAdmin(chatId, messageId,
         `😀 *Ganti Emoji - ${product.name}*\n\n` +
@@ -6502,7 +6502,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'sethowto_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const variantId = variant.id;
       db.setPendingAction(chatId, { type: 'sethowto_text', data: { productId: param, variantId } });
       await sendOrEditAdmin(chatId, messageId,
@@ -6548,7 +6548,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'addstock_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       db.clearPendingAction(chatId);
       await sendOrEditAdmin(chatId, messageId,
         addStockModeText(product.name, variant.label, db.getTotalStock(variant)),
@@ -6604,7 +6604,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'supplierlink_pick') {
       const product = db.findProduct(param);
       if (!product || !product.variants.length) {
-        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, supplierBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Product *${product ? product.name : param}* has no variants yet.`, supplierBackKeyboard());
       }
       if (product.variants.length === 1) {
         await showSupplierServicePicker(chatId, messageId, param, product.variants[0].id);
@@ -6615,7 +6615,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'supplierlink_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       await showSupplierServicePicker(chatId, messageId, param, variant.id);
     }
     else if (action === 'supplierlink_set') {
@@ -6670,7 +6670,7 @@ bot.on('callback_query', async (query) => {
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
       const variant = product && product.variants.find(v => v.id === variantId);
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const cost = variant.supplierCost;
       if (typeof cost !== 'number' || isNaN(cost)) {
         return bot.answerCallbackQuery(query.id, { text: '⚠️ Harga modal tidak diketahui untuk varian ini (linked sebelum fitur ini ada) - pakai ✏️ Harga Custom saja.', show_alert: true });
@@ -6691,7 +6691,7 @@ bot.on('callback_query', async (query) => {
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
       const variant = product && product.variants.find(v => v.id === variantId);
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId, variantId } });
       const cost = variant.supplierCost;
       await sendOrEditAdmin(chatId, messageId,
@@ -6723,7 +6723,7 @@ bot.on('callback_query', async (query) => {
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
       const variant = product && product.variants.find(v => v.id === variantId);
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       askSetTierMarkup(chatId, messageId, product, variant);
     }
     // Entry point standalone (dari menu utama Supplier API) - lihat catatan
@@ -6778,7 +6778,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'supplierharga') {
       const linked = db.getSupplierLinkedVariants();
       const l = linked[Number(param)];
-      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const { productId, variant, productName } = l;
       const cost = variant.supplierCost;
       const currentSellPrice = db.getBasePrice(variant);
@@ -6791,7 +6791,7 @@ bot.on('callback_query', async (query) => {
       const linkedIdx = Number(param);
       const linked = db.getSupplierLinkedVariants();
       const l = linked[linkedIdx];
-      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const { variant, productName } = l;
       const label = `${productName}${variant.label ? ' - ' + variant.label : ''}`;
       await sendOrEditAdmin(chatId, messageId,
@@ -6807,7 +6807,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'supplierunlink') {
       const linked = db.getSupplierLinkedVariants();
       const l = linked[Number(param)];
-      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       db.clearVariantSupplier(l.productId, l.variant.id);
       await bot.answerCallbackQuery(query.id, { text: 'Link supplier diputus, varian ini balik pakai stok lokal.' }).catch(() => {});
       await sendOrEditAdmin(chatId, messageId, await supplierMenuText(), await supplierMenuKeyboard());
@@ -6857,7 +6857,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'canbosolink_pick') {
       const product = db.findProduct(param);
       if (!product || !product.variants.length) {
-        return sendOrEditAdmin(chatId, messageId, `⚠️ Produk *${product ? product.name : param}* belum punya varian.`, canbosoBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Product *${product ? product.name : param}* has no variants yet.`, canbosoBackKeyboard());
       }
       if (product.variants.length === 1) {
         await showCanbosoProductPicker(chatId, messageId, param, product.variants[0].id);
@@ -6868,7 +6868,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'canbosolink_variant') {
       const product = db.findProduct(param);
       const variant = product && product.variants[Number(parts[3])];
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       await showCanbosoProductPicker(chatId, messageId, param, variant.id);
     }
     else if (action === 'canbosolink_set') {
@@ -6908,7 +6908,7 @@ bot.on('callback_query', async (query) => {
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
       const variant = product && product.variants.find(v => v.id === variantId);
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const cost = variant.canbosoCost;
       if (typeof cost !== 'number' || isNaN(cost)) {
         return bot.answerCallbackQuery(query.id, { text: '⚠️ Harga modal tidak diketahui untuk varian ini - pakai ✏️ Harga Custom saja.', show_alert: true });
@@ -6929,7 +6929,7 @@ bot.on('callback_query', async (query) => {
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
       const variant = product && product.variants.find(v => v.id === variantId);
-      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId, variantId } });
       const cost = variant.canbosoCost;
       await sendOrEditAdmin(chatId, messageId,
@@ -6942,7 +6942,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'canbosoharga') {
       const linked = db.getCanbosoLinkedVariants();
       const l = linked[Number(param)];
-      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const { productId, variant, productName } = l;
       const cost = variant.canbosoCost;
       const currentSellPrice = db.getBasePrice(variant);
@@ -6955,7 +6955,7 @@ bot.on('callback_query', async (query) => {
       const linkedIdx = Number(param);
       const linked = db.getCanbosoLinkedVariants();
       const l = linked[linkedIdx];
-      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const { variant, productName } = l;
       const label = `${productName}${variant.label ? ' - ' + variant.label : ''}`;
       await sendOrEditAdmin(chatId, messageId,
@@ -6971,7 +6971,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'canbosounlink') {
       const linked = db.getCanbosoLinkedVariants();
       const l = linked[Number(param)];
-      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Varian tidak ditemukan.' });
+      if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       db.clearVariantCanboso(l.productId, l.variant.id);
       await bot.answerCallbackQuery(query.id, { text: 'Link Canboso diputus, varian ini balik pakai stok lokal.' }).catch(() => {});
       await sendOrEditAdmin(chatId, messageId, canbosoMenuText(), canbosoMenuKeyboard());
@@ -7023,7 +7023,7 @@ bot.on('callback_query', async (query) => {
     }
     else if (action === 'rmpick') {
       const product = db.findProduct(param);
-      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Produk tidak ditemukan.' });
+      if (!product) return bot.answerCallbackQuery(query.id, { text: 'Product not found.' });
       await sendOrEditAdmin(chatId, messageId,
         `⚠️ Yakin hapus produk *${product.name}* (id: \`${product.id}\`) beserta semua variannya?`,
         { inline_keyboard: [
