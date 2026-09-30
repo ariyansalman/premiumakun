@@ -5602,7 +5602,7 @@ function scheduleProductListRepaint() {
             variant.liveStock = live.stock;
           }
         } catch (err) {
-          console.error(`Canboso getLiveStock (repaint desc) gagal (product_id=${variant.canbosoProductId}):`, err.message);
+          console.error(`Canboso getLiveStock (repaint desc) failed (product_id=${variant.canbosoProductId}):`, err.message);
         }
       }
       try {
@@ -5620,54 +5620,54 @@ function scheduleProductListRepaint() {
 
 function marginText(cost, sellPrice) {
   if (typeof cost !== 'number' || isNaN(cost)) {
-    return `💰 Harga jual saat ini: ${usd(sellPrice)} (harga modal Supplier tidak diketahui)`;
+    return `💰 Current sale price: ${usd(sellPrice)} (the supplier cost is unknown)`;
   }
   if (sellPrice <= cost) {
-    const rel = sellPrice === cost ? 'SAMA DENGAN' : 'LEBIH RENDAH DARI';
+    const rel = sellPrice === cost ? 'EQUAL TO' : 'LOWER THAN';
     return (
-      `⚠️ *Peringatan margin:* harga jual saat ini (${usd(sellPrice)}) ${rel} harga modal Supplier (${usd(cost)}).\n` +
-      `Kalau dibiarkan, tiap produk ini laku kamu ${sellPrice === cost ? 'impas (tidak untung sama sekali)' : 'RUGI'}. Segera naikkan harga jual di bawah.`
+      `⚠️ *Margin warning:* the current sale price (${usd(sellPrice)}) is ${rel} the supplier cost (${usd(cost)}).\n` +
+      `Left as is, every sale of this product ${sellPrice === cost ? 'breaks even (no profit at all)' : 'LOSES money'}. Raise the sale price below as soon as you can.`
     );
   }
   const profit = sellPrice - cost;
   const marginPct = (profit / cost) * 100;
-  return `💰 Modal: ${usd(cost)} • Jual: ${usd(sellPrice)} • Untung: *${usd(profit)}/pcs* (+${marginPct.toFixed(0)}%)`;
+  return `💰 Cost: ${usd(cost)} • Sale: ${usd(sellPrice)} • Profit: *${usd(profit)}/pcs* (+${marginPct.toFixed(0)}%)`;
 }
 
-// Keyboard cepat buat atur harga jual persis setelah link/ganti modal -
-// markup dihitung dari harga MODAL (bukan harga jual lama), supaya hasilnya
-// konsisten walau harga jual lama sudah kadaluarsa/keliru.
-// PENTING: tombolnya TIDAK bawa productId+variantId di callback_data -
-// keduanya digabung gampang lewat 64 byte punya Telegram (sama seperti bug
-// di successKeyboard()/adminVariantPickKeyboard()) dan bikin Telegram tolak
-// kirim/edit pesan ini (BUTTON_DATA_INVALID). Konteksnya disimpan di
-// pendingAction (chatId sudah unik per admin) dan dibaca lagi di handler
-// 'supplierlinkmarkup'/'supplierlinkcustomprice'.
+// A quick keyboard for setting the sale price right after linking or changing the
+// cost - the markup is computed from the COST (not the old sale price), so the
+// result is consistent even when the old sale price is stale or wrong.
+// IMPORTANT: these buttons do NOT carry productId+variantId in callback_data -
+// together they easily exceed Telegram's 64 bytes (the same bug as in
+// successKeyboard()/adminVariantPickKeyboard()) and would make Telegram refuse to
+// send or edit this message (BUTTON_DATA_INVALID). The context is stored in
+// pendingAction (chatId is already unique per admin) and read back in the
+// 'supplierlinkmarkup'/'supplierlinkcustomprice' handlers.
 function supplierLinkPriceKeyboard(chatId, productId, variantId) {
   db.setPendingAction(chatId, { type: 'supplier_link_price_ctx', data: { productId, variantId } });
   const markups = [10, 20, 30, 50];
   return {
     inline_keyboard: [
       markups.map(pct => ({ text: `+${pct}%`, callback_data: `admin:supplierlinkmarkup:${pct}` })),
-      [{ text: '✏️ Harga Custom', callback_data: 'admin:supplierlinkcustomprice' }],
-      [{ text: '📊 Atur Markup 3-Tier', callback_data: 'admin:suppliertiermarkup' }],
-      [withButtonIcon({ text: '‹ Selesai, Kembali', callback_data: 'admin:supplier' }, 'back')]
+      [{ text: '✏️ Custom Price', callback_data: 'admin:supplierlinkcustomprice' }],
+      [{ text: '📊 Set 3-Tier Markup', callback_data: 'admin:suppliertiermarkup' }],
+      [withButtonIcon({ text: '‹ Done, Back', callback_data: 'admin:supplier' }, 'back')]
     ]
   };
 }
 
 // ============================================================
-// ===== Helper untuk fitur "Canboso API" (supplier KEDUA) =====
+// ===== Helpers for the "Canboso API" feature (the SECOND supplier) =====
 // ============================================================
-// Pola sama persis dengan "Supplier API" (AIVerse Hub) di atas, tapi lebih
-// sederhana karena API Canboso cuma expose 2 endpoint (lihat
-// supplierCanboso.js): tidak ada getMe() (saldo wallet), getOrderById(),
-// getOrders(), atau getStats() - jadi menu "Riwayat Order"/"Statistik"/
-// "Cek Order ID" dari Supplier API TIDAK ada versi Canboso-nya di sini.
-// "🔄 Refresh Harga & Stok" tetap ada (pakai getProducts() ulang untuk
-// sinkron modal & stok lokal), tapi TANPA kalkulasi 3-tier markup otomatis
-// seperti Supplier API - admin atur harga jual manual lewat markup cepat/
-// custom di bawah (sama seperti saat pertama link).
+// Exactly the same pattern as "Supplier API" (AIVerse Hub) above, but simpler
+// because the Canboso API exposes only 2 endpoints (see supplierCanboso.js):
+// there is no getMe() (wallet balance), getOrderById(), getOrders(), or
+// getStats() - so the "Order History"/"Statistics"/"Check Order ID" menus from the
+// Supplier API have no Canboso equivalent here.
+// "🔄 Refresh Price & Stock" does exist (calling getProducts() again to sync the
+// local cost and stock), but WITHOUT the automatic 3-tier markup calculation of
+// the Supplier API - the admin sets the sale price manually via the quick/custom
+// markup below (just as when first linking).
 
 function canbosoBackKeyboard() {
   return {
@@ -5680,16 +5680,16 @@ function canbosoBackKeyboard() {
 
 function canbosoMenuText() {
   const statusLine = !CANBOSO_API_KEY
-    ? '⚠️ *CANBOSO_API_KEY* belum diisi di `.env` - fitur ini belum bisa dipakai.'
-    : '🟢 API key sudah diisi. (Canboso tidak expose endpoint cek saldo wallet - pastikan wallet sudah di-top-up langsung dari sisi Canboso.)';
+    ? '⚠️ *CANBOSO_API_KEY* has not been set in `.env` - this feature cannot be used yet.'
+    : '🟢 The API key is set. (Canboso exposes no wallet balance endpoint - make sure the wallet is topped up directly on the Canboso side.)';
 
-  // Sama seperti baris "Auto-sync" di panel Supplier API (AIVerse Hub) -
-  // supaya admin langsung tahu tanpa buka .env apakah auto-sync latar
-  // belakang aktif & tiap berapa detik, tanpa perlu klik refresh manual.
+  // The same as the "Auto-sync" line in the Supplier API (AIVerse Hub) panel - so
+  // the admin can see at a glance, without opening .env, whether the background
+  // auto-sync is on and how often it runs, with no manual refresh needed.
   const effectiveSec = CANBOSO_SYNC_INTERVAL_SECONDS < 10 && CANBOSO_SYNC_INTERVAL_SECONDS > 0 ? 10 : CANBOSO_SYNC_INTERVAL_SECONDS;
   const autoSyncLine = (CANBOSO_API_KEY && CANBOSO_SYNC_INTERVAL_SECONDS > 0)
-    ? `🔄 Auto-sync modal & stok: *aktif*, tiap *${effectiveSec} detik*`
-    : '🔄 Auto-sync modal & stok: *mati* (ubah `CANBOSO_SYNC_INTERVAL_SECONDS` di `.env` untuk mengaktifkan, atau refresh manual di bawah)';
+    ? `🔄 Auto-sync of cost & stock: *on*, every *${effectiveSec} seconds*`
+    : '🔄 Auto-sync of cost & stock: *off* (change `CANBOSO_SYNC_INTERVAL_SECONDS` in `.env` to enable it, or refresh manually below)';
 
   const linked = db.getCanbosoLinkedVariants();
   const list = linked.length
@@ -5698,33 +5698,33 @@ function canbosoMenuText() {
         const sell = db.getBasePrice(l.variant);
         const cost = l.variant.canbosoCost;
         const marginTag = (typeof cost === 'number')
-          ? (sell <= cost ? ' ⚠️ RUGI/IMPAS' : ` (untung ${usd(sell - cost)}/pcs)`)
+          ? (sell <= cost ? ' ⚠️ LOSS/BREAK-EVEN' : ` (profit ${usd(sell - cost)}/pcs)`)
           : '';
-        return `• *${label}* → \`${l.variant.canbosoProductId}\`\n   Modal: ${typeof cost === 'number' ? usd(cost) : '?'} • Jual: ${usd(sell)}${marginTag}`;
+        return `• *${label}* → \`${l.variant.canbosoProductId}\`\n   Cost: ${typeof cost === 'number' ? usd(cost) : '?'} • Sale: ${usd(sell)}${marginTag}`;
       }).join('\n')
-    : '_Belum ada varian yang terhubung._';
+    : '_No variant is linked yet._';
 
   return (
     `*Canboso API*\n\n` +
     `${statusLine}\n` +
     `${autoSyncLine}\n\n` +
-    `Varian produk yang dihubungkan ke sini akan dipesan & dipenuhi OTOMATIS lewat Canboso (pakai saldo wallet akun Canboso ini) setiap ada buyer beli - bukan dari stok lokal lagi.\n\n` +
-    `📋 *Varian Terhubung:*\n${list}`
+    `Product variants linked here are ordered and fulfilled AUTOMATICALLY through Canboso (using this Canboso account's wallet balance) whenever a buyer purchases - no longer from local stock.\n\n` +
+    `📋 *Linked Variants:*\n${list}`
   );
 }
 
 function canbosoMenuKeyboard() {
   const linked = db.getCanbosoLinkedVariants();
   const rows = [];
-  rows.push([{ text: '➕ Hubungkan Produk', callback_data: 'admin:canbosolink' }]);
+  rows.push([{ text: '➕ Link a Product', callback_data: 'admin:canbosolink' }]);
   if (linked.length) {
-    rows.push([{ text: '🔄 Refresh Harga & Stok', callback_data: 'admin:canbosorefresh' }]);
+    rows.push([{ text: '🔄 Refresh Price & Stock', callback_data: 'admin:canbosorefresh' }]);
   }
   linked.forEach((l, i) => {
     const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
     rows.push([
-      { text: `💲 Harga: ${label}`, callback_data: `admin:canbosoharga:${i}` },
-      { text: '🗑️ Putus', callback_data: `admin:canbosounlinkconfirm:${i}` }
+      { text: `💲 Price: ${label}`, callback_data: `admin:canbosoharga:${i}` },
+      { text: '🗑️ Unlink', callback_data: `admin:canbosounlinkconfirm:${i}` }
     ]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
@@ -5732,71 +5732,71 @@ function canbosoMenuKeyboard() {
   return { inline_keyboard: rows };
 }
 
-// Ambil daftar produk Canboso via API, lalu tampilkan sebagai keyboard
-// pilihan untuk dihubungkan ke productId/variantId lokal - pola sama
-// seperti showSupplierServicePicker() di atas. Daftar produk mentah
-// disimpan sementara di pendingAction (bukan di-encode ke callback_data)
-// karena id/nama dari API bisa mengandung karakter apapun.
+// Fetch the Canboso product list via the API, then show it as a keyboard of
+// options to link to a local productId/variantId - the same pattern as
+// showSupplierServicePicker() above. The raw product list is stored temporarily in
+// pendingAction (rather than encoded into callback_data) because an id/name from
+// the API can contain any character.
 async function showCanbosoProductPicker(chatId, messageId, productId, variantId) {
   if (!CANBOSO_API_KEY) {
-    return sendOrEditAdmin(chatId, messageId, '⚠️ *CANBOSO_API_KEY* belum diisi di `.env`, tidak bisa ambil daftar produk Canboso.', canbosoBackKeyboard());
+    return sendOrEditAdmin(chatId, messageId, '⚠️ *CANBOSO_API_KEY* has not been set in `.env`, so the Canboso product list cannot be fetched.', canbosoBackKeyboard());
   }
   let products;
   try {
     products = await canboso.getProducts();
   } catch (err) {
-    return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil daftar produk dari Canboso:\n_${err.message}_`, canbosoBackKeyboard());
+    return sendOrEditAdmin(chatId, messageId, `⚠️ Failed to fetch the product list from Canboso:\n_${err.message}_`, canbosoBackKeyboard());
   }
   if (!products.length) {
-    return sendOrEditAdmin(chatId, messageId, '⚠️ Canboso tidak mengembalikan produk apapun saat ini.', canbosoBackKeyboard());
+    return sendOrEditAdmin(chatId, messageId, '⚠️ Canboso returned no products at the moment.', canbosoBackKeyboard());
   }
   db.setPendingAction(chatId, { type: 'canboso_link_pick', data: { productId, variantId, products } });
   const rows = products.map((p, i) => ([{
-    text: `${p.name} - Modal ${isNaN(p.price) ? '❓' : usd(p.price)} (stok: ${isNaN(p.stock) ? '?' : p.stock})`,
+    text: `${p.name} - Cost ${isNaN(p.price) ? '❓' : usd(p.price)} (stock: ${isNaN(p.stock) ? '?' : p.stock})`,
     callback_data: `admin:canbosolink_set:${i}`
   }]));
-  rows.push([{ text: '🐞 Lihat Raw Response (debug)', callback_data: 'admin:canbosodebug' }]);
+  rows.push([{ text: '🐞 View Raw Response (debug)', callback_data: 'admin:canbosodebug' }]);
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:canbosolink' }, 'back')]);
   const naNote = products.some(p => isNaN(p.price))
-    ? '\n\n⚠️ Ada produk yang modalnya tampil ❓ (field harga di response API tidak dikenali). Tetap bisa dihubungkan lalu isi harga jual manual lewat ✏️ Harga Custom, atau tekan 🐞 Lihat Raw Response untuk cek nama field aslinya.'
+    ? '\n\n⚠️ Some products show ❓ for their cost (the price field in the API response was not recognised). They can still be linked, then set the sale price manually via ✏️ Custom Price, or press 🐞 View Raw Response to check the real field name.'
     : '';
-  await sendOrEditAdmin(chatId, messageId, `Pilih produk Canboso yang mau dihubungkan:${naNote}`, { inline_keyboard: rows });
+  await sendOrEditAdmin(chatId, messageId, `Pick the Canboso product you want to link:${naNote}`, { inline_keyboard: rows });
 }
 
-// Keyboard cepat atur harga jual setelah link/refresh modal Canboso - pola
-// sama seperti supplierLinkPriceKeyboard(), tanpa opsi "3-Tier" (Canboso
-// tidak punya kalkulasi tier otomatis di sini, cukup markup flat).
+// A quick keyboard for setting the sale price after linking or refreshing the
+// Canboso cost - the same pattern as supplierLinkPriceKeyboard(), without the
+// "3-Tier" option (Canboso has no automatic tier calculation; a flat markup does).
 function canbosoLinkPriceKeyboard(chatId, productId, variantId) {
   db.setPendingAction(chatId, { type: 'canboso_link_price_ctx', data: { productId, variantId } });
   const markups = [10, 20, 30, 50];
   return {
     inline_keyboard: [
       markups.map(pct => ({ text: `+${pct}%`, callback_data: `admin:canbosolinkmarkup:${pct}` })),
-      [{ text: '✏️ Harga Custom', callback_data: 'admin:canbosolinkcustomprice' }],
-      [withButtonIcon({ text: '‹ Selesai, Kembali', callback_data: 'admin:canboso' }, 'back')]
+      [{ text: '✏️ Custom Price', callback_data: 'admin:canbosolinkcustomprice' }],
+      [withButtonIcon({ text: '‹ Done, Back', callback_data: 'admin:canboso' }, 'back')]
     ]
   };
 }
 
-// Sinkron ulang modal & stok SEMUA varian yang terhubung ke Canboso, dari
-// getProducts() live - dipanggil oleh tombol "🔄 Refresh Harga & Stok".
-// Beda dari refreshSupplierData() (AIVerse Hub): TIDAK menghitung ulang
-// tiers otomatis dari markup% (Canboso tidak punya kalkulasi tier per-
-// varian tersimpan) - cuma update variant.canbosoCost & variant.stock,
-// admin yang atur ulang harga jual manual kalau modal berubah signifikan.
+// Re-sync the cost and stock of EVERY variant linked to Canboso, from a live
+// getProducts() - called by the "🔄 Refresh Price & Stock" button.
+// Unlike refreshSupplierData() (AIVerse Hub): it does NOT recompute tiers
+// automatically from a markup% (Canboso has no stored per-variant tier
+// calculation) - it only updates variant.canbosoCost and variant.stock; the admin
+// resets the sale price manually when the cost changes significantly.
 async function refreshCanbosoData() {
   const products = await canboso.getProducts();
   const byId = new Map(products.map(p => [String(p.id), p]));
   const linked = db.getCanbosoLinkedVariants();
   let updated = 0, missing = 0;
   const lines = [];
-  const stockChanges = []; // dipakai scheduleCanbosoSync() buat broadcast "🔔 Stok Diperbarui" ke semua user
+  const stockChanges = []; // used by scheduleCanbosoSync() to broadcast "🔔 Stock Updated" to all users
   for (const l of linked) {
     const remote = byId.get(String(l.variant.canbosoProductId));
     const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
     if (!remote) {
       missing++;
-      lines.push(`⚠️ *${label}* - product_id \`${l.variant.canbosoProductId}\` sudah tidak ada di Canboso.`);
+      lines.push(`⚠️ *${label}* - product_id \`${l.variant.canbosoProductId}\` no longer exists at Canboso.`);
       continue;
     }
     db.setVariantCanboso(l.productId, l.variant.id, l.variant.canbosoProductId, remote.price);
