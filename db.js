@@ -16,7 +16,7 @@ const DEFAULT_DB = {
   deposits: [],
   orders: [],    // { id, chatId, productId, variantId, qty, unitPrice, total, createdAt, status }
   pendingAction: {}, // chatId -> { type: '...', data }
-  emojiIds: {},  // key (e.g. "menu:buy_produk" / "teks:product_desc") -> custom_emoji_id string
+  emojiIds: {},  // key (e.g. "menu:buy_product" / "teks:product_desc") -> custom_emoji_id string
   settings: {
     // Auto Backup: a zip of the full source code (except node_modules and .npm)
     // sent automatically to a Telegram group at a set interval.
@@ -963,7 +963,7 @@ function getAllProducts() {
 }
 
 // ===================== Custom Emoji ID (from "automatic capture") =====================
-// Example keys: "menu:buy_produk" (a button icon) or "teks:product_desc" /
+// Example keys: "menu:buy_product" (a button icon) or "teks:product_desc" /
 // "teks:menu_notif" (emoji inside text). Stored in db.json so they PERSIST across
 // bot restarts WITHOUT the admin editing a .js file by hand - filled in
 // automatically by the "🎨 Manage Emoji ID" feature in /admin (forward an emoji).

@@ -57,16 +57,16 @@ const EMOJI_ID_TEKS_BACKUP = {
   // having to forward any emoji again via "🎨 Manage Emoji ID". To switch to a
   // different emoji later, the admin panel still works as usual (an override set
   // there always wins - see the priority order in teksEmoji()).
-  welcome_cart: "5472401690793614752",   // same as the "🛒 Buy Product" menu button (menu:buy_produk)
+  welcome_cart: "5472401690793614752",   // same as the "🛒 Buy Product" menu button (menu:buy_product)
   welcome_wallet: "5267300544094948794", // same as the "💳 Wallet" menu button and the "wallet_title" text
   welcome_bolt: "6267008582294705964",   // same as the "✅ Automatic" icon in usdt_auto/ton_auto
   welcome_gift: "5449800250032143374",   // same as the "🎁 Refer & Earn" menu button and the referral_title text
   welcome_arrow: "5440841102871517055",  // same as the "Buy Now" button (menu:buy_now)
   profile_title: "5249053508681883137",
-  profile_nama: "5305729205630155413",
+  profile_name: "5305729205630155413",
   profile_username: "5222444124698853913",
   profile_chatid: "5837071798935492251",
-  profile_saldo: "6086980694460861135",
+  profile_balance: "6086980694460861135",
   profile_order: "5444856076954520455",
   profile_referral: "5449800250032143374",
   balance_line: "5332600543963522398",
@@ -85,10 +85,10 @@ const EMOJI_ID_TEKS_BACKUP = {
   qris_title: "6084682277072144595",
   qris_rocket: "5188481279963715781",
   qris_orderid: "5444856076954520455",
-  qris_saldo: "5188605164000395914",
+  qris_balance: "5188605164000395914",
   qris_total: "5278467510604160626",
   qris_expire: "6084396322444544568",
-  qris_carabayar: "5472367477084134145",
+  qris_how_to_pay: "5472367477084134145",
   qris_step1: "6109505856603165125",
   qris_step2: "5343633090881264367",
   qris_step3: "5352533972515562491",
@@ -165,11 +165,11 @@ const EMOJI_ID_TEKS_BACKUP = {
   channelnotif_time: "6084396322444544568",           // same as qris_expire (a time/duration feel)
   channelnotif_topup_title: "5267300544094948794",    // same as welcome_wallet (💳 New Wallet Top-Up!)
   channelnotif_network: "6267008582294705964",        // same as welcome_bolt/usdt_auto (✅ automatic/verified status)
-  channelnotif_amount: "5188605164000395914",         // same as qris_saldo (💵 the amount credited)
+  channelnotif_amount: "5188605164000395914",         // same as qris_balance (💵 the amount credited)
   channelnotif_referral_title: "5461151367559141950",    // same as success_title/channelnotif_purchase_title (🎉 New Referral Success!)
   channelnotif_referral_user: "5249053508681883137",     // same as profile_title (👤 the User line)
   channelnotif_referral_referredby: "5449800250032143374", // same as referral_title/welcome_gift (🎁 the Referred By line)
-  channelnotif_referral_reward: "5188605164000395914",   // same as channelnotif_amount/qris_saldo (💵 the Reward line)
+  channelnotif_referral_reward: "5188605164000395914",   // same as channelnotif_amount/qris_balance (💵 the Reward line)
 
   // --- Channel notification border & footer (NEW) ---
   // Previously the "✨" characters in the divider lines above/below the heading,

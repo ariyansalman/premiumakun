@@ -32,11 +32,11 @@
 
 const EMOJI_IDS = {
   // --- Main /start menu ---
-  buy_produk: "5472401690793614752",
+  buy_product: "5472401690793614752",
   profile: "5249053508681883137",
-  saldo_saya: "5278467510604160626",
+  my_balance: "5278467510604160626",
   topup: "5267300544094948794",
-  riwayat_pembelian: "5444856076954520455",
+  my_orders: "5444856076954520455",
   referral: "5449800250032143374",
   support: "5201990176175299013",
 
@@ -66,16 +66,16 @@ const EMOJI_IDS = {
   // through "🎨 Manage Emoji ID"); fill it in from the admin panel or paste the
   // ID here manually once you have one.
   topup_binance: "",
-  batal: "5969916760898408074",
-  nominal_cepat: "5188605164000395914",
-  nominal_custom: "5395444784611480792",
-  batalkan_qris: "5974083768233760323",
+  cancel_nav: "5969916760898408074",
+  quick_amount: "5188605164000395914",
+  custom_amount: "5395444784611480792",
+  cancel_qris: "5974083768233760323",
   copy_address_usdt: "5292125588209804353",
-  batalkan_usdt: "5974083768233760323",
+  cancel_usdt: "5974083768233760323",
   copy_address_ton: "5834757434333208303",
-  batalkan_ton: "5974083768233760323",
+  cancel_ton: "5974083768233760323",
   copy_id_binance: "",
-  batalkan_binance: "",
+  cancel_binance: "",
 
   // --- General navigation (used across many pages) ---
   back: "5255703720078879038",
@@ -86,7 +86,7 @@ const EMOJI_IDS = {
   buy_now: "5440841102871517055",
 
   // --- Quantity and order confirmation pages ---
-  jumlah_custom: "6215281817247812147",
+  custom_qty: "6215281817247812147",
   place_order: "5193065010795911968",
   cancel_order: "5974083768233760323",
 
@@ -109,21 +109,21 @@ const EMOJI_IDS = {
   admin_cat_settings: "",
   // The "🏠 Main Menu" button (a shortcut straight back to the main /admin menu
   // from any submenu page) - see adminBackKeyboard() and friends in bot.js
-  admin_menu_utama: "",
-  admin_daftar_produk: "",
-  admin_tambah_produk: "",
-  admin_hapus_produk: "",
-  admin_tambah_stock: "",
-  admin_tambah_varian: "",
-  admin_set_harga: "",
+  admin_main_menu: "",
+  admin_product_list: "",
+  admin_add_product: "",
+  admin_delete_product: "",
+  admin_add_stock: "",
+  admin_add_variant: "",
+  admin_set_price: "",
   admin_set_howto: "",
   admin_set_logo: "",
-  admin_atur_saldo: "",
+  admin_manage_balance: "",
   admin_topup_pending: "",
-  admin_log_pengiriman: "",
-  admin_cek_order: "",
-  admin_statistik: "",
-  admin_kelola_emoji: "",
+  admin_delivery_log: "",
+  admin_check_order: "",
+  admin_statistics: "",
+  admin_manage_emoji: "",
   admin_auto_backup: "",
   admin_broadcast: "",
   admin_channel_notif: "",
@@ -131,6 +131,7 @@ const EMOJI_IDS = {
   // from the "gift" key above (that one is the fallback icon for the gift
   // SELECTION buttons themselves; this is only the icon for the admin menu
   // button that opens the "Manage Gift Emoji" feature).
+  admin_gift_emoji: "",
 };
 
 // Look up the ID for one button key. Priority: (1) the result of an "automatic

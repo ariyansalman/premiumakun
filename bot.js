@@ -191,7 +191,7 @@ function topupMethodKeyboard(chatId) {
 }
 
 function cancelToTopupKeyboard(chatId) {
-  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:topup' }, 'batal')]] };
+  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:topup' }, 'cancel_nav')]] };
 }
 
 const QRIS_QUICK_AMOUNTS = [1, 5, 10, 25, 50, 100];
@@ -201,21 +201,21 @@ function qrisAmountKeyboard(chatId) {
   for (let i = 0; i < QRIS_QUICK_AMOUNTS.length; i += 2) {
     rows.push(
       QRIS_QUICK_AMOUNTS.slice(i, i + 2).map(v =>
-        withStyle(withButtonIcon({ text: usd(v, chatId), callback_data: `qrisamt:${v}` }, 'nominal_cepat'), 'primary')
+        withStyle(withButtonIcon({ text: usd(v, chatId), callback_data: `qrisamt:${v}` }, 'quick_amount'), 'primary')
       )
     );
   }
-  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_custom_amount'), callback_data: 'qris:custom' }, 'nominal_custom'), 'primary')]);
+  rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_custom_amount'), callback_data: 'qris:custom' }, 'custom_amount'), 'primary')]);
   rows.push([withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:topup' }, 'back'), 'danger')]);
   return { inline_keyboard: rows };
 }
 
 function cancelToQrisAmountKeyboard(chatId) {
-  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'topup:qris' }, 'batal')]] };
+  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'topup:qris' }, 'cancel_nav')]] };
 }
 
 function qrisCancelKeyboard(chatId, depositId) {
-  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_qris_cancel'), callback_data: `qris:cancel:${depositId}` }, 'batalkan_qris')]] };
+  return { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_qris_cancel'), callback_data: `qris:cancel:${depositId}` }, 'cancel_qris')]] };
 }
 
 async function startQrisTopup(chatId, amountUsd) {
@@ -261,10 +261,10 @@ async function startQrisTopup(chatId, amountUsd) {
     title_icon: teksEmoji('qris_title', '🪙'),
     rocket_icon: teksEmoji('qris_rocket', '🚀'),
     orderid_icon: teksEmoji('qris_orderid', '🧾'),
-    saldo_icon: teksEmoji('qris_saldo', '💵'),
+    saldo_icon: teksEmoji('qris_balance', '💵'),
     total_icon: teksEmoji('qris_total', '💰'),
     expire_icon: teksEmoji('qris_expire', '⏳'),
-    carabayar_icon: teksEmoji('qris_carabayar', '📲'),
+    carabayar_icon: teksEmoji('qris_how_to_pay', '📲'),
     step1_icon: teksEmoji('qris_step1', '1️⃣'),
     step2_icon: teksEmoji('qris_step2', '2️⃣'),
     step3_icon: teksEmoji('qris_step3', '3️⃣'),
@@ -399,7 +399,7 @@ async function startUsdtTopup(chatId, usdAmount) {
   const replyMarkup = {
     inline_keyboard: [
       [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_address'), copy_text: { text: payment.USDT_BEP20_ADDRESS } }, 'copy_address_usdt'), 'primary')],
-      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_usdt_cancel'), callback_data: `usdt:cancel:${deposit.id}` }, 'batalkan_usdt'), 'danger')]
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_usdt_cancel'), callback_data: `usdt:cancel:${deposit.id}` }, 'cancel_usdt'), 'danger')]
     ]
   };
 
@@ -518,7 +518,7 @@ async function startTonTopup(chatId, usdAmount) {
   const replyMarkup = {
     inline_keyboard: [
       [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_address'), copy_text: { text: payment.TON_ADDRESS } }, 'copy_address_ton'), 'primary')],
-      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_ton_cancel'), callback_data: `ton:cancel:${deposit.id}` }, 'batalkan_ton'), 'danger')]
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_ton_cancel'), callback_data: `ton:cancel:${deposit.id}` }, 'cancel_ton'), 'danger')]
     ]
   };
 
@@ -623,7 +623,7 @@ async function startBinanceTopup(chatId, usdAmount) {
   const replyMarkup = {
     inline_keyboard: [
       [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_copy_binance_id'), copy_text: { text: BINANCE_PAY_ID } }, 'copy_id_binance'), 'primary')],
-      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_binance_cancel'), callback_data: `binance:cancel:${deposit.id}` }, 'batalkan_binance'), 'danger')]
+      [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_binance_cancel'), callback_data: `binance:cancel:${deposit.id}` }, 'cancel_binance'), 'danger')]
     ]
   };
 
@@ -1545,15 +1545,15 @@ function mainMenuKeyboard(chatId) {
   return {
     inline_keyboard: [
       [
-        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_buy_product'), callback_data: 'menu:products' }, 'buy_produk'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_buy_product'), callback_data: 'menu:products' }, 'buy_product'), 'primary'),
         withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_profile'), callback_data: 'menu:profile' }, 'profile'), 'primary')
       ],
       [
-        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_balance'), callback_data: 'menu:balance' }, 'saldo_saya'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_balance'), callback_data: 'menu:balance' }, 'my_balance'), 'primary'),
         withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_wallet'), callback_data: 'menu:topup' }, 'topup'), 'primary')
       ],
       [
-        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_orders'), callback_data: 'menu:history' }, 'riwayat_pembelian'), 'primary'),
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_orders'), callback_data: 'menu:history' }, 'my_orders'), 'primary'),
         withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_howto'), callback_data: 'menu:howtouse' }, 'how_to_use'), 'primary')
       ],
       [
@@ -1647,7 +1647,7 @@ async function giftDetailText(chatId, gift, mode) {
 }
 
 function giftCancelKeyboard(chatId) {
-  return { inline_keyboard: [[withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:main' }, 'batal'), 'danger')]] };
+  return { inline_keyboard: [[withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:main' }, 'cancel_nav'), 'danger')]] };
 }
 
 // Show the final confirmation screen (price, target, and a message preview for
@@ -1677,7 +1677,7 @@ async function showGiftConfirmation(chatId, { mode, giftId, stars, target, messa
     reply_markup: {
       inline_keyboard: [
         [withStyle({ text: lang.t(chatId, 'btn_gift_send_now'), callback_data: `gift:confirm:${confirmToken}` }, 'success')],
-        [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:main' }, 'batal'), 'danger')]
+        [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_cancel_arrow'), callback_data: 'menu:main' }, 'cancel_nav'), 'danger')]
       ]
     }
   });
@@ -1816,10 +1816,10 @@ function profileText(chatId, from) {
 
   return (
     `${teksEmoji('profile_title', '👤')} <b>${lang.t(chatId, 'profile_title').replace(/^👤\s*/, '')}</b>\n\n` +
-    `${teksEmoji('profile_nama', '🙍')} <b>${lang.t(chatId, 'profile_name')}:</b> ${escapeHtml(displayName)}\n` +
+    `${teksEmoji('profile_name', '🙍')} <b>${lang.t(chatId, 'profile_name')}:</b> ${escapeHtml(displayName)}\n` +
     `${teksEmoji('profile_username', '🔖')} <b>${lang.t(chatId, 'profile_username')}:</b> ${usernameLine}\n` +
     `${teksEmoji('profile_chatid', '🆔')} <b>${lang.t(chatId, 'profile_chatid')}:</b> <code>${chatId}</code>\n\n` +
-    `${teksEmoji('profile_saldo', '💰')} <b>${lang.t(chatId, 'profile_balance')}:</b> ${usd(user.balance, chatId)}\n` +
+    `${teksEmoji('profile_balance', '💰')} <b>${lang.t(chatId, 'profile_balance')}:</b> ${usd(user.balance, chatId)}\n` +
     `${teksEmoji('profile_order', '🧾')} <b>${lang.t(chatId, 'profile_orders')}:</b> ${orders.length}\n` +
     `${teksEmoji('profile_referral', '🎁')} <b>${lang.t(chatId, 'profile_referral')}:</b> ${stats.referralCount} (${usd(stats.referralEarnings, chatId)})`
   );
@@ -1830,7 +1830,7 @@ function profileKeyboard(chatId) {
     inline_keyboard: [
       [
         withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_wallet'), callback_data: 'menu:topup' }, 'topup'), 'primary'),
-        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_orders'), callback_data: 'menu:history' }, 'riwayat_pembelian'), 'primary')
+        withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_orders'), callback_data: 'menu:history' }, 'my_orders'), 'primary')
       ],
       [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back'), 'danger')]
     ]
@@ -2246,7 +2246,7 @@ function quantityKeyboard(productId, variantId, chatId) {
       text: String(n), callback_data: `qty:${ref}:${n}`
     })));
   }
-  rows.push([withButtonIcon({ text: lang.t(chatId, 'qty_custom'), callback_data: `qtycustom:${ref}` }, 'jumlah_custom')]);
+  rows.push([withButtonIcon({ text: lang.t(chatId, 'qty_custom'), callback_data: `qtycustom:${ref}` }, 'custom_qty')]);
   rows.push([withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: `desc:${ref}` }, 'back')]);
   return { inline_keyboard: rows };
 }
@@ -4428,7 +4428,7 @@ function backupMenuKeyboard(settings) {
       [{ text: '🆔 Set Group ID', callback_data: 'admin:backup:setgroup' }],
       [{ text: '📤 Backup Now', callback_data: 'admin:backup:now' }],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')],
-      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]
     ]
   };
 }
@@ -4464,7 +4464,7 @@ function maintenanceMenuKeyboard(settings) {
   }
   rows.push([{ text: '🎨 Manage Default Message Emoji', callback_data: 'admin:emojiteksgroup:maintenance' }]);
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -4513,7 +4513,7 @@ function usersListKeyboard(page, totalPages) {
   if (navRow.length) rows.push(navRow);
   rows.push([{ text: '🔍 Search User (ID/Username)', callback_data: 'admin:listusers_search' }]);
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_users' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -4621,20 +4621,20 @@ function adminMainKeyboard() {
 function adminProductsKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '📦 Product List', callback_data: 'admin:listproducts' }, 'admin_daftar_produk')],
+      [withButtonIcon({ text: '📦 Product List', callback_data: 'admin:listproducts' }, 'admin_product_list')],
       [
-        withButtonIcon({ text: '➕ Add Product', callback_data: 'admin:addproduct' }, 'admin_tambah_produk'),
-        withButtonIcon({ text: '🗑️ Delete Product', callback_data: 'admin:removeproduct' }, 'admin_hapus_produk')
+        withButtonIcon({ text: '➕ Add Product', callback_data: 'admin:addproduct' }, 'admin_add_product'),
+        withButtonIcon({ text: '🗑️ Delete Product', callback_data: 'admin:removeproduct' }, 'admin_delete_product')
       ],
-      [withButtonIcon({ text: '➕ Add Variant (multi-variant products)', callback_data: 'admin:addvariant' }, 'admin_tambah_varian')],
-      [withButtonIcon({ text: '📥 Add Stock', callback_data: 'admin:addstock' }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '➕ Add Variant (multi-variant products)', callback_data: 'admin:addvariant' }, 'admin_add_variant')],
+      [withButtonIcon({ text: '📥 Add Stock', callback_data: 'admin:addstock' }, 'admin_add_stock')],
       [withButtonIcon({ text: '🔌 Supplier API', callback_data: 'admin:supplier' }, 'admin_supplier_api')],
       [withButtonIcon({ text: '🔌 Canboso API', callback_data: 'admin:canboso' }, 'admin_supplier_api')],
       [
-        withButtonIcon({ text: '💲 Set Price', callback_data: 'admin:setprice' }, 'admin_set_harga'),
-        withButtonIcon({ text: '📝 Set Description', callback_data: 'admin:setdesc' }, 'admin_set_deskripsi')
+        withButtonIcon({ text: '💲 Set Price', callback_data: 'admin:setprice' }, 'admin_set_price'),
+        withButtonIcon({ text: '📝 Set Description', callback_data: 'admin:setdesc' }, 'admin_set_description')
       ],
-      [withButtonIcon({ text: '🎁 Set Bulk Discount Tiers', callback_data: 'admin:settierprice' }, 'admin_set_tier_diskon')],
+      [withButtonIcon({ text: '🎁 Set Bulk Discount Tiers', callback_data: 'admin:settierprice' }, 'admin_set_discount_tiers')],
       [
         withButtonIcon({ text: '✏️ Set How to Use', callback_data: 'admin:sethowto' }, 'admin_set_howto'),
         withButtonIcon({ text: '🖼️ Set Logo', callback_data: 'admin:setlogo' }, 'admin_set_logo')
@@ -4649,7 +4649,7 @@ function adminProductsKeyboard() {
 function adminUsersKeyboard() {
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '💰 Manage User Balance', callback_data: 'admin:addbalance' }, 'admin_atur_saldo')],
+      [withButtonIcon({ text: '💰 Manage User Balance', callback_data: 'admin:addbalance' }, 'admin_manage_balance')],
       [withButtonIcon({ text: '📋 User List', callback_data: 'admin:listusers:1' }, 'admin_list_user')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
@@ -4661,10 +4661,10 @@ function adminReportsKeyboard() {
   return {
     inline_keyboard: [
       [
-        withButtonIcon({ text: '📜 Delivery Log', callback_data: 'admin:deliverylog' }, 'admin_log_pengiriman'),
-        withButtonIcon({ text: '🔍 Check Order ID', callback_data: 'admin:checkorder' }, 'admin_cek_order')
+        withButtonIcon({ text: '📜 Delivery Log', callback_data: 'admin:deliverylog' }, 'admin_delivery_log'),
+        withButtonIcon({ text: '🔍 Check Order ID', callback_data: 'admin:checkorder' }, 'admin_check_order')
       ],
-      [withButtonIcon({ text: '📊 Statistics', callback_data: 'admin:stats' }, 'admin_statistik')],
+      [withButtonIcon({ text: '📊 Statistics', callback_data: 'admin:stats' }, 'admin_statistics')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:menu' }, 'back')]
     ]
   };
@@ -4675,7 +4675,7 @@ function adminSettingsKeyboard() {
   return {
     inline_keyboard: [
       [withButtonIcon({ text: '🛠️ Bot Maintenance', callback_data: 'admin:maintenance' }, 'admin_maintenance')],
-      [withButtonIcon({ text: '🎨 Manage Emoji ID', callback_data: 'admin:emojiids' }, 'admin_kelola_emoji')],
+      [withButtonIcon({ text: '🎨 Manage Emoji ID', callback_data: 'admin:emojiids' }, 'admin_manage_emoji')],
       [withButtonIcon({ text: '💾 Auto Backup', callback_data: 'admin:backup' }, 'admin_auto_backup')],
       [withButtonIcon({ text: '📢 Broadcast', callback_data: 'admin:broadcast' }, 'admin_broadcast')],
       [withButtonIcon({ text: '🔐 Force Join Channel/Group', callback_data: 'admin:forcejoin' }, 'admin_forcejoin')],
@@ -4730,7 +4730,7 @@ function adminGiftPricingKeyboard() {
         ? [[withStyle({ text: '↩️ Reset to the .env Default', callback_data: 'admin:giftpricingreset' }, 'danger')]]
         : []),
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_gift' }, 'back')],
-      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]
     ]
   };
 }
@@ -4758,7 +4758,7 @@ async function adminGiftEmojiListKeyboard() {
     logError('adminGiftEmojiListKeyboard', err);
   }
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_gift' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -4776,25 +4776,25 @@ function adminGiftEmojiListText() {
 // Grouped exactly like the section comments in emoji-id-menu-inline.js, so they
 // are easy to match up if an admin prefers editing that file by hand.
 const EMOJI_CATEGORIES = [
-  { id: 'main', label: '🎯 Main Menu', keys: ['buy_produk', 'profile', 'saldo_saya', 'topup', 'riwayat_pembelian', 'how_to_use', 'referral', 'support'] },
+  { id: 'main', label: '🎯 Main Menu', keys: ['buy_product', 'profile', 'my_balance', 'topup', 'my_orders', 'how_to_use', 'referral', 'support'] },
   { id: 'nav', label: '🧭 General Navigation', keys: ['back', 'go_back'] },
   { id: 'desc', label: '📄 Product Description Page', keys: ['how_to_use', 'buy_now'] },
-  { id: 'qty', label: '🛒 Quantity & Confirmation', keys: ['jumlah_custom', 'place_order', 'cancel_order'] },
+  { id: 'qty', label: '🛒 Quantity & Confirmation', keys: ['custom_qty', 'place_order', 'cancel_order'] },
   { id: 'wallet', label: '💳 Wallet / Topup Menu', keys: [
-    'topup_qris', 'topup_usdt', 'topup_ton', 'topup_binance', 'batal',
-    'nominal_cepat', 'nominal_custom', 'batalkan_qris',
-    'copy_address_usdt', 'batalkan_usdt',
-    'copy_address_ton', 'batalkan_ton',
-    'copy_id_binance', 'batalkan_binance'
+    'topup_qris', 'topup_usdt', 'topup_ton', 'topup_binance', 'cancel_nav',
+    'quick_amount', 'custom_amount', 'cancel_qris',
+    'copy_address_usdt', 'cancel_usdt',
+    'copy_address_ton', 'cancel_ton',
+    'copy_id_binance', 'cancel_binance'
   ] },
   { id: 'admin', label: '🔧 Admin Panel', keys: [
     // The 4 category buttons in the main /admin menu (see adminMainKeyboard())
     'admin_cat_products', 'admin_cat_users', 'admin_cat_reports', 'admin_cat_gift', 'admin_cat_settings',
     // The "🏠 Main Menu" shortcut button on every admin submenu/page
-    'admin_menu_utama',
-    'admin_daftar_produk', 'admin_tambah_produk', 'admin_hapus_produk', 'admin_tambah_stock', 'admin_supplier_api',
-    'admin_tambah_varian', 'admin_set_harga', 'admin_set_howto', 'admin_set_deskripsi', 'admin_set_logo', 'admin_set_emoji', 'admin_atur_saldo', 'admin_topup_pending',
-    'admin_log_pengiriman', 'admin_cek_order', 'admin_statistik', 'admin_list_user', 'admin_maintenance', 'admin_kelola_emoji', 'admin_auto_backup', 'admin_broadcast', 'admin_forcejoin', 'admin_channel_notif',
+    'admin_main_menu',
+    'admin_product_list', 'admin_add_product', 'admin_delete_product', 'admin_add_stock', 'admin_supplier_api',
+    'admin_add_variant', 'admin_set_price', 'admin_set_howto', 'admin_set_description', 'admin_set_logo', 'admin_set_emoji', 'admin_manage_balance', 'admin_topup_pending',
+    'admin_delivery_log', 'admin_check_order', 'admin_statistics', 'admin_list_user', 'admin_maintenance', 'admin_manage_emoji', 'admin_auto_backup', 'admin_broadcast', 'admin_forcejoin', 'admin_channel_notif',
     'admin_gift_balance', 'admin_gift_history', 'admin_gift_emoji', 'admin_gift_pricing'
   ] },
   { id: 'referral_btn', label: '🎁 Refer & Earn Page Buttons', keys: ['share_referral', 'copy_referral'] },
@@ -4805,25 +4805,25 @@ const EMOJI_CATEGORIES = [
   { id: 'gift_btn', label: '🎁 Gift Selection Buttons (Buy Gift/Confess Gift)', keys: ['gift'] }
 ];
 const EMOJI_KEY_LABELS = {
-  buy_produk: 'Buy Product', profile: 'Profile', saldo_saya: 'My Balance', topup: 'Wallet / Topup',
-  riwayat_pembelian: 'My Orders', referral: 'Refer & Earn', support: 'Support',
+  buy_product: 'Buy Product', profile: 'Profile', my_balance: 'My Balance', topup: 'Wallet / Topup',
+  my_orders: 'My Orders', referral: 'Refer & Earn', support: 'Support',
   back: 'Back Button', go_back: 'Go Back Button',
   how_to_use: 'How to Use', buy_now: 'Buy Now',
-  jumlah_custom: 'Custom Quantity', place_order: 'Place Order', cancel_order: 'Cancel Order',
+  custom_qty: 'Custom Quantity', place_order: 'Place Order', cancel_order: 'Cancel Order',
   topup_qris: 'QRIS Button (Automatic)', topup_usdt: 'USDT - BEP20 Button (Automatic)', topup_ton: 'TON / Gram Button (Automatic)', topup_binance: 'Binance Pay Button (Automatic)',
-  batal: '"⬅️ Cancel" Button (short nav)',
-  nominal_cepat: 'QRIS Quick Amount Buttons ($1/$5/etc.)', nominal_custom: 'QRIS Custom Amount Button',
-  batalkan_qris: 'Cancel QRIS Payment Button',
-  copy_address_usdt: 'Copy USDT Address Button', batalkan_usdt: 'Cancel USDT Topup Button',
-  copy_address_ton: 'Copy TON Address Button', batalkan_ton: 'Cancel TON Topup Button',
-  copy_id_binance: 'Copy Binance ID Button', batalkan_binance: 'Cancel Binance Pay Topup Button',
+  cancel_nav: '"⬅️ Cancel" Button (short nav)',
+  quick_amount: 'QRIS Quick Amount Buttons ($1/$5/etc.)', custom_amount: 'QRIS Custom Amount Button',
+  cancel_qris: 'Cancel QRIS Payment Button',
+  copy_address_usdt: 'Copy USDT Address Button', cancel_usdt: 'Cancel USDT Topup Button',
+  copy_address_ton: 'Copy TON Address Button', cancel_ton: 'Cancel TON Topup Button',
+  copy_id_binance: 'Copy Binance ID Button', cancel_binance: 'Cancel Binance Pay Topup Button',
   admin_cat_products: 'Category: Products & Stock', admin_cat_users: 'Category: Users & Balance',
   admin_cat_reports: 'Category: Reports & Statistics', admin_cat_gift: 'Category: Gift (Userbot)', admin_cat_settings: 'Category: Store Settings',
-  admin_menu_utama: '"🏠 Main Menu" Shortcut Button (all admin submenus)',
-  admin_daftar_produk: 'Product List', admin_tambah_produk: 'Add Product', admin_hapus_produk: 'Delete Product',
-  admin_tambah_stock: 'Add Stock', admin_supplier_api: 'Supplier API', admin_tambah_varian: 'Add Variant', admin_set_harga: 'Set Product Price', admin_set_howto: 'Set How to Use',
-  admin_set_deskripsi: 'Set Description', admin_set_logo: 'Set Product Logo', admin_set_emoji: 'Change Product Emoji', admin_atur_saldo: 'Manage User Balance', admin_topup_pending: 'Pending Topups', admin_log_pengiriman: 'Delivery Log',
-  admin_cek_order: 'Check Order ID', admin_statistik: 'Statistics', admin_list_user: 'User List', admin_maintenance: 'Bot Maintenance', admin_kelola_emoji: 'Manage Emoji ID',
+  admin_main_menu: '"🏠 Main Menu" Shortcut Button (all admin submenus)',
+  admin_product_list: 'Product List', admin_add_product: 'Add Product', admin_delete_product: 'Delete Product',
+  admin_add_stock: 'Add Stock', admin_supplier_api: 'Supplier API', admin_add_variant: 'Add Variant', admin_set_price: 'Set Product Price', admin_set_howto: 'Set How to Use',
+  admin_set_description: 'Set Description', admin_set_logo: 'Set Product Logo', admin_set_emoji: 'Change Product Emoji', admin_manage_balance: 'Manage User Balance', admin_topup_pending: 'Pending Topups', admin_delivery_log: 'Delivery Log',
+  admin_check_order: 'Check Order ID', admin_statistics: 'Statistics', admin_list_user: 'User List', admin_maintenance: 'Bot Maintenance', admin_manage_emoji: 'Manage Emoji ID',
   admin_auto_backup: 'Auto Backup', admin_broadcast: 'Broadcast', admin_forcejoin: 'Force Join Channel/Group',
   admin_channel_notif: 'Set Channel Notifications',
   admin_gift_balance: 'Check Userbot Stars Balance', admin_gift_history: 'Gift Order History', admin_gift_emoji: 'Manage Gift Emoji', admin_gift_pricing: 'Set Gift Pricing',
@@ -4856,10 +4856,10 @@ const TEKS_GROUPS = [
   ] },
   { id: 'profile', label: '👤 Profile Page', items: [
     { key: 'profile_title', label: '"Profile" Heading' },
-    { key: 'profile_nama', label: 'Name Line' },
+    { key: 'profile_name', label: 'Name Line' },
     { key: 'profile_username', label: 'Username Line' },
     { key: 'profile_chatid', label: 'Chat ID Line' },
-    { key: 'profile_saldo', label: 'Wallet Balance Line' },
+    { key: 'profile_balance', label: 'Wallet Balance Line' },
     { key: 'profile_order', label: 'Total Orders Line' },
     { key: 'profile_referral', label: 'Total Referrals Line' }
   ] },
@@ -4907,10 +4907,10 @@ const TEKS_GROUPS = [
     { key: 'qris_title', label: '"YOUR QRIS INVOICE IS READY" Heading' },
     { key: 'qris_rocket', label: 'Rocket Icon (full-balance nudge)' },
     { key: 'qris_orderid', label: 'Order ID Line' },
-    { key: 'qris_saldo', label: 'Balance Received Line' },
+    { key: 'qris_balance', label: 'Balance Received Line' },
     { key: 'qris_total', label: 'Total to Pay via QRIS Line' },
     { key: 'qris_expire', label: 'Valid For Line' },
-    { key: 'qris_carabayar', label: '"How to Pay" Heading' },
+    { key: 'qris_how_to_pay', label: '"How to Pay" Heading' },
     { key: 'qris_step1', label: 'Step 1 (open an e-wallet)' },
     { key: 'qris_step2', label: 'Step 2 (choose Scan QR)' },
     { key: 'qris_step3', label: 'Step 3 (scan & pay)' },
@@ -5003,14 +5003,14 @@ function adminEmojiCategoryKeyboard() {
   const rows = EMOJI_CATEGORIES.map(cat => ([{ text: cat.label, callback_data: `admin:emojicat:${cat.id}` }]));
   rows.push([{ text: '✍️ Emoji in Message Text', callback_data: 'admin:emojiteks' }]);
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
 function adminEmojiTeksGroupKeyboard() {
   const rows = TEKS_GROUPS.map(g => ([{ text: g.label, callback_data: `admin:emojiteksgroup:${g.id}` }]));
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiids' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5034,7 +5034,7 @@ function adminEmojiTeksItemKeyboard(groupId) {
     return [{ text: `${filled} ${item.label}`, callback_data: `admin:emojiset:teks:${item.key}` }];
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiteks' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5046,7 +5046,7 @@ function adminEmojiKeyListKeyboard(catId) {
     rows.push([{ text: `${filled} ${EMOJI_KEY_LABELS[key] || key}`, callback_data: `admin:emojiset:menu:${key}` }]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiids' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5059,7 +5059,7 @@ function adminProductPickKeyboard(action, productsOverride) {
     }, p)
   ]));
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5071,7 +5071,7 @@ function adminBackKeyboard(parentTarget) {
   const target = parentTarget || 'admin:menu';
   const rows = [[withButtonIcon({ text: '‹ Back', callback_data: target }, 'back')]];
   if (target !== 'admin:menu') {
-    rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+    rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   }
   return { inline_keyboard: rows };
 }
@@ -5099,12 +5099,12 @@ function adminForceJoinKeyboard() {
     { text: enabled ? '🔴 Disable Force Join' : '🟢 Enable Force Join', callback_data: 'admin:forcejoin_toggle' },
     'admin_forcejoin'
   )]);
-  rows.push([withButtonIcon({ text: '➕ Add Channel/Group', callback_data: 'admin:forcejoin_add' }, 'admin_tambah_produk')]);
+  rows.push([withButtonIcon({ text: '➕ Add Channel/Group', callback_data: 'admin:forcejoin_add' }, 'admin_add_product')]);
   channels.forEach(c => {
     rows.push([{ text: `🗑️ Remove: ${c.title}`, callback_data: `admin:forcejoin_remove:${c.id}` }]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5153,7 +5153,7 @@ function adminChannelNotifKeyboard() {
     ]);
   }
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_settings' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5166,7 +5166,7 @@ function adminVariantPickKeyboard(product, action, backCallback) {
     { text: `${v.label} (current stock: ${db.getTotalStock(v)})`, callback_data: `admin:${action}:${product.id}:${i}` }
   ]));
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: backCallback || 'admin:addstock' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5185,7 +5185,7 @@ function adminSupplierVariantPickKeyboard(product, action, backCallback) {
     rows.push([{ text: `${v.label} (cost: ${costLabel})`, callback_data: `admin:${action}:${product.id}:${i}` }]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: backCallback || 'admin:supplier' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5195,7 +5195,7 @@ function supplierBackKeyboard() {
   return {
     inline_keyboard: [
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:supplier' }, 'back')],
-      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]
     ]
   };
 }
@@ -5261,12 +5261,12 @@ function supplierMenuKeyboard() {
   linked.forEach((l, i) => {
     const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
     rows.push([
-      { text: `💲 Price: ${label}`, callback_data: `admin:supplierharga:${i}` },
+      { text: `💲 Price: ${label}`, callback_data: `admin:supplierprice:${i}` },
       { text: '🗑️ Unlink', callback_data: `admin:supplierunlinkconfirm:${i}` }
     ]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5671,7 +5671,7 @@ function canbosoBackKeyboard() {
   return {
     inline_keyboard: [
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:canboso' }, 'back')],
-      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]
     ]
   };
 }
@@ -5721,12 +5721,12 @@ function canbosoMenuKeyboard() {
   linked.forEach((l, i) => {
     const label = `${l.productName}${l.variant.label ? ' - ' + l.variant.label : ''}`;
     rows.push([
-      { text: `💲 Price: ${label}`, callback_data: `admin:canbosoharga:${i}` },
+      { text: `💲 Price: ${label}`, callback_data: `admin:canbosoprice:${i}` },
       { text: '🗑️ Unlink', callback_data: `admin:canbosounlinkconfirm:${i}` }
     ]);
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:cat_products' }, 'back')]);
-  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]);
+  rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
@@ -5977,10 +5977,10 @@ function addStockModeKeyboard(productId, variantId) {
   const ref = productRef(productId, variantId);
   return {
     inline_keyboard: [
-      [withButtonIcon({ text: '📋 Send Link/Code (Auto-Delivery)', callback_data: `admin:addstockmode:${ref}:items` }, 'admin_tambah_stock')],
-      [withButtonIcon({ text: '🔢 Add Number Only (Manual)', callback_data: `admin:addstockmode:${ref}:qty` }, 'admin_tambah_stock')],
+      [withButtonIcon({ text: '📋 Send Link/Code (Auto-Delivery)', callback_data: `admin:addstockmode:${ref}:items` }, 'admin_add_stock')],
+      [withButtonIcon({ text: '🔢 Add Number Only (Manual)', callback_data: `admin:addstockmode:${ref}:qty` }, 'admin_add_stock')],
       [withButtonIcon({ text: '‹ Back', callback_data: 'admin:addstock' }, 'back')],
-      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_menu_utama')]
+      [withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]
     ]
   };
 }
@@ -6033,7 +6033,7 @@ bot.onText(/^\/cancel(?:\s|$)/, (msg) => {
   bot.sendMessage(msg.chat.id, 'Cancelled.');
 });
 
-bot.onText(/^\/hapusemoji(?:\s|$)/, (msg) => {
+bot.onText(/^\/clearemoji(?:\s|$)/, (msg) => {
   const chatId = msg.chat.id;
   if (!isAdmin(chatId)) return;
   const pending = db.getPendingAction(chatId);
@@ -6772,7 +6772,7 @@ bot.on('callback_query', async (query) => {
         supplierBackKeyboard()
       );
     }
-    else if (action === 'supplierharga') {
+    else if (action === 'supplierprice') {
       const linked = db.getSupplierLinkedVariants();
       const l = linked[Number(param)];
       if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
@@ -6936,7 +6936,7 @@ bot.on('callback_query', async (query) => {
         canbosoBackKeyboard()
       );
     }
-    else if (action === 'canbosoharga') {
+    else if (action === 'canbosoprice') {
       const linked = db.getCanbosoLinkedVariants();
       const l = linked[Number(param)];
       if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
@@ -7115,7 +7115,7 @@ bot.on('callback_query', async (query) => {
         `🎨 *Set Emoji: ${label}*\n\n` +
         `Send (forwarding from another chat is fine) one message containing the *premium emoji* (picked from the Telegram Premium emoji panel, not just typed as plain unicode) that you want to use here.\n\n` +
         (current ? `ℹ️ An ID is already set: \`${current}\`\n\n` : '') +
-        `Type /cancel to abort, or /hapusemoji to clear it again (back to the default).`,
+        `Type /cancel to abort, or /clearemoji to clear it again (back to the default).`,
         adminBackKeyboard(scope === 'gift' ? 'admin:giftemoji' : 'admin:cat_settings')
       );
     }
