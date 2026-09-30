@@ -5997,19 +5997,19 @@ function stockInstructionsText(productName, variantLabel, currentStock) {
     `Each line may use either of these 2 formats, freely mixed in the same message:\n\n` +
     `*1️⃣ Link/code only*\n` +
     '`https://link-redeem-1...`\n\n' +
-    `*2️⃣ Kombo akun (Email + Password + Kode 2FA + Link)*\n` +
-    `Pisahkan tiap field pakai tanda \`|\` (pipe), urutan tetap: Email, Password, Kode 2FA, Link.\n` +
-    `Untuk Kode 2FA, isi *Secret Key TOTP*-nya (bukan kode 6 digit statis) — persis seperti yang kamu masukkan ke situs [2fa.cn](https://2fa.cn) atau Google Authenticator. Boleh pakai spasi atau tidak, sama saja:\n` +
-    '`akun1@mail.com|Password123|kqzj jo6v m3ob nywd ag7m b4uo foa4 mzby|https://link-login-1...`\n' +
-    '`akun1b@mail.com|Password123|KQZJJO6VM3OBNYWDAG7MB4UOFOA4MZBY|https://link-login-1b...`  _(tanpa spasi, hasilnya sama)_\n' +
-    `Bot otomatis HITUNG kode 6 digit yang aktif saat itu dari secret-nya (algoritma sama seperti 2fa.cn/Google Authenticator) - jadi kode yang dilihat buyer selalu live & valid, bukan basi. Kalau kamu ketik kode digit statis di sini (bukan secret), tetap ditampilkan apa adanya seperti biasa - tidak error.\n` +
-    `Boleh berhenti dari belakang kalau field terakhir memang tidak ada (mis. tanpa Link):\n` +
-    '`akun2@mail.com|Password456|kqzjjo6vm3obnywd`  _(cuma 3 field, Link tidak ditampilkan)_\n' +
-    `Tapi kalau yang di-skip itu field di *tengah* (mis. tanpa 2FA tapi ada Link), kosongkan saja bagiannya - jangan dihapus segmennya, supaya Link tidak ketuker posisi:\n` +
-    '`akun3@mail.com|Password789||https://link-login-3...`  _(2 tanda \\| berdempetan = Kode 2FA dikosongkan)_\n\n' +
-    `Contoh kirim bulk campur kedua format sekaligus:\n` +
-    '```\nhttps://link-redeem-1...\nakun1@mail.com|Password123|kqzjjo6vm3obnywdag7mb4uofoa4mzby|https://link-login-1...\nakun2@mail.com|Password456||https://link-login-2...\nhttps://link-redeem-2...\n```\n\n' +
-    `Setiap kirim, bot balas konfirmasi jumlah yang masuk + total stok terbaru. Ketik /cancel kalau sudah selesai.`
+    `*2️⃣ Account combo (Email + Password + 2FA Code + Link)*\n` +
+    `Separate each field with a \`|\` (pipe), always in this order: Email, Password, 2FA Code, Link.\n` +
+    `For the 2FA Code, enter its *TOTP Secret Key* (not a static 6-digit code) — exactly what you would enter on [2fa.cn](https://2fa.cn) or Google Authenticator. Spaces are optional, both work the same:\n` +
+    '`account1@mail.com|Password123|kqzj jo6v m3ob nywd ag7m b4uo foa4 mzby|https://login-link-1...`\n' +
+    '`account1b@mail.com|Password123|KQZJJO6VM3OBNYWDAG7MB4UOFOA4MZBY|https://login-link-1b...`  _(no spaces, same result)_\n' +
+    `The bot automatically COMPUTES the currently valid 6-digit code from the secret (the same algorithm as 2fa.cn/Google Authenticator) - so the code the buyer sees is always live and valid, never stale. If you type a static digit code here instead of a secret, it is shown as is, as before - no error.\n` +
+    `You may stop early when the trailing fields genuinely do not exist (no Link, say):\n` +
+    '`account2@mail.com|Password456|kqzjjo6vm3obnywd`  _(only 3 fields, no Link shown)_\n' +
+    `But when the skipped field is in the *middle* (no 2FA but there is a Link), leave that part empty - do not remove the segment, or the Link shifts position:\n` +
+    '`account3@mail.com|Password789||https://login-link-3...`  _(2 adjacent \\| marks = the 2FA Code is left empty)_\n\n' +
+    `An example bulk message mixing both formats at once:\n` +
+    '```\nhttps://redeem-link-1...\naccount1@mail.com|Password123|kqzjjo6vm3obnywdag7mb4uofoa4mzby|https://login-link-1...\naccount2@mail.com|Password456||https://login-link-2...\nhttps://redeem-link-2...\n```\n\n' +
+    `After each message the bot confirms how many were added plus the new total stock. Type /cancel when you are done.`
   );
 }
 
@@ -6023,17 +6023,17 @@ async function sendOrEditAdmin(chatId, messageId, text, keyboard, parseMode) {
   }
 }
 
-// PENTING: regex WAJIB di-anchor ke awal teks (^) supaya cuma cocok kalau
-// pesannya BENERAN diawali "/cancel", bukan cuma MENGANDUNG "/cancel" di
-// mana saja. Tanpa "^", pesan bebas apapun yang kebetulan menyebut
-// "/cancel" di tengah kalimat (mis. deskripsi produk/how-to-use yang
-// isinya "...untuk batal ketik /cancel di grup support...") akan ikut
-// men-trigger handler ini dan DIAM-DIAM membatalkan pending action admin
-// yang lagi jalan (mis. lagi ngetik teks how-to-use panjang) - teks yang
+// IMPORTANT: this regex MUST be anchored to the start of the text (^) so it only
+// matches when the message REALLY begins with "/cancel", not merely CONTAINS
+// "/cancel" somewhere. Without "^", any message that happens to mention
+// "/cancel" mid-sentence (a product description/how-to-use saying "...to abort,
+// type /cancel in the support group...") would also trigger this handler and
+// SILENTLY cancel the admin's running pending action (while they were typing a
+// long how-to-use text, say) - losing the text with no clear explanation why.
 // sudah diketik hilang tanpa peringatan jelas kenapa.
 bot.onText(/^\/cancel(?:\s|$)/, (msg) => {
   db.clearPendingAction(msg.chat.id);
-  bot.sendMessage(msg.chat.id, 'Dibatalkan.');
+  bot.sendMessage(msg.chat.id, 'Cancelled.');
 });
 
 bot.onText(/^\/hapusemoji(?:\s|$)/, (msg) => {
@@ -6041,19 +6041,19 @@ bot.onText(/^\/hapusemoji(?:\s|$)/, (msg) => {
   if (!isAdmin(chatId)) return;
   const pending = db.getPendingAction(chatId);
   if (!pending || pending.type !== 'set_emoji_id') {
-    return bot.sendMessage(chatId, 'Gak ada proses "Set Emoji" yang lagi aktif.');
+    return bot.sendMessage(chatId, 'There is no "Set Emoji" process currently running.');
   }
   const { scope, key } = pending.data;
   db.clearEmojiId(`${scope}:${key}`);
   db.clearPendingAction(chatId);
-  bot.sendMessage(chatId, `🗑️ ID emoji untuk "${key}" dikosongkan, balik ke default.`);
+  bot.sendMessage(chatId, `🗑️ The emoji ID for "${key}" was cleared, back to the default.`);
 });
 
 bot.onText(/^\/admin/, (msg) => {
   const chatId = msg.chat.id;
   if (!isAdmin(chatId)) return;
   db.clearPendingAction(chatId);
-  bot.sendMessage(chatId, '🔧 *Admin Panel*\n\nPilih kategori di bawah:', { parse_mode: 'Markdown', reply_markup: adminMainKeyboard() });
+  bot.sendMessage(chatId, '🔧 *Admin Panel*\n\nPick a category below:', { parse_mode: 'Markdown', reply_markup: adminMainKeyboard() });
 });
 
 bot.on('callback_query', async (query) => {
@@ -6069,28 +6069,28 @@ bot.on('callback_query', async (query) => {
 
     if (action === 'menu') {
       db.clearPendingAction(chatId);
-      await sendOrEditAdmin(chatId, messageId, '🔧 *Admin Panel*\n\nPilih kategori di bawah:', adminMainKeyboard());
+      await sendOrEditAdmin(chatId, messageId, '🔧 *Admin Panel*\n\nPick a category below:', adminMainKeyboard());
     }
 
-    // ---- 4 kategori menu utama /admin (lihat adminMainKeyboard()) ----
+    // ---- The 4 main /admin menu categories (see adminMainKeyboard()) ----
     else if (action === 'cat_products') {
       db.clearPendingAction(chatId);
-      await sendOrEditAdmin(chatId, messageId, '📦 *Produk & Stok*\n\nPilih menu di bawah:', adminProductsKeyboard());
+      await sendOrEditAdmin(chatId, messageId, '📦 *Products & Stock*\n\nPick a menu below:', adminProductsKeyboard());
     }
 
     else if (action === 'cat_users') {
       db.clearPendingAction(chatId);
-      await sendOrEditAdmin(chatId, messageId, '💰 *User & Saldo*\n\nPilih menu di bawah:', adminUsersKeyboard());
+      await sendOrEditAdmin(chatId, messageId, '💰 *Users & Balance*\n\nPick a menu below:', adminUsersKeyboard());
     }
 
     else if (action === 'cat_reports') {
       db.clearPendingAction(chatId);
-      await sendOrEditAdmin(chatId, messageId, '📊 *Laporan & Statistik*\n\nPilih menu di bawah:', adminReportsKeyboard());
+      await sendOrEditAdmin(chatId, messageId, '📊 *Reports & Statistics*\n\nPick a menu below:', adminReportsKeyboard());
     }
 
     else if (action === 'cat_gift') {
       db.clearPendingAction(chatId);
-      await sendOrEditAdmin(chatId, messageId, '🎁 *Gift (Userbot)*\n\nPilih menu di bawah:', adminGiftKeyboard());
+      await sendOrEditAdmin(chatId, messageId, '🎁 *Gift (Userbot)*\n\nPick a menu below:', adminGiftKeyboard());
     }
 
     else if (action === 'giftemoji') {
@@ -6102,18 +6102,18 @@ bot.on('callback_query', async (query) => {
     else if (action === 'gift_balance') {
       db.clearPendingAction(chatId);
       if (!userbot.isConfigured()) {
-        await sendOrEditAdmin(chatId, messageId, '⚠️ Userbot belum dikonfigurasi (USERBOT_SESSION kosong di .env). Lihat userbot-login.js.', adminBackKeyboard('admin:cat_gift'));
+        await sendOrEditAdmin(chatId, messageId, '⚠️ The userbot is not configured yet (USERBOT_SESSION is empty in .env). See userbot-login.js.', adminBackKeyboard('admin:cat_gift'));
         return;
       }
       try {
-        const stars = await userbot.getUserbotStarsBalance(true); // forceRefresh - admin mau angka terbaru
+        const stars = await userbot.getUserbotStarsBalance(true); // forceRefresh - the admin wants the latest number
         const lowWarning = stars < GIFT_LOW_STARS_THRESHOLD
-          ? `\n\n⚠️ Saldo di bawah ambang batas (${GIFT_LOW_STARS_THRESHOLD}⭐) - buyer bisa mulai kena "Stars habis". Top up segera lewat Settings > Stars di akun userbot.`
+          ? `\n\n⚠️ The balance is below the threshold (${GIFT_LOW_STARS_THRESHOLD}⭐) - buyers may start hitting "out of Stars". Top up soon via Settings > Stars on the userbot account.`
           : '';
-        await sendOrEditAdmin(chatId, messageId, `🌟 *Saldo Stars Userbot*\n\n${stars}⭐${lowWarning}`, adminBackKeyboard('admin:cat_gift'));
+        await sendOrEditAdmin(chatId, messageId, `🌟 *Userbot Stars Balance*\n\n${stars}⭐${lowWarning}`, adminBackKeyboard('admin:cat_gift'));
       } catch (err) {
         logError('admin:gift_balance', err);
-        await sendOrEditAdmin(chatId, messageId, `❌ Gagal cek saldo Stars: ${escapeHtml(String(err.message || err))}`, adminBackKeyboard('admin:cat_gift'));
+        await sendOrEditAdmin(chatId, messageId, `❌ Failed to check the Stars balance: ${escapeHtml(String(err.message || err))}`, adminBackKeyboard('admin:cat_gift'));
       }
     }
 
@@ -6122,16 +6122,16 @@ bot.on('callback_query', async (query) => {
       const db_ = db.readDb();
       const orders = (db_.giftOrders || []).slice(-20).reverse();
       if (!orders.length) {
-        await sendOrEditAdmin(chatId, messageId, '📜 *Riwayat Gift Order*\n\nBelum ada order gift sama sekali.', adminBackKeyboard('admin:cat_gift'));
+        await sendOrEditAdmin(chatId, messageId, '📜 *Gift Order History*\n\nNo gift order has been placed yet.', adminBackKeyboard('admin:cat_gift'));
         return;
       }
       const statusIcon = { pending: '⏳', sent: '✅', failed_refunded: '❌' };
       const lines = orders.map(o => {
         const who = o.username ? `@${escapeHtml(o.username)}` : `ID ${o.chatId}`;
-        const modeLabel = o.mode === 'confess' ? '💌 Confess' : (o.mode === 'saved' ? '🎨 Koleksi' : '🎁 Buy');
+        const modeLabel = o.mode === 'confess' ? '💌 Confess' : (o.mode === 'saved' ? '🎨 Collectible' : '🎁 Buy');
         return `${statusIcon[o.status] || '❔'} ${modeLabel} ${o.stars}⭐ - ${who} → <code>${escapeHtml(String(o.target))}</code> (${usd(o.priceUsd, chatId)})`;
       });
-      await sendOrEditAdmin(chatId, messageId, `📜 *Riwayat Gift Order* (${orders.length} terakhir)\n\n${lines.join('\n')}`, adminBackKeyboard('admin:cat_gift'), 'HTML');
+      await sendOrEditAdmin(chatId, messageId, `📜 *Gift Order History* (last ${orders.length})\n\n${lines.join('\n')}`, adminBackKeyboard('admin:cat_gift'), 'HTML');
     }
 
     else if (action === 'giftpricing') {
@@ -6144,7 +6144,7 @@ bot.on('callback_query', async (query) => {
       const pricing = db.getGiftPricingSettings();
       const current = pricing.markupPct != null ? pricing.markupPct : GIFT_MARKUP_PCT;
       await sendOrEditAdmin(chatId, messageId,
-        `📈 *Ubah Markup Gift*\n\nMarkup sekarang: *${current}%*\n\nKetik markup baru dalam persen (angka saja, contoh: \`30\`). Ketik /cancel untuk batal.`,
+        `📈 *Change the Gift Markup*\n\nCurrent markup: *${current}%*\n\nType the new markup as a percentage (numbers only, for example \`30\`). Type /cancel to abort.`,
         adminBackKeyboard('admin:giftpricing')
       );
     }
@@ -6154,7 +6154,7 @@ bot.on('callback_query', async (query) => {
       const pricing = db.getGiftPricingSettings();
       const current = pricing.starsToUsdRate != null ? pricing.starsToUsdRate : STARS_TO_USD_RATE;
       await sendOrEditAdmin(chatId, messageId,
-        `💱 *Ubah Kurs Stars→USD*\n\nKurs sekarang: *${current}* (artinya 1⭐ = $${current})\n\nKetik kurs baru (angka desimal, contoh: \`0.015\`). Ketik /cancel untuk batal.`,
+        `💱 *Change the Stars→USD Rate*\n\nCurrent rate: *${current}* (meaning 1⭐ = $${current})\n\nType the new rate (a decimal number, for example \`0.015\`). Type /cancel to abort.`,
         adminBackKeyboard('admin:giftpricing')
       );
     }
@@ -6162,12 +6162,12 @@ bot.on('callback_query', async (query) => {
     else if (action === 'giftpricingreset') {
       db.clearPendingAction(chatId);
       db.setGiftPricingSettings({ markupPct: null, starsToUsdRate: null });
-      await sendOrEditAdmin(chatId, messageId, `✅ Harga gift direset ke default .env.\n\n${adminGiftPricingText()}`, adminGiftPricingKeyboard(), 'HTML');
+      await sendOrEditAdmin(chatId, messageId, `✅ Gift pricing was reset to the .env defaults.\n\n${adminGiftPricingText()}`, adminGiftPricingKeyboard(), 'HTML');
     }
 
     else if (action === 'cat_settings') {
       db.clearPendingAction(chatId);
-      await sendOrEditAdmin(chatId, messageId, '⚙️ *Pengaturan Toko*\n\nPilih menu di bawah:', adminSettingsKeyboard());
+      await sendOrEditAdmin(chatId, messageId, '⚙️ *Store Settings*\n\nPick a menu below:', adminSettingsKeyboard());
     }
 
     else if (action === 'forcejoin') {
@@ -6179,13 +6179,13 @@ bot.on('callback_query', async (query) => {
       const { enabled } = db.getForceJoinSettings();
       db.setForceJoinEnabled(!enabled);
       await sendOrEditAdmin(chatId, messageId, adminForceJoinText(), adminForceJoinKeyboard());
-      await bot.answerCallbackQuery(query.id, { text: !enabled ? '🟢 Wajib Join diaktifkan!' : '🔴 Wajib Join dinonaktifkan.' }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: !enabled ? '🟢 Force Join enabled!' : '🔴 Force Join disabled.' }).catch(() => {});
     }
 
     else if (action === 'forcejoin_add') {
       db.setPendingAction(chatId, { type: 'forcejoin_add_link' });
       await sendOrEditAdmin(chatId, messageId,
-        '➕ *Tambah Channel/Grup Wajib Join*\n\n*Langkah 1/2* - Kirim link undangan/publik channel atau grup-nya, contoh:\n`https://t.me/namachannel`\natau link invite private (channel maupun grup):\n`https://t.me/+AbCdEfGhIjK`\n\nKetik /cancel untuk batal.',
+        '➕ *Add a Force-Join Channel/Group*\n\n*Step 1/2* - Send the channel or group\'s public/invite link, for example:\n`https://t.me/channelname`\nor a private invite link (channel or group):\n`https://t.me/+AbCdEfGhIjK`\n\nType /cancel to abort.',
         adminBackKeyboard('admin:cat_settings')
       );
     }
@@ -6193,7 +6193,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'forcejoin_remove') {
       const removed = db.removeForceJoinChannel(param);
       await sendOrEditAdmin(chatId, messageId, adminForceJoinText(), adminForceJoinKeyboard());
-      await bot.answerCallbackQuery(query.id, { text: removed ? '🗑️ Channel dihapus.' : '⚠️ Channel tidak ditemukan.' }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: removed ? '🗑️ Channel removed.' : '⚠️ Channel not found.' }).catch(() => {});
     }
 
     else if (action === 'channelnotif') {
