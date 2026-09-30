@@ -6798,7 +6798,7 @@ bot.on('callback_query', async (query) => {
         `⚠️ Are you sure you want to unlink *${label}* from the Supplier API?\n\nThis variant goes back to local/manual stock - make sure stock has been added via 📥 Add Stock if you still want auto-delivery to buyers.`,
         {
           inline_keyboard: [
-            [{ text: '✅ Ya, Putuskan', callback_data: `admin:supplierunlink:${linkedIdx}` }],
+            [{ text: '✅ Yes, Unlink', callback_data: `admin:supplierunlink:${linkedIdx}` }],
             [{ text: '❌ Cancel', callback_data: 'admin:supplier' }]
           ]
         }
@@ -6809,26 +6809,26 @@ bot.on('callback_query', async (query) => {
       const l = linked[Number(param)];
       if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       db.clearVariantSupplier(l.productId, l.variant.id);
-      await bot.answerCallbackQuery(query.id, { text: 'Link supplier diputus, varian ini balik pakai stok lokal.' }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: 'Supplier link removed; this variant is back on local stock.' }).catch(() => {});
       await sendOrEditAdmin(chatId, messageId, await supplierMenuText(), await supplierMenuKeyboard());
     }
     else if (action === 'supplierrefresh') {
       if (!AIVERSEHUB_API_KEY) {
-        return sendOrEditAdmin(chatId, messageId, '⚠️ *AIVERSEHUB_API_KEY* belum diisi di `.env`.', supplierBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, '⚠️ *AIVERSEHUB_API_KEY* has not been set in `.env`.', supplierBackKeyboard());
       }
       const linkedCheck = db.getSupplierLinkedVariants();
       if (!linkedCheck.length) {
-        return sendOrEditAdmin(chatId, messageId, '_Belum ada varian yang terhubung, tidak ada yang perlu di-refresh._', supplierBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, '_No variant is linked, so there is nothing to refresh._', supplierBackKeyboard());
       }
       let updated, missing, invalidPrice, lines;
       try {
         ({ updated, missing, invalidPrice, lines } = await refreshSupplierData());
       } catch (err) {
-        return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil data terbaru dari Supplier:\n_${err.message}_`, supplierBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Failed to fetch the latest data from the supplier:\n_${err.message}_`, supplierBackKeyboard());
       }
-      const problemTag = [missing ? `${missing} link rusak` : null, invalidPrice ? `${invalidPrice} modal tidak valid` : null].filter(Boolean).join(', ');
+      const problemTag = [missing ? `${missing} broken link(s)` : null, invalidPrice ? `${invalidPrice} invalid cost(s)` : null].filter(Boolean).join(', ');
       await sendOrEditAdmin(chatId, messageId,
-        `🔄 *Refresh Modal & Stok selesai*\n\n${updated} varian diperbarui${problemTag ? `, ${problemTag}` : ''}.\n\n${lines.join('\n\n')}`,
+        `🔄 *Refresh of Cost & Stock finished*\n\n${updated} variant(s) updated${problemTag ? `, ${problemTag}` : ''}.\n\n${lines.join('\n\n')}`,
         supplierBackKeyboard()
       );
     }
@@ -6841,7 +6841,7 @@ bot.on('callback_query', async (query) => {
       await sendOrEditAdmin(chatId, messageId, await supplierStatsText(), supplierBackKeyboard());
     }
 
-    // ===== Canboso API (supplier kedua) =====
+    // ===== Canboso API (the second supplier) =====
     else if (action === 'canboso') {
       db.clearPendingAction(chatId);
       await sendOrEditAdmin(chatId, messageId, canbosoMenuText(), canbosoMenuKeyboard());
@@ -6849,9 +6849,9 @@ bot.on('callback_query', async (query) => {
     else if (action === 'canbosolink') {
       const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
       if (!productsWithVariants.length) {
-        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Canboso API*\n\nBelum ada produk dengan varian. Tambah varian dulu lewat ➕ Tambah Varian.', canbosoBackKeyboard());
+        await sendOrEditAdmin(chatId, messageId, '*Link a Product to the Canboso API*\n\nThere is no product with variants yet. Add a variant first via ➕ Add Variant.', canbosoBackKeyboard());
       } else {
-        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Canboso API*\n\nPilih produk lokal yang mau dihubungkan:', adminProductPickKeyboard('canbosolink_pick', productsWithVariants));
+        await sendOrEditAdmin(chatId, messageId, '*Link a Product to the Canboso API*\n\nPick the local product you want to link:', adminProductPickKeyboard('canbosolink_pick', productsWithVariants));
       }
     }
     else if (action === 'canbosolink_pick') {
@@ -6862,7 +6862,7 @@ bot.on('callback_query', async (query) => {
       if (product.variants.length === 1) {
         await showCanbosoProductPicker(chatId, messageId, param, product.variants[0].id);
       } else {
-        await sendOrEditAdmin(chatId, messageId, `Hubungkan varian mana dari *${product.name}*?`, adminVariantPickKeyboard(product, 'canbosolink_variant', 'admin:canbosolink'));
+        await sendOrEditAdmin(chatId, messageId, `Which variant of *${product.name}* should be linked?`, adminVariantPickKeyboard(product, 'canbosolink_variant', 'admin:canbosolink'));
       }
     }
     else if (action === 'canbosolink_variant') {
@@ -6875,7 +6875,7 @@ bot.on('callback_query', async (query) => {
       const idx = Number(param);
       const pending = db.getPendingAction(chatId);
       if (!pending || pending.type !== 'canboso_link_pick' || !pending.data.products[idx]) {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi pilih produk sudah kadaluarsa, ulangi lagi dari Canboso API.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ The product-selection session has expired, start again from the Canboso API menu.', show_alert: true });
       }
       const { productId, variantId, products } = pending.data;
       const remote = products[idx];
@@ -6883,7 +6883,7 @@ bot.on('callback_query', async (query) => {
       const variant = product && product.variants.find(v => v.id === variantId);
       db.clearPendingAction(chatId);
       if (!product || !variant) {
-        return sendOrEditAdmin(chatId, messageId, '⚠️ Produk/varian tidak ditemukan lagi, dibatalkan.', canbosoBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, '⚠️ The product/variant no longer exists, cancelled.', canbosoBackKeyboard());
       }
       const cost = typeof remote.price === 'number' ? remote.price : parseFloat(remote.price);
       db.setVariantCanboso(productId, variantId, remote.id, cost);
@@ -6891,11 +6891,11 @@ bot.on('callback_query', async (query) => {
       if (!isNaN(liveStockOnLink)) db.setVariantStock(productId, variantId, liveStockOnLink);
       const currentSellPrice = db.getBasePrice(variant);
       await sendOrEditAdmin(chatId, messageId,
-        `✅ *${product.name}${variant.label ? ' - ' + variant.label : ''}* berhasil dihubungkan ke Canboso API!\n\n` +
-        `Product ID: \`${remote.id}\`\n🌐 Nama di Canboso: ${remote.name || '-'}\n\n` +
-        `Mulai sekarang, tiap ada buyer beli varian ini, bot akan otomatis pesan lewat Canboso dan langsung teruskan hasilnya ke buyer - stok lokal/manual varian ini (kalau ada) tetap dipakai LEBIH DULU, baru sisa kekurangannya dipesan otomatis ke Canboso.\n\n` +
+        `✅ *${product.name}${variant.label ? ' - ' + variant.label : ''}* was linked to the Canboso API!\n\n` +
+        `Product ID: \`${remote.id}\`\n🌐 Name at Canboso: ${remote.name || '-'}\n\n` +
+        `From now on, whenever a buyer purchases this variant, the bot orders automatically through Canboso and forwards the result straight to them - this variant's local/manual stock (if any) is still used FIRST, and only the shortfall is ordered automatically from Canboso.\n\n` +
         `${marginText(cost, currentSellPrice)}\n\n` +
-        `Mau atur harga jual sekarang? Pilih markup cepat dari modal (${typeof cost === 'number' && !isNaN(cost) ? usd(cost) : '?'}), atau isi harga custom - atau langsung "Selesai" kalau harga jual sekarang sudah pas.`,
+        `Want to set the sale price now? Pick a quick markup on the cost (${typeof cost === 'number' && !isNaN(cost) ? usd(cost) : '?'}), or enter a custom price - or just press "Done" if the current sale price is already right.`,
         canbosoLinkPriceKeyboard(chatId, productId, variantId)
       );
     }
@@ -6903,7 +6903,7 @@ bot.on('callback_query', async (query) => {
       const pct = Number(param);
       const priceCtx = db.getPendingAction(chatId);
       if (!priceCtx || priceCtx.type !== 'canboso_link_price_ctx') {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Canboso API.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ This session has expired, start again from the Canboso API menu.', show_alert: true });
       }
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
@@ -6911,20 +6911,20 @@ bot.on('callback_query', async (query) => {
       if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const cost = variant.canbosoCost;
       if (typeof cost !== 'number' || isNaN(cost)) {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Harga modal tidak diketahui untuk varian ini - pakai ✏️ Harga Custom saja.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ The cost is unknown for this variant - use ✏️ Custom Price instead.', show_alert: true });
       }
       const newPrice = Math.round(cost * (1 + pct / 100) * 100) / 100;
       db.setVariantPrice(productId, variantId, newPrice);
-      await bot.answerCallbackQuery(query.id, { text: `✅ Harga jual di-set ${usd(newPrice)} (modal +${pct}%)` }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: `✅ Sale price set to ${usd(newPrice)} (cost +${pct}%)` }).catch(() => {});
       await sendOrEditAdmin(chatId, messageId,
-        `✅ Harga jual *${product.name}${variant.label ? ' - ' + variant.label : ''}* di-set ke ${usd(newPrice)}.\n\n${marginText(cost, newPrice)}`,
+        `✅ The sale price of *${product.name}${variant.label ? ' - ' + variant.label : ''}* was set to ${usd(newPrice)}.\n\n${marginText(cost, newPrice)}`,
         canbosoLinkPriceKeyboard(chatId, productId, variantId)
       );
     }
     else if (action === 'canbosolinkcustomprice') {
       const priceCtx = db.getPendingAction(chatId);
       if (!priceCtx || priceCtx.type !== 'canboso_link_price_ctx') {
-        return bot.answerCallbackQuery(query.id, { text: '⚠️ Sesi sudah kadaluarsa, ulangi lagi dari Canboso API.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ This session has expired, start again from the Canboso API menu.', show_alert: true });
       }
       const { productId, variantId } = priceCtx.data;
       const product = db.findProduct(productId);
@@ -6933,9 +6933,9 @@ bot.on('callback_query', async (query) => {
       db.setPendingAction(chatId, { type: 'setprice_amount', data: { productId, variantId } });
       const cost = variant.canbosoCost;
       await sendOrEditAdmin(chatId, messageId,
-        `✏️ *Set Harga Custom - ${product.name}${variant.label ? ' - ' + variant.label : ''}*\n\n` +
-        `${typeof cost === 'number' ? `Modal Canboso: ${usd(cost)}\n` : ''}Harga jual saat ini: ${usd(db.getBasePrice(variant))}\n\n` +
-        `Ketik harga baru dalam USD (angka saja, boleh desimal, contoh: \`5\` atau \`5.99\`). Ketik /cancel untuk batal.`,
+        `✏️ *Set Custom Price - ${product.name}${variant.label ? ' - ' + variant.label : ''}*\n\n` +
+        `${typeof cost === 'number' ? `Canboso cost: ${usd(cost)}\n` : ''}Current sale price: ${usd(db.getBasePrice(variant))}\n\n` +
+        `Type the new price in USD (numbers only, decimals allowed, for example \`5\` or \`5.99\`). Type /cancel to abort.`,
         canbosoBackKeyboard()
       );
     }
@@ -6947,7 +6947,7 @@ bot.on('callback_query', async (query) => {
       const cost = variant.canbosoCost;
       const currentSellPrice = db.getBasePrice(variant);
       await sendOrEditAdmin(chatId, messageId,
-        `💲 *Atur Harga - ${productName}${variant.label ? ' - ' + variant.label : ''}*\n\n${marginText(cost, currentSellPrice)}\n\nPilih markup cepat dari modal, atau isi harga custom.`,
+        `💲 *Set Price - ${productName}${variant.label ? ' - ' + variant.label : ''}*\n\n${marginText(cost, currentSellPrice)}\n\nPick a quick markup on the cost, or enter a custom price.`,
         canbosoLinkPriceKeyboard(chatId, productId, variant.id)
       );
     }
@@ -6959,10 +6959,10 @@ bot.on('callback_query', async (query) => {
       const { variant, productName } = l;
       const label = `${productName}${variant.label ? ' - ' + variant.label : ''}`;
       await sendOrEditAdmin(chatId, messageId,
-        `⚠️ Yakin mau putuskan *${label}* dari Canboso API?\n\nVarian ini akan balik pakai stok lokal/manual - pastikan sudah ada stok yang diisi lewat 📥 Tambah Stock kalau mau tetap auto-kirim ke buyer.`,
+        `⚠️ Are you sure you want to unlink *${label}* from the Canboso API?\n\nThis variant goes back to local/manual stock - make sure stock has been added via 📥 Add Stock if you still want auto-delivery to buyers.`,
         {
           inline_keyboard: [
-            [{ text: '✅ Ya, Putuskan', callback_data: `admin:canbosounlink:${linkedIdx}` }],
+            [{ text: '✅ Yes, Unlink', callback_data: `admin:canbosounlink:${linkedIdx}` }],
             [{ text: '❌ Cancel', callback_data: 'admin:canboso' }]
           ]
         }
@@ -6973,28 +6973,28 @@ bot.on('callback_query', async (query) => {
       const l = linked[Number(param)];
       if (!l) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       db.clearVariantCanboso(l.productId, l.variant.id);
-      await bot.answerCallbackQuery(query.id, { text: 'Link Canboso diputus, varian ini balik pakai stok lokal.' }).catch(() => {});
+      await bot.answerCallbackQuery(query.id, { text: 'Canboso link removed; this variant is back on local stock.' }).catch(() => {});
       await sendOrEditAdmin(chatId, messageId, canbosoMenuText(), canbosoMenuKeyboard());
     }
     else if (action === 'canbosodebug') {
       if (!CANBOSO_API_KEY) {
-        return bot.answerCallbackQuery(query.id, { text: 'CANBOSO_API_KEY belum diisi di .env.', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: 'CANBOSO_API_KEY has not been set in .env.', show_alert: true });
       }
       let raw;
       try {
         raw = await canboso.getRawProducts();
       } catch (err) {
-        return bot.answerCallbackQuery(query.id, { text: `Gagal ambil raw response: ${err.message}`, show_alert: true }).catch(() => {});
+        return bot.answerCallbackQuery(query.id, { text: `Failed to fetch the raw response: ${err.message}`, show_alert: true }).catch(() => {});
       }
-      // Telegram batas 4096 karakter per pesan - potong kalau kepanjangan,
-      // dan kirim sebagai pesan BARU (bukan edit) supaya gampang di-scroll/
-      // di-forward/copy-paste ke developer buat sesuaikan pemetaan field
-      // di getProducts() (supplierCanboso.js).
+      // Telegram caps messages at 4096 characters - truncate when too long, and
+      // send it as a NEW message (not an edit) so it is easy to scroll, forward, or
+      // copy-paste to a developer to adjust the field mapping in getProducts()
+      // (supplierCanboso.js).
       let text = JSON.stringify(raw, null, 2);
       const truncated = text.length > 3500;
-      if (truncated) text = text.slice(0, 3500) + '\n... (dipotong, total ' + text.length + ' karakter)';
-      await bot.sendMessage(chatId, `🐞 <b>Raw Response Canboso</b> (<code>GET /api/v2/telegram-buyer/products</code>)\n\n<pre>${escapeHtml(text)}</pre>`, { parse_mode: 'HTML' }).catch(async () => {
-        await bot.sendMessage(chatId, '⚠️ Gagal kirim raw response (mungkin format HTML-nya bentrok) - coba lagi.');
+      if (truncated) text = text.slice(0, 3500) + '\n... (truncated, ' + text.length + ' characters in total)';
+      await bot.sendMessage(chatId, `🐞 <b>Canboso Raw Response</b> (<code>GET /api/v2/telegram-buyer/products</code>)\n\n<pre>${escapeHtml(text)}</pre>`, { parse_mode: 'HTML' }).catch(async () => {
+        await bot.sendMessage(chatId, '⚠️ Failed to send the raw response (its HTML formatting may clash) - please try again.');
       });
       await bot.answerCallbackQuery(query.id).catch(() => {});
     }
