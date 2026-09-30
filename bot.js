@@ -6482,7 +6482,7 @@ bot.on('callback_query', async (query) => {
       const product = db.findProduct(param);
       if (!product || !product.variants.length) {
         return sendOrEditAdmin(chatId, messageId,
-          `⚠️ Produk *${product ? product.name : param}* belum punya varian. Tambah variannya dulu lewat ➕ Tambah Varian.`,
+          `⚠️ Product *${product ? product.name : param}* has no variants yet. Add one first via ➕ Add Variant.`,
           adminBackKeyboard('admin:cat_products')
         );
       }
