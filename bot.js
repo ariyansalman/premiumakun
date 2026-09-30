@@ -7000,57 +7000,57 @@ bot.on('callback_query', async (query) => {
     }
     else if (action === 'canbosorefresh') {
       if (!CANBOSO_API_KEY) {
-        return sendOrEditAdmin(chatId, messageId, '⚠️ *CANBOSO_API_KEY* belum diisi di `.env`.', canbosoBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, '⚠️ *CANBOSO_API_KEY* has not been set in `.env`.', canbosoBackKeyboard());
       }
       const linkedCheck = db.getCanbosoLinkedVariants();
       if (!linkedCheck.length) {
-        return sendOrEditAdmin(chatId, messageId, '_Belum ada varian yang terhubung, tidak ada yang perlu di-refresh._', canbosoBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, '_No variant is linked, so there is nothing to refresh._', canbosoBackKeyboard());
       }
       let updated, missing, lines;
       try {
         ({ updated, missing, lines } = await refreshCanbosoData());
       } catch (err) {
-        return sendOrEditAdmin(chatId, messageId, `⚠️ Gagal ambil data terbaru dari Canboso:\n_${err.message}_`, canbosoBackKeyboard());
+        return sendOrEditAdmin(chatId, messageId, `⚠️ Failed to fetch the latest data from Canboso:\n_${err.message}_`, canbosoBackKeyboard());
       }
       await sendOrEditAdmin(chatId, messageId,
-        `🔄 *Refresh Harga & Stok selesai*\n\n${updated} varian diperbarui${missing ? `, ${missing} link rusak` : ''}.\n\n${lines.join('\n\n')}`,
+        `🔄 *Refresh of Price & Stock finished*\n\n${updated} variant(s) updated${missing ? `, ${missing} broken link(s)` : ''}.\n\n${lines.join('\n\n')}`,
         canbosoBackKeyboard()
       );
     }
 
     else if (action === 'removeproduct') {
-      await sendOrEditAdmin(chatId, messageId, '🗑️ *Hapus Produk*\n\nPilih produk yang ingin dihapus:', adminProductPickKeyboard('rmpick'));
+      await sendOrEditAdmin(chatId, messageId, '🗑️ *Delete Product*\n\nPick the product you want to delete:', adminProductPickKeyboard('rmpick'));
     }
     else if (action === 'rmpick') {
       const product = db.findProduct(param);
       if (!product) return bot.answerCallbackQuery(query.id, { text: 'Product not found.' });
       await sendOrEditAdmin(chatId, messageId,
-        `⚠️ Yakin hapus produk *${product.name}* (id: \`${product.id}\`) beserta semua variannya?`,
+        `⚠️ Are you sure you want to delete the product *${product.name}* (id: \`${product.id}\`) along with all its variants?`,
         { inline_keyboard: [
-          [{ text: '✅ Ya, Hapus', callback_data: `admin:rmconfirm:${param}` }],
-          [{ text: '‹ Batal', callback_data: 'admin:removeproduct' }]
+          [{ text: '✅ Yes, Delete', callback_data: `admin:rmconfirm:${param}` }],
+          [{ text: '‹ Cancel', callback_data: 'admin:removeproduct' }]
         ] }
       );
     }
     else if (action === 'rmconfirm') {
       const ok = db.removeProduct(param);
       await sendOrEditAdmin(chatId, messageId,
-        ok ? `✅ Produk \`${param}\` berhasil dihapus.` : `⚠️ Produk \`${param}\` tidak ditemukan.`,
+        ok ? `✅ The product \`${param}\` was deleted.` : `⚠️ The product \`${param}\` was not found.`,
         adminBackKeyboard('admin:cat_products')
       );
     }
 
     else if (action === 'addbalance') {
       db.setPendingAction(chatId, { type: 'addbalance_user' });
-      await sendOrEditAdmin(chatId, messageId, '💰 *Atur Saldo User*\n\nKetik chat ID user yang ingin diubah saldonya:', adminBackKeyboard('admin:cat_users'));
+      await sendOrEditAdmin(chatId, messageId, '💰 *Manage User Balance*\n\nType the chat ID of the user whose balance you want to change:', adminBackKeyboard('admin:cat_users'));
     }
 
     else if (action === 'deliverylog') {
       const logs = db.getDeliveryLogs(10);
       if (!logs.length) {
-        await sendOrEditAdmin(chatId, messageId, '📜 *Log Pengiriman Otomatis*\n\nBelum ada order yang auto-delivered.', adminBackKeyboard('admin:cat_reports'));
+        await sendOrEditAdmin(chatId, messageId, '📜 *Auto-Delivery Log*\n\nNo order has been auto-delivered yet.', adminBackKeyboard('admin:cat_reports'));
       } else {
-        await sendOrEditAdmin(chatId, messageId, `📜 *Log Pengiriman Otomatis* (${logs.length} terakhir)`, adminBackKeyboard('admin:cat_reports'));
+        await sendOrEditAdmin(chatId, messageId, `📜 *Auto-Delivery Log* (last ${logs.length})`, adminBackKeyboard('admin:cat_reports'));
         for (const order of logs) {
           await bot.sendMessage(chatId, formatDeliveryLogEntry(order), { parse_mode: 'HTML' }).catch(() => {});
         }
@@ -7059,13 +7059,13 @@ bot.on('callback_query', async (query) => {
 
     else if (action === 'checkorder') {
       db.setPendingAction(chatId, { type: 'checkorder_id' });
-      await sendOrEditAdmin(chatId, messageId, '🔍 *Cek Order ID*\n\nKetik ID order yang mau dicek (contoh: `ord_1735500000000`).\n\nID bisa dilihat di notifikasi order baru atau riwayat pembelian user.', adminBackKeyboard('admin:cat_reports'));
+      await sendOrEditAdmin(chatId, messageId, '🔍 *Check Order ID*\n\nType the order ID to look up (for example `ord_1735500000000`).\n\nThe ID appears in the new-order notification and in the user\'s purchase history.', adminBackKeyboard('admin:cat_reports'));
     }
 
     else if (action === 'emojiids') {
       db.clearPendingAction(chatId);
       await sendOrEditAdmin(chatId, messageId,
-        '🎨 *Kelola Emoji ID*\n\nPilih kategori tombol/teks yang mau dipasangi emoji premium. Nanti tinggal kirim/forward 1 pesan berisi emoji-nya - ID-nya ke-*capture otomatis*, gak perlu lewat @RawDataBot lagi.',
+        '🎨 *Manage Emoji ID*\n\nPick the button/text category you want to attach a premium emoji to. Then just send or forward one message containing that emoji - its ID is *captured automatically*, with no need for @RawDataBot.',
         adminEmojiCategoryKeyboard()
       );
     }
@@ -7074,14 +7074,14 @@ bot.on('callback_query', async (query) => {
       const catId = param;
       const catLabel = (EMOJI_CATEGORIES.find(c => c.id === catId) || {}).label || catId;
       await sendOrEditAdmin(chatId, messageId,
-        `🎨 *${catLabel}*\n\n✅ = sudah ada ID custom\n⚪ = masih default/kosong\n\nTap salah satu buat pasang/ganti emoji-nya.`,
+        `🎨 *${catLabel}*\n\n✅ = a custom ID is set\n⚪ = still default/empty\n\nTap one to set or change its emoji.`,
         adminEmojiKeyListKeyboard(catId)
       );
     }
 
     else if (action === 'emojiteks') {
       await sendOrEditAdmin(chatId, messageId,
-        '✍️ *Emoji di Teks Pesan*\n\nPilih halaman/grup pesannya dulu:',
+        '✍️ *Emoji in Message Text*\n\nPick the page/message group first:',
         adminEmojiTeksGroupKeyboard()
       );
     }
@@ -7090,7 +7090,7 @@ bot.on('callback_query', async (query) => {
       const groupId = param;
       const groupLabel = (TEKS_GROUPS.find(g => g.id === groupId) || {}).label || groupId;
       await sendOrEditAdmin(chatId, messageId,
-        `🎨 *${groupLabel}*\n\n✅ = sudah ada ID custom\n⚪ = masih default/kosong\n\nTap salah satu buat pasang/ganti emoji-nya.`,
+        `🎨 *${groupLabel}*\n\n✅ = a custom ID is set\n⚪ = still default/empty\n\nTap one to set or change its emoji.`,
         adminEmojiTeksItemKeyboard(groupId)
       );
     }
@@ -7101,9 +7101,9 @@ bot.on('callback_query', async (query) => {
       if (!scope || !key) return;
       db.setPendingAction(chatId, { type: 'set_emoji_id', data: { scope, key } });
       let label = scope === 'teks' ? findTeksItemLabel(key) : (EMOJI_KEY_LABELS[key] || key);
-      // Scope "gift" -> key-nya giftId (bukan label statis di EMOJI_KEY_LABELS),
-      // jadi cari label yang lebih enak dibaca (nominal stars-nya) dari katalog
-      // live - lihat adminGiftEmojiListKeyboard().
+      // Scope "gift" -> its key is a giftId (not a static label in
+      // EMOJI_KEY_LABELS), so look up a more readable label (its star amount) from
+      // the live catalogue - see adminGiftEmojiListKeyboard().
       if (scope === 'gift') {
         try {
           const catalog = await userbot.getGiftCatalog();
@@ -7116,9 +7116,9 @@ bot.on('callback_query', async (query) => {
       const current = db.getEmojiId(`${scope}:${key}`);
       await sendOrEditAdmin(chatId, messageId,
         `🎨 *Set Emoji: ${label}*\n\n` +
-        `Kirim (boleh forward dari chat lain) 1 pesan yang mengandung *emoji premium* (dipilih dari panel emoji Telegram Premium, bukan cuma ngetik unicode biasa) yang mau dipasang di sini.\n\n` +
-        (current ? `ℹ️ Saat ini sudah terisi ID: \`${current}\`\n\n` : '') +
-        `Ketik /cancel untuk batal, atau /hapusemoji buat kosongkan lagi (balik ke default).`,
+        `Send (forwarding from another chat is fine) one message containing the *premium emoji* (picked from the Telegram Premium emoji panel, not just typed as plain unicode) that you want to use here.\n\n` +
+        (current ? `ℹ️ An ID is already set: \`${current}\`\n\n` : '') +
+        `Type /cancel to abort, or /hapusemoji to clear it again (back to the default).`,
         adminBackKeyboard(scope === 'gift' ? 'admin:giftemoji' : 'admin:cat_settings')
       );
     }
@@ -7132,12 +7132,12 @@ bot.on('callback_query', async (query) => {
       const totalRevenue = allDb.orders.reduce((sum, o) => sum + (o.total || 0), 0);
       const pendingDepositCount = allDb.deposits.filter(d => d.status === 'pending').length;
       const text =
-        `📊 *Statistik Toko*\n\n` +
-        `👤 Total user: *${totalUsers}*\n` +
-        `💰 Total saldo beredar: *${usd(totalBalance)}*\n` +
-        `🧾 Total order: *${totalOrders}*\n` +
-        `💵 Total omzet: *${usd(totalRevenue)}*\n` +
-        `⏳ Topup pending (menunggu pembayaran): *${pendingDepositCount}*`;
+        `📊 *Store Statistics*\n\n` +
+        `👤 Total users: *${totalUsers}*\n` +
+        `💰 Total balance in circulation: *${usd(totalBalance)}*\n` +
+        `🧾 Total orders: *${totalOrders}*\n` +
+        `💵 Total revenue: *${usd(totalRevenue)}*\n` +
+        `⏳ Pending topups (awaiting payment): *${pendingDepositCount}*`;
       await sendOrEditAdmin(chatId, messageId, text, adminBackKeyboard('admin:cat_reports'));
     }
 
@@ -7150,8 +7150,8 @@ bot.on('callback_query', async (query) => {
     else if (action === 'listusers_search') {
       db.setPendingAction(chatId, { type: 'listusers_search_id' });
       await sendOrEditAdmin(chatId, messageId,
-        '🔍 <b>Cari User berdasarkan ID/Username</b>\n\nKetik Chat ID (boleh lengkap atau cuma sebagian angkanya, mis. <code>6213878</code>) ATAU ketik username-nya (boleh pakai "@" atau tidak, mis. <code>@nnamzcs</code> atau <code>nnamzcs</code>) - bot otomatis deteksi mana yang kamu ketik.\n\nKetik /cancel untuk batal.',
-        { inline_keyboard: [[{ text: '‹ Kembali ke List User', callback_data: 'admin:listusers:1' }]] },
+        '🔍 <b>Search a User by ID/Username</b>\n\nType a Chat ID (complete or just part of the number, for example <code>6213878</code>) OR type their username (with or without "@", for example <code>@someuser</code> or <code>someuser</code>) - the bot detects automatically which one you typed.\n\nType /cancel to abort.',
+        { inline_keyboard: [[{ text: '‹ Back to User List', callback_data: 'admin:listusers:1' }]] },
         'HTML'
       );
     }
@@ -7162,19 +7162,19 @@ bot.on('callback_query', async (query) => {
       await sendOrEditAdmin(chatId, messageId, maintenanceMenuText(settings), maintenanceMenuKeyboard(settings));
     }
 
-    // Toggle Mode Maintenance - kedua arah transisinya sekarang sama-sama
-    // proaktif ngasih tau: broadcast ke SEMUA user terdaftar (sama alur
-    // kirim seperti 📢 Broadcast - lihat action 'broadcast' sub 'send' di
-    // bawah) SEKALIGUS kirim notifikasi ke channel/group (kalau fitur 📣
-    // Notifikasi Channel aktif & notifyMaintenance dinyalakan - lihat
-    // sendChannelNotif()/buildChannelMaintenanceText()), supaya user maupun
-    // member channel tidak perlu nebak-nebak status bot:
-    // - AKTIF -> NONAKTIF ("🔴 Nonaktifkan"): broadcast teks "Maintenance
-    //   SELESAI" (buildMaintenanceFinishedText) + notif channel status finish.
-    // - NONAKTIF -> AKTIF ("🟢 Aktifkan"): broadcast teks maintenance yang
-    //   SAMA persis dengan yang bakal dilihat user kalau mereka coba
-    //   interaksi (buildMaintenanceText - custom message admin kalau ada,
-    //   atau default) + notif channel status start.
+    // Toggle Maintenance Mode - both transitions now announce themselves
+    // proactively: a broadcast to ALL registered users (the same send flow as 📢
+    // Broadcast - see the 'broadcast' action's 'send' sub-action below) AND a
+    // notification to the channel/group (when the 📣 Channel Notifications feature
+    // is on and notifyMaintenance is enabled - see
+    // sendChannelNotif()/buildChannelMaintenanceText()), so neither users nor
+    // channel members have to guess the bot's status:
+    // - ON -> OFF ("🔴 Disable"): broadcast the "Maintenance FINISHED" text
+    //   (buildMaintenanceFinishedText) plus a channel notification with finish status.
+    // - OFF -> ON ("🟢 Enable"): broadcast EXACTLY the maintenance text users would
+    //   see if they tried to interact (buildMaintenanceText - the admin's custom
+    //   message when set, otherwise the default) plus a channel notification with
+    //   start status.
     else if (action === 'maintenance_toggle') {
       const current = db.getMaintenanceSettings();
       const turningOn = current.enabled === false;
@@ -7183,13 +7183,13 @@ bot.on('callback_query', async (query) => {
       await sendOrEditAdmin(chatId, messageId, maintenanceMenuText(settings), maintenanceMenuKeyboard(settings));
       await bot.answerCallbackQuery(query.id, {
         text: settings.enabled
-          ? '🟢 Mode Maintenance diaktifkan, sedang broadcast ke semua user...'
-          : '🔴 Mode Maintenance dinonaktifkan, sedang broadcast ke semua user...'
+          ? '🟢 Maintenance Mode enabled, broadcasting to all users...'
+          : '🔴 Maintenance Mode disabled, broadcasting to all users...'
       }).catch(() => {});
 
-      // Notifikasi channel/group - dikirim SEKALI, bukan per-user, jadi
-      // aman ditembak duluan sebelum loop broadcast user (yang bisa makan
-      // waktu kalau user-nya banyak).
+      // The channel/group notification is sent ONCE, not per user, so it is safe to
+      // fire before the user broadcast loop (which can take a while with many
+      // users).
       sendChannelNotif('maintenance', buildChannelMaintenanceText(turningOn ? 'start' : 'finish'));
 
       if (turningOn || turningOff) {
