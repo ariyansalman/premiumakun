@@ -4,7 +4,7 @@
 // Used for the custom emoji that appears as the ICON on an inline keyboard
 // BUTTON LABEL, via the "icon_custom_emoji_id" field on InlineKeyboardButton
 // — a Bot API 9.4 feature (released 9 Feb 2026). This is a different mechanism
-// from emoji inside MESSAGE TEXT (see emoji-id-teks.js): it is not an HTML tag
+// from emoji inside MESSAGE TEXT (see emoji-id-text.js): it is not an HTML tag
 // inside the text, but a separate field on the button object itself.
 // Before Bot API 9.4, custom emoji on buttons were not supported by Telegram at
 // all — now they are.

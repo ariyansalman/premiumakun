@@ -1,389 +1,422 @@
-# Premium Akun Bot (Telegram)
+# Premium Account Bot (Telegram)
 
-Bot Telegram dengan menu inline untuk jual akun premium (Gemini Premium 18 Bulan, Netflix, Spotify, dll) dengan **Wallet topup otomatis** lewat QRIS (PayKita) dan USDT jaringan BEP20 — saldo masuk otomatis begitu pembayaran terdeteksi, tanpa perlu approve admin.
+A Telegram bot with inline menus for selling premium accounts (Gemini Premium 18 Months, Netflix, Spotify, and so on) with **automatic Wallet topup** via QRIS (PayKita), USDT on BEP20, TON, and Binance Pay — the balance is credited automatically the moment a payment is detected, with no admin approval needed.
 
-## Fitur
+## Features
 
-- Menu inline: Produk → Kategori → Varian → Konfirmasi beli
-- Saldo Wallet user, potong otomatis saat beli
-- **Topup Wallet otomatis** — 3 metode:
-  - **QRIS** lewat [PayKita](https://pay.digikita.id): QR dinamis dibuat per transaksi, saldo masuk otomatis begitu status order berubah jadi PAID
-  - **USDT (BEP20 / BNB Smart Chain)**: bot generate nominal USDT unik per transaksi, memantau mutasi masuk on-chain langsung dari RPC node BSC, saldo masuk otomatis begitu transaksi terkonfirmasi
-  - **TON (The Open Network)**: sama konsepnya dengan USDT, dipantau lewat TonCenter API
-  - **Binance Pay**: transfer C2C ke Binance ID pribadi toko, bot generate nominal unik per transaksi dan memantau histori pembayaran lewat API resmi Binance (`GET /sapi/v1/pay/transactions`, cukup API key biasa/bukan Merchant), saldo masuk otomatis begitu transaksi terdeteksi
-- Notifikasi order baru ke semua admin
-- Admin panel via command: tambah/hapus produk & varian, koreksi saldo user manual, cek order
-- **Auto Backup** — zip full source code project (kecuali `node_modules` & `.npm`), dikirim otomatis ke group Telegram tiap interval menit/jam yang diatur admin
-- **Tier Diskon Grosir 3-tingkat** (1-49 / 50-499 / 500+ pcs) per varian — harga jual bisa diketik manual langsung (🎁 Set Tier Diskon Grosir) atau dihitung otomatis dari markup% atas modal Supplier (📊 Atur Markup 3-Tier), dengan opsi **🔒 Kunci Harga Manual** khusus varian Supplier API supaya tidak ketimpa auto-sync
-- Database file JSON lokal (`data/db.json`) — tidak perlu setup database server
+- Inline menus: Products → Category → Variant → Purchase confirmation
+- A per-user Wallet balance, debited automatically on purchase
+- **Automatic Wallet topup** — 4 methods:
+  - **QRIS** via [PayKita](https://pay.digikita.id): a dynamic QR is created per transaction, and the balance is credited automatically as soon as the order status becomes PAID
+  - **USDT (BEP20 / BNB Smart Chain)**: the bot generates a unique USDT amount per transaction and watches incoming transfers on-chain directly from a public BSC RPC node, crediting the balance automatically once the transaction is confirmed
+  - **TON (The Open Network)**: the same concept as USDT, monitored via the TonCenter API
+  - **Binance Pay**: a C2C transfer to the store's own Binance ID; the bot generates a unique amount per transaction and watches the payment history through Binance's official API (`GET /sapi/v1/pay/transactions`, an ordinary API key is enough — no Merchant account), crediting the balance automatically once the transaction is detected
+- New-order notifications to every admin
+- A full inline admin panel: add/remove products and variants, adjust user balances manually, look up orders
+- **Auto Backup** — zips the full project source code (except `node_modules` and `.npm`) and sends it automatically to a Telegram group at an interval the admin sets
+- **3-level bulk discount tiers** (1-49 / 50-499 / 500+ pcs) per variant — sale prices can be typed in directly (🎁 Set Bulk Discount Tiers) or computed automatically as a markup% on the supplier cost (📊 Set 3-Tier Markup), with a **🔒 Lock Manual Price** option for Supplier API variants so auto-sync cannot overwrite them
+- A local JSON file database (`data/db.json`) — no database server to set up
 
-## Instalasi
+## Installation
 
-1. Pastikan Node.js sudah terinstall (**v18+ wajib** — dipakai untuk `fetch` bawaan saat memanggil API PayKita/BscScan).
-2. Install dependency:
+1. Make sure Node.js is installed (**v18+ required** — the built-in `fetch` is used when calling the PayKita and on-chain APIs).
+2. Install dependencies:
    ```bash
    npm install
    ```
-3. Salin `.env.example` jadi `.env`, lalu isi:
+3. Copy `.env.example` to `.env`, then fill in:
    ```
-   BOT_TOKEN=token_dari_botfather
+   BOT_TOKEN=token_from_botfather
    ADMIN_IDS=123456789,987654321
-   STORE_NAME=Nama Toko Kamu
-   BOT_USERNAME=UsernameBotKamu
-   REFERRAL_REWARD=2000
+   STORE_NAME=Your Store Name
+   BOT_USERNAME=YourBotUsername
+   REFERRAL_REWARD=1
    ```
-   - Dapatkan `BOT_TOKEN` dari [@BotFather](https://t.me/BotFather).
-   - Dapatkan ID Telegram kamu dari [@userinfobot](https://t.me/userinfobot).
-   - `BOT_USERNAME` diisi username bot **tanpa** `@` (contoh: `PremiumStoreBot`) — dipakai untuk membuat link referral pribadi tiap user. Kalau kosong, menu Referral akan menampilkan peringatan.
-   - `REFERRAL_REWARD` adalah nominal saldo (USD) yang didapat pengundang setiap kali temannya membuka bot lewat link referral untuk pertama kali. Default: 1.
-4. Isi juga konfigurasi **Wallet Topup Otomatis** (lihat bagian di bawah).
-5. Jalankan bot:
+   - Get `BOT_TOKEN` from [@BotFather](https://t.me/BotFather).
+   - Get your own Telegram ID from [@userinfobot](https://t.me/userinfobot).
+   - `BOT_USERNAME` is the bot username **without** `@` (for example `PremiumStoreBot`) — used to build each user's personal referral link. If it is empty, the Referral menu shows a warning instead.
+   - `REFERRAL_REWARD` is the balance (USD) the referrer earns each time a friend tops up their balance for the first time through their referral link. Default: 1.
+4. Also fill in the **Automatic Wallet Topup** configuration (see the section below).
+5. Start the bot:
    ```bash
    npm start
    ```
 
-## 💳 Wallet Topup Otomatis
+## 💳 Automatic Wallet Topup
 
-Ada 2 metode pembayaran yang bisa diaktifkan independen satu sama lain — kalau salah satu belum diisi konfigurasinya, bot akan kasih pesan peringatan ke user saat metode itu dipilih (bukan error/crash).
+There are 4 payment methods, each enabled independently of the others — if one is left unconfigured, the bot shows the user a warning when they pick that method (rather than erroring or crashing).
 
 ### 1) QRIS via PayKita
 
-PayKita adalah *payment tool* yang menghubungkan QRIS statis milik kamu sendiri (ShopeePay Partner / GoPay Merchant / provider lain via Listener) menjadi QRIS dinamis per transaksi dengan deteksi pembayaran otomatis.
+PayKita is a *payment tool* that turns your own static QRIS (ShopeePay Partner / GoPay Merchant / another provider via Listener) into a dynamic per-transaction QRIS with automatic payment detection.
 
-**Cara setup:**
-1. Daftar & login di [pay.digikita.id/register](https://pay.digikita.id/register)
-2. Hubungkan salah satu provider QRIS kamu dari dashboard (baca dulu halaman risiko integrasi yang ditautkan di sana)
-3. Test alur pembayaran dari dashboard dulu sampai order berubah status **PAID** — ini bisa dicoba gratis tanpa langganan
-4. Setelah yakin, aktifkan langganan API (mulai Rp5.000/1 bulan) untuk membuka **REST API**
-5. Buat API key (`pk_live_...`) dari dashboard, lalu isi ke `.env`:
+**Setup:**
+1. Register and log in at [pay.digikita.id/register](https://pay.digikita.id/register)
+2. Connect one of your QRIS providers from the dashboard (read the integration-risk page linked there first)
+3. Test the payment flow from the dashboard until an order reaches **PAID** status — this can be tried free, without a subscription
+4. Once you are satisfied, activate the API subscription (from Rp5,000/month) to unlock the **REST API**
+5. Create an API key (`pk_live_...`) from the dashboard, then set it in `.env`:
    ```
    PAYKITA_API_KEY=pk_live_xxxxxxxxxxxx
    PAYKITA_API_BASE=https://paykita.biz.id
    ```
 
-**⚠️ Catatan integrasi (penting dibaca):**
-Halaman dokumentasi resmi PayKita (`https://pay.digikita.id/documentation`) mengharuskan login ke dashboard merchant untuk dibuka, jadi nama field response API secara PERSIS (nama field QR, endpoint cek status by id, dst) tidak bisa diverifikasi tanpa akses login tersebut. Kode integrasi (`payment.js`) sudah ditulis defensif — mencoba beberapa kemungkinan nama field & endpoint sekaligus berdasarkan info yang tersedia publik di halaman utama PayKita:
-- Endpoint create order: `POST https://paykita.biz.id/api/orders` dengan header `x-api-key` dan body `{ base_amount, reference }`
-- Order otomatis berubah status jadi `PAID` begitu mutasi pembayaran cocok
+**⚠️ Integration note (worth reading):**
+PayKita's official documentation page (`https://pay.digikita.id/documentation`) requires a merchant dashboard login to open, so the exact API response field names (the QR field name, the check-status-by-id endpoint, and so on) could not be verified without that access. The integration code (`payment.js`) is written defensively — it tries several possible field names and endpoints based on what is publicly available on PayKita's main page:
+- Create order endpoint: `POST https://paykita.biz.id/api/orders` with an `x-api-key` header and a `{ base_amount, reference }` body
+- An order changes to `PAID` status automatically once a matching payment arrives
 
-Kalau setelah kamu pasang API key ternyata QR tidak muncul atau status pembayaran tidak terdeteksi otomatis, buka `payment.js`, cari komentar di bagian atas file (ada instruksi persis 3 hal yang perlu dicek & disesuaikan setelah kamu login ke dashboard PayKita dan lihat response API asli). Tidak ada bagian lain di `bot.js` yang perlu diubah setelah itu.
+If the QR does not appear, or payment status is not detected automatically after you add your API key, open `payment.js` and read the comment at the top of the file (it lists exactly what to check and adjust once you have logged into the PayKita dashboard and seen a real API response). Nothing else in `bot.js` needs changing afterwards.
 
-### 2) USDT jaringan BEP20 (BNB Smart Chain)
+### 2) USDT on BEP20 (BNB Smart Chain)
 
-Metode ini memantau mutasi masuk **langsung dari blockchain** (bukan API pihak ketiga berbayar) lewat [BscScan API](https://bscscan.com/apis), jadi gratis dan tidak butuh HP/aplikasi yang harus nyala terus.
+This method watches incoming transfers **directly on the blockchain**, reading from a public BSC RPC node via JSON-RPC `eth_getLogs` — free, no API key, and no dependency on a paid block-explorer API. It needs no phone or app running continuously.
 
-**Cara setup:**
-1. Siapkan alamat wallet BEP20 (BSC) milik kamu sendiri untuk menerima USDT
-2. Daftar & buat API key gratis di [bscscan.com/myapikey](https://bscscan.com/myapikey)
-3. Isi ke `.env`:
+**Setup:**
+1. Prepare your own BEP20 (BSC) wallet address to receive USDT
+2. Set it in `.env`:
    ```
-   USDT_BEP20_ADDRESS=0xAlamatWalletKamu
-   BSCSCAN_API_KEY=apikey_dari_bscscan
+   USDT_BEP20_ADDRESS=0xYourWalletAddress
    ```
-   Toko ini sudah pakai USD sebagai mata uang utama, dan USDT dipatok ~1:1 ke USD, jadi nominal topup dalam USD langsung dipakai sebagai dasar nominal USDT — tidak perlu kurs konversi lagi.
+   This store already uses USD as its main currency, and USDT is pegged ~1:1 to USD, so the USD topup amount is used directly as the USDT amount — no conversion rate needed.
+3. Optional: set `BSC_RPC_URL` in `.env` (comma separated) to use your own RPC endpoints instead of the default public one. See the comments in `payment.js` — of the public RPCs tested, only `bsc.publicnode.com` still serves `eth_getLogs` for free, which is why it is the default.
 
-**Cara kerja pencocokan otomatis:** karena transfer USDT di blockchain tidak punya kolom memo/catatan, bot menambahkan variasi kecil 4 desimal (mis. `50` USD → `50.0672` USDT, bukan `50.0000` USDT rata) ke setiap permintaan topup supaya nominalnya unik. Bot lalu polling BscScan setiap ~20 detik mencari transaksi masuk ke wallet kamu dengan nominal yang cocok persis, lalu otomatis kreditkan saldo user begitu ketemu. User diminta mengirim nominal **PERSIS** sampai 4 desimal dan **wajib** pakai jaringan BEP20 (bukan TRC20/ERC20/lainnya).
+**How automatic matching works:** because a USDT transfer on the blockchain has no memo/note field, the bot adds a small 4-decimal variation (for example `50` USD → `50.0672` USDT rather than a flat `50.0000`) to every topup request so each amount is unique. It then polls the chain roughly every 20 seconds looking for an incoming transfer to your wallet with an exactly matching amount, and credits the user's balance as soon as it finds one. Users are asked to send the **EXACT** amount to 4 decimals and **must** use the BEP20 network (not TRC20/ERC20/anything else).
 
-### 3) Binance Pay (transfer C2C ke Binance ID pribadi)
+Every matched transfer is also checked against previously used transaction hashes before any balance is credited, so a single on-chain transaction can never be replayed to credit two deposits.
 
-Metode ini cocok kalau kamu **belum punya** merchant account Binance Pay (yang butuh pendaftaran bisnis) — cukup pakai akun Binance pribadi biasa. Bot memantau histori pembayaran masuk lewat endpoint **resmi** Binance "Get Pay Trade History" (`GET /sapi/v1/pay/transactions`), yang termasuk API biasa (bukan API khusus Merchant), jadi cukup buat 1 API key dari akun Binance kamu sendiri.
+### 3) TON (The Open Network)
 
-**Cara setup:**
-1. Buka [binance.com](https://www.binance.com) → login → **Profile** (ikon pojok kanan atas) → **API Management**
-2. **Create API** → pilih **System generated** → beri nama bebas (mis. `bot-topup-readonly`)
-3. Setelah dibuat, di halaman edit permission API key itu, **centang HANYA** ✅ **Enable Reading**. **JANGAN** aktifkan "Enable Spot & Margin Trading" atau "Enable Withdrawals" sama sekali — fitur ini murni baca histori transaksi Pay, mengaktifkan izin lain cuma menambah risiko kalau API key sampai bocor
-4. Copy **API Key** & **Secret Key**, isi ke `.env`:
+The same concept as USDT, but monitored through the [TonCenter](https://toncenter.com) API — free and usable without an API key (with a more generous rate limit if you register one).
+
+**Setup:**
+1. Prepare your own TON wallet address to receive payments
+2. Set it in `.env`:
    ```
-   BINANCE_API_KEY=apikey_dari_binance
-   BINANCE_API_SECRET=secretkey_dari_binance
+   TON_ADDRESS=YourTonAddress
+   TONCENTER_API_KEY=optional_key_from_toncenter
+   ```
+
+The USD amount the user requests is converted to TON automatically using the live CoinGecko rate (cached for 5 minutes), then given a small unique variation just like USDT. Users should send from a real TON wallet (Tonkeeper, Tonhub, and so on) rather than an exchange that rounds or trims the amount sent.
+
+### 4) Binance Pay (C2C transfer to a personal Binance ID)
+
+This method suits you if you **do not have** a Binance Pay merchant account (which requires business registration) — an ordinary personal Binance account is enough. The bot watches incoming payments through Binance's **official** "Get Pay Trade History" endpoint (`GET /sapi/v1/pay/transactions`), which is a regular API (not the Merchant API), so a single API key from your own Binance account is all you need.
+
+**Setup:**
+1. Open [binance.com](https://www.binance.com) → log in → **Profile** (top-right icon) → **API Management**
+2. **Create API** → choose **System generated** → give it any name (for example `bot-topup-readonly`)
+3. Once created, on that API key's permission page, tick **ONLY** ✅ **Enable Reading**. Do **NOT** enable "Enable Spot & Margin Trading" or "Enable Withdrawals" at all — this feature purely reads Pay transaction history, and enabling anything else only adds risk if the key ever leaks
+4. Copy the **API Key** and **Secret Key** into `.env`:
+   ```
+   BINANCE_API_KEY=apikey_from_binance
+   BINANCE_API_SECRET=secretkey_from_binance
    BINANCE_PAY_ID=1273523449
    ```
-5. `BINANCE_PAY_ID` diisi Binance ID kamu sendiri (buka app Binance → tab **Pay** → ikon profil/QR di pojok kanan atas → nomor di bawah nama), ini yang ditampilkan ke buyer supaya mereka kirim lewat menu **Pay → Send**.
+5. `BINANCE_PAY_ID` is your own Binance ID (open the Binance app → **Pay** tab → profile/QR icon top-right → the number under your name). This is what buyers are shown so they can send via **Pay → Send**.
 
-**Cara kerja pencocokan otomatis:** sama persis konsepnya dengan USDT/TON di atas — karena transfer Binance Pay tidak wajib disertai memo yang bisa diandalkan, bot menambahkan variasi kecil 4 desimal ke setiap permintaan topup supaya nominalnya unik, lalu polling histori Binance Pay tiap ~20 detik mencari transaksi masuk (`orderType: C2C`) dengan nominal yang cocok persis dalam 2 jam terakhir, lalu otomatis kreditkan saldo user begitu ketemu. User diminta mengirim nominal **PERSIS** sampai 4 desimal via menu **Pay → Send** ke Binance ID di atas (bukan P2P/transfer wallet biasa).
+**How automatic matching works:** exactly the same concept as USDT/TON above — because a Binance Pay transfer need not carry a reliable memo, the bot adds a small 4-decimal variation to each topup request so the amount is unique, then polls the Binance Pay history roughly every 20 seconds for an incoming transaction (`orderType: C2C`) with an exactly matching amount within the last 2 hours, and credits the user's balance as soon as it finds one. Users are asked to send the **EXACT** amount to 4 decimals via **Pay → Send** to the Binance ID above (not P2P or an ordinary wallet transfer).
 
-⚠️ **Catatan keamanan:** jangan pernah bagikan `BINANCE_API_SECRET` ke siapapun, dan simpan API key ini dengan permission **read-only** saja seperti instruksi di atas — kalau bocor pun, tidak ada yang bisa dilakukan penyerang selain membaca histori transaksi (tidak bisa trading/withdraw).
+The asset must be **USDT** as well: a transfer of any other asset will never match, even if the number is identical. That check exists deliberately — without it, a buyer could send the same numeric amount in a near-worthless asset and still be credited in full.
 
-## Cara Pakai (User)
+⚠️ **Security note:** never share `BINANCE_API_SECRET` with anyone, and keep this key **read-only** as instructed above — then even if it leaks, an attacker can do nothing but read transaction history (no trading, no withdrawals).
 
-- `/start` → buka menu utama
-- Pilih **🛒 Buy Produk** → tampil daftar semua produk (flat list) dengan harga & stok, 🟢 = stok tersedia, 🔴 = stok habis
-- Pilih **👤 Profile** → tampil nama, username, Chat ID, saldo Wallet, total order, dan total referral, plus shortcut tombol **💳 Wallet** & **🧾 My Orders**
-- Pencet produk → tampil **halaman deskripsi produk** (spesifikasi, syarat & ketentuan) dengan tombol:
-  - **❗️ How to Use** → panduan cara redeem/aktivasi
-  - **✅ Buy Now** → lanjut ke pilih jumlah
-  - **‹ Back** → balik ke daftar produk
-- Di halaman jumlah → tombol cepat (1/5/10/20/30/50/100) atau **Jumlah Custom**, lalu **Order Confirmation** (total harga, saldo wallet, stok) → **Place Order** / **Cancel Order**
-- Pilih **💳 Wallet** → pilih metode **QRIS**, **USDT (BEP20)**, **TON**, atau **Binance Pay**:
-  - **QRIS** → tampil menu **Pilih Nominal Deposit** dengan tombol cepat ($1/$5/$10/$25/$50/$100) atau **✏️ Nominal Kustom** untuk ketik nominal sendiri → bot langsung buat QRIS dengan tombol **❌ Batalkan Pembayaran** (batal = hapus QR & balik ke menu utama)
-  - **USDT (BEP20)**, **TON**, dan **Binance Pay** → ketik nominal langsung, bot kasih nominal unik + alamat/Binance ID untuk dikirim
-  - Saldo masuk **otomatis**, tidak perlu tunggu admin
-- **🧾 My Orders** → tampil 5 order terakhir (Order ID, produk, jumlah, status) dengan tombol **🏅 Recover Product** (kirim ulang link/kode yang sudah pernah terkirim, cukup ketik Order ID-nya) dan **❌ Cancel** (balik ke menu utama)
-- **❗️ How to Use** → tampil daftar semua produk, pencet salah satu untuk lihat panduan cara pakainya (teks yang sama dengan `howToUse` di halaman deskripsi produk), plus tombol **❌ Close menu** untuk tutup pesannya
-- **🎁 Referral** → tampil link referral pribadi, jumlah referral, dan total penghasilan referral, plus tombol **📤 Bagikan Link Referral** untuk share langsung ke chat lain. Setiap teman yang buka bot lewat link itu untuk pertama kali otomatis menambah saldo pengundang sebesar `REFERRAL_REWARD`.
-- **📞 Support** → tombol **Contact Support** langsung buka chat pribadi ke owner bot (admin pertama di `ADMIN_IDS`), plus tombol **‹ Kembali** ke menu utama.
+## How to Use (User)
 
-## Warna Tombol Menu Utama 🎨
+- `/start` → open the main menu
+- Pick **🛒 Buy Product** → a flat list of every product with price and stock, 🟢 = in stock, 🔴 = out of stock
+- Pick **👤 Profile** → name, username, Chat ID, Wallet balance, total orders, and total referrals, plus **💳 Wallet** and **🧾 My Orders** shortcut buttons
+- Tap a product → its **product description page** (specifications, terms and conditions) with buttons:
+  - **❗️ How to Use** → the redeem/activation guide
+  - **✅ Buy Now** → continue to choose a quantity
+  - **‹ Back** → back to the product list
+- On the quantity page → quick buttons (1/5/10/20/30/50/100) or **Custom Amount**, then **Order Confirmation** (total price, wallet balance, stock) → **Place Order** / **Cancel Order**
+- Pick **💳 Wallet** → choose **QRIS**, **USDT (BEP20)**, **TON**, or **Binance Pay**:
+  - **QRIS** → a **Choose Deposit Amount** menu with quick buttons ($1/$5/$10/$25/$50/$100) or **✏️ Custom Amount** to type your own → the bot builds the QRIS with a **❌ Cancel Payment** button (cancelling deletes the QR and returns to the main menu)
+  - **USDT (BEP20)**, **TON**, and **Binance Pay** → type the amount directly, and the bot returns a unique amount plus the address/Binance ID to send to
+  - The balance is credited **automatically**, with no waiting on an admin
+- **🧾 My Orders** → the 5 most recent orders (Order ID, product, quantity, status) with **🏅 Recover Product** (resend a previously delivered link/code, just type its Order ID) and **❌ Cancel** (back to the main menu)
+- **❗️ How to Use** → a list of every product; tap one to see its usage guide (the same text as `howToUse` on the product description page), plus a **❌ Close menu** button
+- **🎁 Refer & Earn** → the personal referral link, referral count, and total referral earnings, plus a **📤 Share Referral Link** button to share straight into another chat. Once a friend who joined through that link tops up their balance for the first time, the referrer's balance increases by `REFERRAL_REWARD` automatically.
+- **📞 Support** → a **Contact Support** button that opens a private chat with the bot owner (the first admin in `ADMIN_IDS`), plus **‹ Back** to the main menu.
 
-Sejak Telegram **Bot API 9.4** (rilis 9 Feb 2026), tombol inline keyboard bisa diberi warna latar lewat field `style` - berlaku untuk SEMUA bot, tidak butuh Telegram Premium sama sekali (beda dari custom emoji). Menu utama (`/start`) sudah pakai ini:
-- Tombol biasa (Buy Produk, Saldo Saya, Wallet, My Orders) → `style: 'primary'` (biru)
-- Tombol Referral → `style: 'success'` (hijau), supaya menonjol
+## Main Menu Button Colours 🎨
 
-Kalau mau ubah warna tombol lain, tinggal bungkus dengan helper `withStyle(button, 'primary' | 'success' | 'danger')` di `bot.js`.
+Since Telegram **Bot API 9.4** (released 9 Feb 2026), inline keyboard buttons can be given a background colour via the `style` field — this works for ALL bots and needs no Telegram Premium at all (unlike custom emoji). The main menu (`/start`) already uses it:
+- Ordinary buttons (Buy Product, My Balance, Wallet, My Orders) → `style: 'primary'` (blue)
+- The Refer & Earn button → `style: 'success'` (green), so it stands out
 
-## Emoji Premium (Custom Emoji) ⚡
+To change another button's colour, just wrap it with the `withStyle(button, 'primary' | 'success' | 'danger')` helper in `bot.js`.
 
-Ada **2 mekanisme berbeda** untuk custom emoji Telegram Premium di bot ini:
+## Premium Emoji (Custom Emoji) ⚡
 
-### 1. Deskripsi Produk & How to Use — OTOMATIS, tanpa setting ID sama sekali
+There are **2 different mechanisms** for Telegram Premium custom emoji in this bot:
 
-Saat admin (owner) isi teks **deskripsi produk** (lewat ➕ Tambah Produk) atau **How to Use** (lewat ✏️ Set How to Use), teks itu **bebas penuh** — boleh banyak baris, boleh tag HTML `<b>...</b>` untuk bold.
+### 1. Product Descriptions & How to Use — AUTOMATIC, no ID configuration at all
 
-Kalau pas ngetik itu owner **memilih emoji premium langsung dari emoji panel Telegram Premium miliknya sendiri** (bukan sekadar ngetik karakter unicode biasa), Telegram otomatis menyertakan ID emoji tersebut di data pesan yang diterima bot. Bot langsung mengunci ID itu ke dalam teks yang disimpan — jadi emoji itu **langsung tampil premium ke semua pembeli**, tidak perlu isi/tempel ID ke file manapun.
+When the admin (owner) fills in a **product description** (via ➕ Add Product) or **How to Use** (via ✏️ Set How to Use), the text is **entirely free form** — as many lines as you like, and HTML tags such as `<b>...</b>` for bold.
 
-Kalau owner cuma ngetik emoji unicode biasa (bukan pilih dari panel Premium), ya tetap tampil sebagai emoji biasa — itu wajar, karena memang bukan custom emoji.
+If, while typing, the owner **picks a premium emoji straight from their own Telegram Premium emoji panel** (rather than just typing a plain unicode character), Telegram automatically includes that emoji's ID in the message data the bot receives. The bot locks that ID into the stored text immediately — so the emoji **appears as premium to every buyer**, with no ID to paste into any file.
 
-Placeholder lama `{e}` (dulu wajib untuk munculin bullet "⚡" di depan tiap poin) masih didukung sebagai alias, tapi sekarang opsional — bullet itu pakai ID dari `EMOJI_ID_PRODUCT_DESC` di `emoji-id-teks.js` kalau di-set, atau fallback ke "⚡" biasa kalau kosong.
+If the owner only types a plain unicode emoji (rather than picking from the Premium panel), it simply renders as an ordinary emoji — which is expected, since it is not a custom emoji.
 
-### 2. Teks Menu/Notifikasi & Ikon Tombol — manual, diisi di file
+The legacy `{e}` placeholder (once required to produce the "⚡" bullet in front of each point) is still supported as an alias, but is now optional — that bullet uses the ID from `EMOJI_ID_PRODUCT_DESC` in `emoji-id-text.js` when set, or falls back to a plain "⚡" when empty.
 
-Untuk teks yang **bukan** ditulis bebas oleh admin (welcome `/start`, pesan "🎉 ORDER BERHASIL!", header admin panel, ikon di label tombol menu), custom emoji-nya diisi manual lewat 2 file:
+### 2. Menu/Notification Text & Button Icons — manual, set in a file
 
-| File | Variabel | Dipakai di |
+For text that is **not** written freely by an admin (the `/start` welcome, the "🎉 ORDER SUCCESSFUL!" message, admin panel headers, icons on menu button labels), the custom emoji are set manually in 2 files:
+
+| File | Variable | Used for |
 |---|---|---|
-| `emoji-id-teks.js` | `EMOJI_ID_MENU_NOTIF` | Bullet "⚡" bawaan bot di teks menu/notifikasi |
-| `emoji-id-menu-inline.js` | `EMOJI_IDS` (object, 1 key per tombol) | Ikon di label tombol menu inline — tiap tombol (Buy Produk, Saldo Saya, How to Use, tombol-tombol admin panel, dll) punya key & ID sendiri-sendiri, jadi bisa beda-beda ikonnya per tombol. Lihat daftar key lengkap & komentarnya langsung di file itu. Diisi lewat field `icon_custom_emoji_id` (fitur Bot API 9.4). |
+| `emoji-id-text.js` | `EMOJI_ID_MENU_NOTIF` | The bot's built-in "⚡" bullet in menu/notification text |
+| `emoji-id-menu-inline.js` | `EMOJI_IDS` (an object, one key per button) | Icons on inline menu button labels — each button (Buy Product, My Balance, How to Use, the admin panel buttons, and so on) has its own key and ID, so every button can have a different icon. See the full key list and its comments in that file. Applied via the `icon_custom_emoji_id` field (a Bot API 9.4 feature). |
 
-Kalau salah satu ID dikosongkan, otomatis fallback ke emoji unicode biasa (bukan error).
+If any ID is left empty, it falls back to a plain unicode emoji automatically (not an error).
 
-**Catatan penting soal tombol** — untuk tombol yang TIDAK diberi ikon lewat `withButtonIcon()`/`withButtonIconPreferProduct()` (mis. "❌ Cancel Order"), emoji di labelnya selalu tampil sebagai unicode standar — field `icon_custom_emoji_id` cuma berlaku untuk tombol yang secara eksplisit memakainya, ini keterbatasan dari Telegram Bot API sendiri, bukan bug di bot ini.
+**An important note about buttons** — for buttons that are NOT given an icon via `withButtonIcon()`/`withButtonIconPreferProduct()` (such as "❌ Cancel Order"), the emoji in the label always renders as standard unicode. The `icon_custom_emoji_id` field only applies to buttons that explicitly use it; that is a limitation of the Telegram Bot API itself, not a bug in this bot.
 
-**Penting (terverifikasi dari [changelog resmi Bot API](https://core.telegram.org/bots/api-changelog#february-9-2026), Bot API 9.4, rilis 9 Februari 2026)** — bot **boleh** mengirim custom emoji di teks pesan, tapi **akun pemilik bot wajib berlangganan Telegram Premium**. Ini berlaku untuk kedua mekanisme di atas: baik ID yang di-hardcode manual, maupun ID yang otomatis ke-capture dari ketikan owner. Kalau owner belum Premium, custom emoji manapun otomatis fallback ke unicode biasa untuk slot itu — tidak akan error. Bot API 9.4 yang sama juga menambahkan field `icon_custom_emoji_id` untuk ikon di label tombol inline keyboard.
+**Important (verified against the [official Bot API changelog](https://core.telegram.org/bots/api-changelog#february-9-2026), Bot API 9.4, released 9 February 2026)** — a bot **may** send custom emoji in message text, but **the bot owner's account must have a Telegram Premium subscription**. This applies to both mechanisms above: hardcoded IDs as well as IDs captured automatically from the owner's typing. If the owner is not Premium, any custom emoji falls back to plain unicode for that slot — it never errors. The same Bot API 9.4 also added the `icon_custom_emoji_id` field for icons on inline keyboard button labels.
 
-Cara dapat ID custom emoji untuk mekanisme manual (mekanisme 2 di atas):
-1. Forward pesan yang berisi custom emoji tersebut ke bot seperti `@RawDataBot` atau `@userinfobot`
-2. Cari field `custom_emoji_id` di bagian `entities` pada JSON yang dikirim balik
-3. Tempel angka ID-nya ke `emoji-id-teks.js` (`EMOJI_ID_MENU_NOTIF`) dan/atau ke key yang sesuai di object `EMOJI_IDS` pada `emoji-id-menu-inline.js` (mis. `buy_produk`, `admin_statistik`, dst — lihat daftar lengkapnya di file tsb)
+How to obtain a custom emoji ID for the manual mechanism (mechanism 2 above):
+1. Forward a message containing that custom emoji to a bot such as `@RawDataBot` or `@userinfobot`
+2. Find the `custom_emoji_id` field inside the `entities` section of the JSON it returns
+3. Paste the numeric ID into `emoji-id-text.js` (`EMOJI_ID_MENU_NOTIF`) and/or the matching key in the `EMOJI_IDS` object in `emoji-id-menu-inline.js` (for example `buy_product`, `admin_statistics`, and so on — see the full list in that file)
 
-### Ikon tombol "Beli" ikut emoji produknya sendiri
+You can also set these from inside the bot: `/admin` → 🎨 Manage Emoji ID, then forward a message containing the emoji. The ID is captured automatically and stored in `data/db.json`, which takes priority over the values in the files. `node check-emoji.js` verifies that every ID you have set still exists on Telegram.
 
-Tombol **✅ Buy Now** (halaman deskripsi produk) dan **🛒 Order Sekarang** (notifikasi channel) PRIORITASKAN emoji premium milik produk itu sendiri (`product.emojiId` — sama yang dipakai `productEmojiHtml()` di bagian "Emoji premium PER PRODUK" atas), kalau produk itu punya. Jadi kalau produk X punya emoji premium ✨ sendiri, tombol Buy Now di halaman produk X otomatis pakai ikon ✨ itu juga — bukan cuma 1 ikon generik yang sama untuk semua produk.
+### The "Buy" button icon follows the product's own emoji
 
-Kalau produk itu belum punya `emojiId` sendiri, kedua tombol ini otomatis fallback ke ikon global key `buy_now` (diisi manual lewat `EMOJI_IDS` di `emoji-id-menu-inline.js`) — tidak ada error di kedua kasus.
+The **✅ Buy Now** button (product description page) and **🛒 Order Now** (channel notification) PREFER the product's own premium emoji (`product.emojiId` — the same one `productEmojiHtml()` uses in the "per-product premium emoji" mechanism), when the product has one. So if product X has its own ✨ premium emoji, the Buy Now button on product X's page uses that ✨ icon too — rather than a single generic icon for every product.
 
-## 🖼️ Logo Produk di Notifikasi Channel
+If that product has no `emojiId` of its own, both buttons fall back to the global `buy_now` key icon (set manually via `EMOJI_IDS` in `emoji-id-menu-inline.js`) — with no error in either case.
 
-Ini fitur yang **BEDA** dari emoji premium di atas — bukan `<tg-emoji>` (yang butuh Telegram Premium & tetap berupa karakter emoji), tapi GAMBAR logo aplikasi asli (mis. logo resmi Netflix, Spotify, Gemini), dikirim sebagai foto lewat notifikasi channel "🎉 New Purchase!".
+## 🖼️ Product Logos in Channel Notifications
 
-**Cara setup:** `/admin` → 🖼️ Set Logo Produk → pilih produk → kirim URL gambar logo-nya (harus `http://` atau `https://`, disarankan hosting logo-nya sendiri supaya link-nya stabil). Ketik `-` kapan saja untuk menghapus logo dan balik pakai emoji biasa.
+This is a **different** feature from the premium emoji above — not `<tg-emoji>` (which needs Telegram Premium and is still an emoji character), but an actual app logo IMAGE (the official Netflix, Spotify, or Gemini logo, say), sent as a photo in the "🎉 New Purchase!" channel notification.
 
-**Cara kerja:**
-- Kalau produk yang dibeli punya logo tersimpan, notifikasi "🎉 New Purchase!" ke channel dikirim sebagai **foto** (logo jadi gambar), dengan teksnya jadi *caption* — captionnya tetap format HTML yang sama seperti biasa (`<b>`, `<code>`, dan `<tg-emoji>` premium tetap tampil normal di dalam caption).
-- Kalau produk itu belum punya logo (atau logo belum diisi sama sekali), notifikasi tetap dikirim seperti biasa (teks + emoji `🛒`/`📦`), **tidak ada error**.
-- Caption foto Telegram dibatasi 1024 karakter (beda dari teks biasa yang sampai 4096) — kalau isinya kebetulan lebih panjang dari itu, bot otomatis fallback kirim sebagai teks biasa tanpa logo, supaya notifikasi tetap terkirim.
-- Kalau URL logo-nya ternyata rusak/tidak bisa diakses Telegram saat pengiriman, bot otomatis fallback kirim teks biasa juga — jadi notifikasi tidak pernah gagal terkirim gara-gara logo bermasalah.
+**Setup:** `/admin` → 🖼️ Set Product Logo → pick a product → send the logo image URL (it must be `http://` or `https://`; hosting the logo yourself is recommended so the link stays stable). Type `-` at any time to remove the logo and go back to the plain emoji.
 
-Fitur ini cuma berlaku di notifikasi channel (New Purchase), belum di pesan "🎉 ORDER BERHASIL!" yang dikirim ke buyer — pesan itu sengaja tetap teks biasa karena sering membawa link/kode redeem yang panjang (bisa kepotong kalau dipaksa jadi caption foto).
+**How it works:**
+- If the purchased product has a stored logo, the "🎉 New Purchase!" channel notification is sent as a **photo** (the logo becomes the image) with the text as its *caption* — the caption keeps the same HTML formatting as usual (`<b>`, `<code>`, and premium `<tg-emoji>` all still render inside a caption).
+- If that product has no logo (or none has been set), the notification is sent as usual (text plus a `🛒`/`📦` emoji), with **no error**.
+- Telegram caps photo captions at 1024 characters (versus 4096 for ordinary text) — if the content happens to be longer, the bot falls back automatically to a plain text message without the logo, so the notification is still delivered.
+- If the logo URL turns out to be broken or unreachable by Telegram at send time, the bot also falls back to plain text — so a notification never fails because of a problem with a logo.
 
-## Menambah deskripsi & panduan untuk produk lain
+This feature applies only to channel notifications (New Purchase), not yet to the "🎉 ORDER SUCCESSFUL!" message sent to the buyer — that one deliberately stays plain text because it often carries long redeem links or codes (which could be truncated if forced into a photo caption).
 
-Produk selain Gemini Premium 18 Bulan belum punya deskripsi custom (pakai teks default seadanya). Cara paling gampang: pakai `/admin` → ➕ Tambah Produk (atau ✏️ Set How to Use) dan ketik langsung di chat — kalau ada emoji premium yang dipilih dari panel Telegram Premium, otomatis kesimpan premium (lihat bagian di atas).
+## Adding descriptions and guides for other products
 
-Kalau mau edit langsung lewat `data/db.json`, tambahkan field `description` dan `howToUse` pada varian yang dituju (string, boleh banyak baris, boleh tag HTML `<b>...</b>`). Untuk custom emoji lewat jalur ini, tempel manual tag `<tg-emoji emoji-id="...">🔥</tg-emoji>` di teksnya (ID didapat dengan cara yang sama seperti mekanisme 2 di atas), contoh:
+The easiest route is `/admin` → ➕ Add Product (or ✏️ Set How to Use) and typing straight into the chat — and if you pick a premium emoji from the Telegram Premium panel while typing, it is stored as premium automatically (see the section above).
+
+To edit `data/db.json` directly instead, add a `description` and `howToUse` field to the target variant (a string, multiple lines and `<b>...</b>` HTML tags are fine). For a custom emoji on this route, paste the `<tg-emoji emoji-id="...">🔥</tg-emoji>` tag into the text by hand (the ID is obtained the same way as mechanism 2 above), for example:
 
 ```json
-"description": "{e} Baris pertama\n<tg-emoji emoji-id=\"5373141891321699086\">🔥</tg-emoji> Baris kedua\n\n{e} <b>Catatan Penting:</b>\nIsi catatan di sini."
+"description": "{e} First line\n<tg-emoji emoji-id=\"5373141891321699086\">🔥</tg-emoji> Second line\n\n{e} <b>Important note:</b>\nNote content here."
 ```
 
 ## 💾 Auto Backup
 
-Fitur ini bikin file `.zip` berisi **seluruh source code project** (semua file & folder, kecuali `node_modules` dan `.npm` — jadi ukurannya kecil, bukan hitungan MB besar) lalu kirim otomatis ke sebuah group Telegram, tiap interval waktu (menit/jam) yang diatur admin. Berguna sebagai cadangan kalau server/VPS bermasalah — tinggal download zip terakhir dari group, extract, `npm install`, jalankan lagi.
+This feature builds a `.zip` containing the **entire project source code** (every file and folder except `node_modules` and `.npm` — so it stays small rather than many MB) and sends it automatically to a Telegram group at an interval (minutes/hours) the admin sets. It is useful as a safeguard if the server/VPS has problems — just download the latest zip from the group, extract it, run `npm install`, and start again.
 
-**Setup lewat `/admin` → 💾 Auto Backup:**
-1. **🆔 Atur Group ID** — isi Group ID Telegram tujuan (contoh: `-1001234567890`). Bot **wajib** sudah ditambahkan sebagai member di group itu duluan, kalau tidak pengiriman akan gagal. Cara dapat Group ID: invite bot ke group, forward pesan apapun dari group itu ke `@userinfobot` atau `@RawDataBot`, lihat field `id`-nya.
-2. **⏱️ Atur Interval** — ketik interval dalam menit, contoh `60` untuk tiap jam, `15` untuk tiap 15 menit, `1440` untuk tiap hari.
-3. **▶️ Aktifkan** — nyalakan jadwal otomatisnya (tombol ini terkunci sampai Group ID diisi).
-4. **📤 Backup Sekarang** — trigger manual kapan saja, tanpa harus nunggu jadwal.
+**Setup via `/admin` → 💾 Auto Backup:**
+1. **🆔 Set Group ID** — enter the destination Telegram Group ID (for example `-1001234567890`). The bot **must** already be a member of that group, or delivery will fail. How to get the Group ID: invite the bot to the group, forward any message from that group to `@userinfobot` or `@RawDataBot`, and read its `id` field.
+2. **⏱️ Set Interval** — type the interval in minutes, for example `60` for hourly, `15` for every 15 minutes, `1440` for daily.
+3. **▶️ Enable** — turn the schedule on (this button stays locked until a Group ID is set).
+4. **📤 Backup Now** — trigger one manually at any time, without waiting for the schedule.
 
-Semua pengaturan (aktif/nonaktif, interval, Group ID) tersimpan permanen di `data/db.json`, jadi tetap kepakai walau bot di-restart. `BACKUP_GROUP_ID` & `BACKUP_INTERVAL_MINUTES` di `.env` sifatnya opsional, cuma dipakai sebagai isian awal saat run pertama kali.
+All settings (on/off, interval, Group ID) are stored permanently in `data/db.json`, so they survive a bot restart. `BACKUP_GROUP_ID` and `BACKUP_INTERVAL_MINUTES` in `.env` are optional and only seed the values on the very first run.
 
-**⚠️ Catatan keamanan:** `.env` **TIDAK ikut** dalam file backup (dikecualikan otomatis - lihat `backup.js`), karena berisi token bot & API key sensitif lain. Konsekuensinya: **restore dari zip backup TIDAK otomatis mengembalikan `.env`** - admin wajib isi ulang `.env` manual di server baru (dari catatan pribadi/password manager sendiri, BUKAN dari chat/zip manapun). File backup tetap berisi *full* source code lain + `data/db.json` (data user & saldo), jadi tetap pastikan group tujuan bersifat **privat** dan hanya berisi orang yang benar-benar kamu percaya.
+**⚠️ Security note:** `.env` is **NOT included** in the backup (it is excluded automatically — see `backup.js`), because it holds the bot token and other sensitive API keys. The consequence: **restoring from a backup zip does NOT restore `.env`** — the admin must fill `.env` in by hand on the new server (from their own notes or password manager, NOT from any chat or zip). The backup still contains all other source code plus `data/db.json` (user data and balances), so make sure the destination group is **private** and contains only people you genuinely trust.
 
-**Data user & saldo ikut ter-backup FULL** — karena `data/db.json` (tempat semua saldo Wallet, riwayat order, deposit, produk, dst disimpan) ikut masuk ke dalam zip apa adanya (satu-satunya yang dikecualikan cuma `node_modules` & `.npm`, yang isinya cuma dependency library, bukan data toko). Jadi kalau server rusak/hilang, tinggal extract zip backup terakhir, taruh lagi `data/db.json` hasil extract-an ke folder project yang baru, `npm install`, jalankan `npm start` — saldo & data semua user balik utuh persis seperti kondisi terakhir sebelum backup itu dibuat. Karena itu juga penting jaga interval backup cukup rapat (misal tiap 1 jam) supaya kalau ada apa-apa, data yang "hilang" paling banter cuma transaksi dalam 1 jam terakhir saja.
+**User data and balances ARE fully backed up** — because `data/db.json` (where every Wallet balance, order history, deposit, product, and so on is stored) goes into the zip as is (the only exclusions are `node_modules` and `.npm`, which hold library dependencies rather than store data). So if the server breaks or is lost, extract the latest backup zip, put the extracted `data/db.json` back into the new project folder, run `npm install`, then `npm start` — every user's balance and data comes back exactly as it was when that backup was made. That is also why it matters to keep the backup interval reasonably tight (hourly, say): if something goes wrong, the most you can lose is the transactions from the last hour.
 
 ## 📢 Broadcast
 
-Kirim 1 pesan ke **SEMUA user** yang pernah `/start` bot sekaligus, lewat `/admin` → 📢 Broadcast.
+Send one message to **ALL users** who have ever pressed `/start`, via `/admin` → 📢 Broadcast.
 
-**Cara pakai:**
-1. Pencet 📢 Broadcast, lalu kirim pesannya langsung ke bot:
-   - **Teks saja** — ketik bebas.
-   - **Foto + caption** — kirim sebagai foto Telegram biasa, isi captionnya.
-   - **Foto saja** — kirim foto tanpa caption.
-2. Teks/caption **bebas** — boleh banyak baris, boleh tag HTML standar Telegram (`<b>`, `<i>`, `<u>`, `<s>`, `<a href="...">`, `<code>`, `<blockquote>` untuk kutipan, dll), dan kalau kamu pilih **emoji premium** langsung dari panel emoji Telegram Premium kamu sendiri (bukan sekadar ngetik unicode biasa), emoji itu otomatis ikut kesimpan sebagai premium juga saat dikirim ke semua penerima — sama seperti mekanisme di [Emoji Premium](#emoji-premium-custom-emoji-⚡) bagian 1.
-3. Bot langsung kasih **preview** persis seperti yang bakal diterima user, plus tombol **✅ Ya, Kirim Sekarang** / **❌ Batal**.
-4. Setelah dikonfirmim, bot kirim ke semua user satu-satu (ada jeda kecil antar pesan biar tidak kena rate limit Telegram), lalu laporkan ringkasan **berhasil vs gagal** (gagal biasanya berarti user tersebut sudah blokir/hapus bot — bukan error di sisi kamu).
+**How to use:**
+1. Press 📢 Broadcast, then send the message straight to the bot:
+   - **Text only** — type freely.
+   - **Photo + caption** — send it as an ordinary Telegram photo with a caption.
+   - **Photo only** — send a photo with no caption.
+2. The text/caption is **free form** — as many lines as you like, standard Telegram HTML tags allowed (`<b>`, `<i>`, `<u>`, `<s>`, `<a href="...">`, `<code>`, `<blockquote>` for quotes, and so on), and if you pick a **premium emoji** straight from your own Telegram Premium emoji panel (rather than just typing plain unicode), it is delivered as premium to every recipient too — the same mechanism as in Premium Emoji, mechanism 1.
+3. The bot then shows a **preview** of exactly what users will receive, plus **✅ Yes, Send Now** / **❌ Cancel** buttons.
+4. Once confirmed, the bot sends to every user one at a time (with a small delay between messages to stay under Telegram's rate limit), then reports a **succeeded vs failed** summary (a failure usually means that user has blocked or deleted the bot — not an error on your side).
 
-## Cara Pakai (Admin)
+## How to Use (Admin)
 
-Kirim `/admin` di chat pribadi dengan bot untuk membuka **panel admin full inline** (semua lewat tombol, tanpa perlu hafal command):
+Send `/admin` in a private chat with the bot to open the **full inline admin panel** (everything is a button; no commands to memorise). The panel is grouped into 5 categories:
 
-| Tombol | Fungsi |
+| Button | Function |
 |---|---|
-| 📦 Daftar Produk | Lihat semua produk beserta id, harga, dan stok |
-| ➕ Tambah Produk | Bikin produk baru — cuma 3 langkah: **nama → harga → deskripsi** |
-| 🗑️ Hapus Produk | Pilih produk dari daftar, lalu konfirmasi hapus |
-| 📥 Tambah Stock | Pilih produk, lalu kirim link/kode redeem satu-satu atau bulk |
-| ➕ Tambah Varian (produk multi-varian) | Untuk kasus lanjutan: tambah varian ke-2/ke-3 dst ke produk yang sudah ada (misal Netflix Sharing vs Private) |
-| 🖼️ Set Logo Produk | Isi URL gambar logo aplikasi (mis. logo resmi Netflix/Spotify/Gemini yang kamu hosting sendiri) per produk — dipakai di notifikasi channel "🎉 New Purchase!" supaya tampil sebagai gambar, bukan cuma emoji. Ketik `-` untuk menghapus (balik pakai emoji biasa) |
-| 💰 Atur Saldo User | Tambah/kurangi saldo user tertentu secara manual |
-| 📜 Log Pengiriman | Lihat 10 order auto-delivered terakhir beserta link yang terkirim |
-| 🔍 Cek Order ID | Cari 1 order spesifik by ID, lihat detail & link yang terkirim |
-| 📊 Statistik | Total user, total saldo beredar, total order, total omzet, jumlah topup Wallet yang masih pending (menunggu pembayaran QRIS/USDT) |
-| 🎁 Set Tier Diskon Grosir | Ketik langsung 3 harga jual USD (1-49 / 50-499 / 500+ pcs) per varian — untuk varian Supplier API, ada tombol **🔒 Kunci Harga Manual** supaya tidak ketimpa auto-sync — lihat bagian [🎁 Tier Diskon Grosir & Markup Otomatis](#-tier-diskon-grosir--markup-otomatis) |
-| 🔌 Supplier API (AIVerse Hub) | Hubungkan/putus varian produk lokal ke `service_id` AIVerse Hub (dengan tampilan margin modal vs harga jual + tombol markup cepat saat link), cek saldo toko di AIVerse Hub, lihat **🧾 Riwayat Order**, **📊 Statistik**, dan **🔍 Cek Order ID (API)** — lihat bagian [🔌 Supplier API](#-supplier-api-aiverse-hub) |
-| 🔌 Canboso API | Supplier kedua (terpisah dari AIVerse Hub) — hubungkan/putus varian produk lokal ke produk Canboso, atur harga, refresh modal & stok — lihat bagian [🔌 Canboso API](#-canboso-api-supplier-kedua) |
-| 💾 Auto Backup | Aktif/nonaktifkan backup terjadwal, atur interval (menit), atur Group ID tujuan, atau trigger backup manual — lihat bagian [💾 Auto Backup](#-auto-backup) |
-| 📢 Broadcast | Kirim pesan (teks atau foto+caption) ke SEMUA user sekaligus — lihat bagian [📢 Broadcast](#-broadcast) |
+| 📦 Product List | See every product with its id, price, and stock |
+| ➕ Add Product | Create a new product — just 3 steps: **name → price → description** |
+| 🗑️ Delete Product | Pick a product from the list, then confirm deletion |
+| 📥 Add Stock | Pick a product, then send redeem links/codes one at a time or in bulk |
+| ➕ Add Variant (multi-variant products) | For advanced cases: add a 2nd, 3rd, etc. variant to an existing product (Netflix Sharing vs Private, say) |
+| 🖼️ Set Product Logo | Set an app logo image URL (the official Netflix/Spotify/Gemini logo you host yourself) per product — used in the "🎉 New Purchase!" channel notification so it appears as an image rather than just an emoji. Type `-` to remove it (back to the plain emoji) |
+| 💰 Manage User Balance | Add to or subtract from a specific user's balance manually |
+| 📜 Delivery Log | See the 10 most recent auto-delivered orders along with the links that were sent |
+| 🔍 Check Order ID | Look up one specific order by ID and see its details and delivered links |
+| 📊 Statistics | Total users, total balance in circulation, total orders, total revenue, and the number of Wallet topups still pending (awaiting payment) |
+| 🎁 Set Bulk Discount Tiers | Type 3 USD sale prices directly (1-49 / 50-499 / 500+ pcs) per variant — for Supplier API variants there is a **🔒 Lock Manual Price** button so auto-sync cannot overwrite them — see [🎁 Bulk Discount Tiers & Automatic Markup](#-bulk-discount-tiers--automatic-markup) |
+| 🔌 Supplier API (AIVerse Hub) | Link/unlink a local product variant to an AIVerse Hub `service_id` (showing the cost vs sale margin plus quick markup buttons at link time), check the store's balance at AIVerse Hub, and view **🧾 Order History**, **📊 Statistics**, and **🔍 Check Order ID (API)** — see [🔌 Supplier API](#-supplier-api-aiverse-hub) |
+| 🔌 Canboso API | A second supplier (separate from AIVerse Hub) — link/unlink a local product variant to a Canboso product, set prices, refresh cost and stock — see [🔌 Canboso API](#-canboso-api-the-second-supplier) |
+| 🎁 Gift (Userbot) | Buy Gift / Confess Gift via a GramJS userbot: check the Stars balance, gift order history, manage gift emoji, and set gift pricing |
+| 🛠️ Bot Maintenance | Put the bot into maintenance mode (non-admin users are blocked and shown one message), with a preview and an optional custom message |
+| 🔐 Force Join Channel/Group | Require users to join one or more channels/groups before they can use the bot |
+| 📣 Set Channel Notifications | Post automatically to a channel/group on every purchase, topup, referral, and maintenance change |
+| 🎨 Manage Emoji ID | Capture premium custom emoji IDs by forwarding a message, per button and per text slot |
+| 💾 Auto Backup | Enable/disable scheduled backups, set the interval (minutes) and destination Group ID, or trigger a manual backup — see [💾 Auto Backup](#-auto-backup) |
+| 📢 Broadcast | Send a message (text or photo+caption) to ALL users at once — see [📢 Broadcast](#-broadcast) |
 
-`/cancel` masih tersedia untuk membatalkan input teks yang sedang berjalan (misal salah ketik saat isi harga/stok).
+`/cancel` is still available to abort a text input in progress (a mistyped price or stock entry, say).
 
-Saat ada **order baru**, admin otomatis dapat notifikasi berisi detail user & produk.
+When a **new order** arrives, every admin automatically receives a notification with the user and product details.
 
-### ➕ Tambah Produk (nama + harga + deskripsi) — DIPERBARUI
+### ➕ Add Product (name + price + description)
 
-Sekarang bikin produk baru cuma butuh 3 langkah, tanpa perlu mikirin id/varian/stok dulu:
+Creating a new product takes just 3 steps, with no need to think about ids, variants, or stock first:
 
-1. `/admin` → **➕ Tambah Produk**
-2. Ketik **nama produk**, contoh: `Gemini Pro 18 Bulan`
-3. Ketik **harga dalam USD** (angka saja, boleh desimal), contoh: `5.99`
-4. Ketik **deskripsi** (bebas, boleh banyak baris & tag HTML `<b>...</b>`), atau ketik `-` untuk lewati dulu
+1. `/admin` → **➕ Add Product**
+2. Type the **product name**, for example: `Gemini Pro 18 Months`
+3. Type the **price in USD** (numbers only, decimals allowed), for example: `5.99`
+4. Type the **description** (free form, multiple lines and `<b>...</b>` HTML tags are fine), or type `-` to skip it for now
 
-Bot otomatis bikin 1 produk lengkap dengan 1 varian default berisi harga & deskripsi itu, stok mulai dari **0**. Langkah berikutnya tinggal isi stok lewat **📥 Tambah Stock**.
+The bot creates one complete product with one default variant holding that price and description, with stock starting at **0**. The next step is simply adding stock via **📥 Add Stock**.
 
-Kalau butuh produk dengan beberapa pilihan harga/varian sekaligus (misal Netflix Sharing vs Private), pakai tombol **➕ Tambah Varian (produk multi-varian)** untuk menambah varian ke-2 dst ke produk yang sudah dibuat.
+If you need a product with several prices/variants at once (Netflix Sharing vs Private, say), use **➕ Add Variant (multi-variant products)** to add a 2nd or later variant to a product you have already created.
 
-### 📥 Tambah Stock — pilih produk, lalu pilih cara (Link/Kode atau Angka Manual)
+### 📥 Add Stock — pick a product, then pick a method (Link/Code or Manual Number)
 
-"Tambah Stock" dipakai untuk nambah stok produk yang sudah ada (misalnya `Gemini Pro 18 Bulan`), lewat **2 cara** yang bisa dipilih tiap kali admin nambah stok:
+"Add Stock" is used to add stock to an existing product (`Gemini Pro 18 Months`, for instance), via **2 methods** you choose between each time:
 
-- **📋 Link/Kode (Auto-Kirim)** — isi stok link/kode redeem beneran, supaya pengiriman ke pembeli **otomatis** tanpa admin perlu kirim manual.
-- **🔢 Angka Saja (Manual)** — BARU, cuma nambah **jumlah** stok tanpa link/kode apapun, buat produk yang memang dikirim admin sendiri secara manual ke buyer setelah order masuk (bukan auto-delivery).
+- **📋 Link/Code (Auto-Delivery)** — enter real redeem links/codes so delivery to the buyer is **automatic**, with no manual sending by the admin.
+- **🔢 Number Only (Manual)** — only increases the stock **count**, with no links or codes, for products the admin sends to the buyer themselves after an order arrives (not auto-delivery).
 
-Alurnya:
-1. `/admin` → **📥 Tambah Stock**
-2. Pilih produk. Kalau produk itu cuma punya 1 varian (hasil "➕ Tambah Produk" biasa), bot langsung lanjut. Kalau produk multi-varian (misal Netflix), bot minta pilih varian dulu.
-3. Bot tampilkan layar pilih cara — pencet **📋 Kirim Link/Kode (Auto-Kirim)** atau **🔢 Tambah Angka Saja (Manual)**.
-4a. Kalau pilih **📋 Link/Kode**: kirim link/kode redeem, ada 2 cara (boleh dicampur bebas):
+The flow:
+1. `/admin` → **📥 Add Stock**
+2. Pick a product. If it has only one variant (from an ordinary "➕ Add Product"), the bot continues straight away. For a multi-variant product (Netflix, say), it asks you to pick a variant first.
+3. The bot shows the choose-method screen — press **📋 Send Link/Code (Auto-Delivery)** or **🔢 Add Number Only (Manual)**.
+4a. If you choose **📋 Link/Code**: send the redeem links/codes, in either of 2 ways (freely mixed):
 
-   **Cara 1 — satu-satu (1/1):** kirim 1 link per pesan, ulangi tiap kali ada link baru.
+   **Way 1 — one at a time:** send one link per message, repeating for each new link.
    ```
-   Pesan 1: https://link-redeem-1...
-   (bot balas konfirmasi)
-   Pesan 2: https://link-redeem-2...
-   (bot balas konfirmasi lagi)
+   Message 1: https://redeem-link-1...
+   (the bot confirms)
+   Message 2: https://redeem-link-2...
+   (the bot confirms again)
    ```
 
-   **Cara 2 — bulk (banyak sekaligus):** kirim banyak link dalam 1 pesan, **1 baris = 1 unit stok**.
+   **Way 2 — in bulk:** send many links in one message, **1 line = 1 unit of stock**.
    ```
-   https://link-redeem-1...
-   https://link-redeem-2...
-   https://link-redeem-3...
+   https://redeem-link-1...
+   https://redeem-link-2...
+   https://redeem-link-3...
    ```
-   Bot balas konfirmasi jumlah yang berhasil ditambah + total stok auto-kirim sekarang. Bisa lanjut kirim baris lagi, atau `/cancel` untuk selesai.
+   The bot confirms how many were added plus the current auto-delivery stock total. You can keep sending more lines, or `/cancel` when done.
 
-4b. Kalau pilih **🔢 Angka Saja (Manual)**: cukup ketik satu angka (mis. `10`), bot langsung nambah `variant.stock` sejumlah itu tanpa link/kode. Bisa ketik angka lagi buat nambah lebih banyak, atau `/cancel` untuk selesai. ⚠️ Kalau varian yang sama juga dipakai lewat cara 📋 Link/Kode, stok manual di sini bisa ketimpa jadi jumlah link/kode yang tersimpan — jangan campur 2 cara ini di 1 varian yang sama.
+   Each line may instead be an **account combo** — `email|password|2fa|link`, separated by `|` in that fixed order. For the 2FA field, enter the **TOTP secret key** (not a static 6-digit code) and the bot computes the currently valid code live for the buyer, matching what Google Authenticator would show. When a middle field is missing, leave it empty between two `|` marks rather than removing the segment, so the later fields do not shift position.
 
-**Begitu stok berhasil ditambah lewat cara MANAPUN di atas**, bot otomatis kirim notifikasi **"🔔 STOK BARU TERSEDIA!"** (nama produk, jumlah ditambahkan, total stok, harga, semua ikonnya pakai custom emoji Premium lewat "🎨 Kelola Emoji ID" → grup "🔔 Notifikasi Live Stock") + tombol inline **✅ Buy Now** ke **SEMUA user terdaftar** — pencet tombolnya langsung masuk ke alur pilih jumlah beli produk itu. Pengiriman broadcast-nya jalan di belakang layar (tidak bikin admin nunggu), dan admin yang mentrigger dapat ringkasan berhasil/gagal setelah broadcast-nya selesai.
+4b. If you choose **🔢 Number Only (Manual)**: just type a number (`10`, say) and the bot adds that much to `variant.stock` with no links/codes. You can type another number to add more, or `/cancel` when done. ⚠️ If the same variant is also used via 📋 Link/Code, the manual stock here can be overwritten by the number of stored links/codes — do not mix the two methods on the same variant.
 
-Begitu ada user beli produk yang stoknya sudah diisi dengan cara ini:
-- Saldo user langsung dipotong, link teratas (FIFO) langsung diambil & dikirim ke chat user dalam pesan **"🎉 ORDER BERHASIL!"** yang sudah diformat rapi + emoji premium ⚡, lengkap dengan detail produk, jumlah, total, dan ID order.
-- Admin dapat notifikasi ringan (`✅ Auto-delivered`) — **tidak perlu kirim manual lagi**.
-- Kalau stok link ternyata kurang dari jumlah yang dibeli (atau produk belum pernah diisi lewat menu ini), bot otomatis fallback ke alur lama: user tetap dapat pesan order berhasil, tapi admin dapat notifikasi untuk kirim akun/detail secara manual. Tidak ada error atau stok yang salah potong di kedua kasus ini.
+**Once stock has been added by EITHER method above**, the bot automatically sends a **"🔔 NEW STOCK AVAILABLE!"** notification (product name, quantity added, total stock, price — every icon using premium custom emoji via "🎨 Manage Emoji ID" → the "🔔 Live Stock Notification" group) plus an inline **✅ Buy Now** button to **ALL registered users** — pressing it goes straight into the choose-quantity flow for that product. The broadcast runs in the background (so the admin is not kept waiting), and the admin who triggered it gets a succeeded/failed summary once it finishes.
 
-Stok yang tersisa lewat cara ini juga muncul di **📦 Daftar Produk** dengan tag `🤖 auto-kirim: N`.
+When a user buys a product stocked this way:
+- The user's balance is debited immediately, the topmost link (FIFO) is taken and sent to their chat in a neatly formatted **"🎉 ORDER SUCCESSFUL!"** message with premium ⚡ emoji, complete with product details, quantity, total, and order ID.
+- The admin gets a light notification (`✅ Auto-delivered`) — **nothing to send manually**.
+- If there turn out to be fewer links than the quantity bought (or the product has never been stocked via this menu), the bot falls back automatically to the old flow: the user still gets an order-successful message, while the admin is notified to send the account/details manually. Neither case produces an error or debits stock incorrectly.
 
-### 📜 Log Pengiriman & 🔍 Cek Order ID — BARU
+Stock remaining via this route also appears in **📦 Product List** tagged `🤖 auto-delivery: N`.
 
-Setiap kali produk terkirim otomatis, bot mencatat **link/kode persis apa yang dikirim ke order ID mana** (bukan cuma jumlahnya) — jadi kalau ada user komplain "link saya nggak jalan", admin bisa langsung audit tanpa nebak-nebak.
+### 📜 Delivery Log & 🔍 Check Order ID
 
-- **📜 Log Pengiriman** — tampilkan 10 order auto-delivered terakhir: order ID, user, produk, waktu, dan link/kode persis yang terkirim.
-- **🔍 Cek Order ID** — ketik ID order tertentu (bisa dari notifikasi order baru atau riwayat pembelian user), bot balas detail lengkap order itu — kalau auto-delivered, link yang dikirim ikut ditampilkan; kalau manual, ditandai "Dikirim manual oleh admin".
+Every time a product is delivered automatically, the bot records **exactly which link/code went to which order ID** (not just the count) — so if a user complains "my link does not work", the admin can audit it directly rather than guessing.
 
-Saat ada **topup Wallet berhasil** (QRIS atau USDT), saldo user bertambah otomatis tanpa notifikasi/aksi admin.
+- **📜 Delivery Log** — shows the 10 most recent auto-delivered orders: order ID, user, product, time, and the exact link/code delivered.
+- **🔍 Check Order ID** — type a specific order ID (from a new-order notification or a user's purchase history) and the bot returns that order's full details. If it was auto-delivered, the delivered link is included; if it was manual, it is marked "Sent manually by an admin".
+
+When a **Wallet topup succeeds** (QRIS, USDT, TON, or Binance Pay), the user's balance increases automatically with no notification or action needed from an admin.
 
 ## 🔌 Supplier API (AIVerse Hub)
 
-Fitur ini menghubungkan salah satu varian produk lokal ke sebuah `service_id` di [AIVerse Hub](https://aiversehub.store) (`AIVERSEHUB_API_KEY` & `AIVERSEHUB_BASE_URL` di `.env`). Begitu ada buyer beli varian yang terhubung, bot **otomatis pesan lewat API AIVerse Hub** (bukan dari stok lokal) dan langsung teruskan kode/link yang dibalas API itu ke buyer — mirip dropship otomatis. Saldo buyer baru dipotong **setelah** order API sukses, jadi tidak ada saldo kepotong tanpa produk terkirim kalau API gagal (saldo toko di AIVerse Hub habis, stok remote kosong, dsb) — dalam kasus itu admin dapat notifikasi dan saldo buyer tetap utuh.
+This feature links a local product variant to a `service_id` at [AIVerse Hub](https://aiversehub.store) (`AIVERSEHUB_API_KEY` and `AIVERSEHUB_BASE_URL` in `.env`). As soon as a buyer purchases a linked variant, the bot **orders automatically through the AIVerse Hub API** (rather than from local stock) and forwards the code/link the API returns straight to the buyer — much like automated dropshipping. Any local/manual stock on that variant is used FIRST, and only the shortfall is ordered from the supplier. The buyer's balance is debited only **after** the API order succeeds, so no balance is taken without a product being delivered when the API fails (the store's AIVerse Hub balance running out, remote stock being empty, and so on) — in that case the admin is notified and the buyer's balance stays intact.
 
-Modal & stok varian yang terhubung disinkron **otomatis** tiap `SUPPLIER_SYNC_INTERVAL_MINUTES` menit (default 10, isi 0 di `.env` untuk matikan) — tidak perlu lagi klik "🔄 Refresh Modal & Stok" manual supaya angka stok yang buyer lihat di daftar produk selalu live. Kalau ada link yang rusak (service_id sudah tidak ada lagi di AIVerse Hub) saat auto-sync jalan, semua admin dapat notifikasi otomatis; tombol refresh manual tetap ada di menu Supplier API kalau mau cek kapan saja di luar jadwal.
+The cost and stock of linked variants are synced **automatically** every `SUPPLIER_SYNC_INTERVAL_MINUTES` minutes (default 10; set 0 in `.env` to disable) — so there is no need to click "🔄 Refresh Cost & Stock" manually for the stock numbers buyers see to stay live. If a link breaks (the service_id no longer exists at AIVerse Hub) during an auto-sync, every admin is notified automatically; the manual refresh button remains in the Supplier API menu for checking at any time outside the schedule.
 
-**🔔 Notifikasi Live Stock ke SEMUA user** — begitu auto-sync ini mendeteksi TOTAL stok 1+ varian berubah (naik ATAU turun) dibanding sync sebelumnya, bot otomatis broadcast pesan "STOK DIPERBARUI!" (nama produk, stok lama → baru, harga) + tombol **✅ Buy Now** per varian ke SEMUA user terdaftar — sama mekanismenya dengan notifikasi live stock di 📥 Tambah Stock manual (lihat bagian itu untuk detail cara kerja broadcast & custom emoji Premium-nya). Kalau beberapa varian berubah di 1 siklus sync yang sama, semuanya digabung jadi 1 pesan (bukan pesan terpisah per varian) supaya user tidak kebanjiran. ⚠️ Ini jalan tiap kali sync mendeteksi PERUBAHAN angka (termasuk naik/turun kecil, bukan cuma pas restock dari 0) — kalau `SUPPLIER_SYNC_INTERVAL_MINUTES` diset rapat dan stok Supplier sering fluktuasi, user bisa dapat notifikasi cukup sering; atur interval sync sesuai kenyamanan.
+**🔔 Live Stock Notifications to ALL users** — as soon as this auto-sync detects that the TOTAL stock of one or more variants has changed (up OR down) since the previous sync, the bot broadcasts a "STOCK UPDATED!" message (product name, old → new stock, price) plus a **✅ Buy Now** button per variant to ALL registered users — the same mechanism as the live stock notification in the manual 📥 Add Stock flow (see that section for how the broadcast and its premium custom emoji work). When several variants change within the same sync cycle, they are combined into ONE message (rather than one per variant) so users are not flooded. ⚠️ This fires whenever a sync detects a CHANGE in the numbers (including small rises and falls, not only a restock from 0) — so if `SUPPLIER_SYNC_INTERVAL_MINUTES` is set tight and the supplier's stock fluctuates often, users may be notified fairly frequently; tune the sync interval to taste.
 
-**Setup lewat `/admin` → 🔌 Supplier API (AIVerse Hub):**
-1. **➕ Hubungkan Produk** — pilih produk lokal → pilih varian (kalau produk multi-varian) → pilih service dari daftar produk AIVerse Hub (diambil live lewat API). Stok lokal varian ini boleh dibiarkan 0 — buyer akan melihat status stok **"🔌 Auto (API)"**, bukan angka 0, dan tombol beli tidak akan terkunci.
+**Setup via `/admin` → 🔌 Supplier API (AIVerse Hub):**
+1. **➕ Link a Product** — pick a local product → pick a variant (for a multi-variant product) → pick a service from the AIVerse Hub product list (fetched live via the API). This variant's local stock may be left at 0 — the stock shown to buyers comes from the synced live number, and the buy button is not locked.
 
-   Begitu berhasil dihubungkan, bot langsung tampilkan **perbandingan modal vs harga jual** (margin), dengan ⚠️ peringatan jelas kalau harga jual saat ini sama dengan atau di bawah harga modal AIVerse Hub (supaya tidak kejadian jual rugi tanpa sadar). Di layar yang sama ada tombol markup cepat **+10% / +20% / +30% / +50%** (dihitung dari harga modal) buat langsung set harga jual, atau **✏️ Harga Custom** untuk ketik nominal sendiri.
-2. **🗑️ Putus** — lepaskan sebuah varian dari Supplier API, varian itu balik pakai stok lokal seperti biasa.
-3. **🧾 Riwayat Order** — histori order toko kita di sisi AIVerse Hub (order ID, produk, jumlah, nominal, status, waktu), dengan tombol navigasi ‹ Sebelumnya / Berikutnya ›.
-4. **📊 Statistik** — ringkasan deposit & penjualan (hari ini/7 hari/30 hari/1 tahun/sepanjang waktu) plus daftar produk terlaris di sisi AIVerse Hub.
-5. **🔍 Cek Order ID (API)** — ketik 1 Order ID milik AIVerse Hub (bukan Order ID lokal bot), bot balas detail order itu (service, jumlah, nominal, status, produk yang terkirim) langsung dari `GET /api/v1/order/{id}`. Berguna kalau buyer komplain kode dari supplier tidak jalan, tanpa perlu buka dashboard AIVerse Hub.
-6. **🔄 Refresh Modal & Stok** — muncul kalau sudah ada minimal 1 varian terhubung. Panggil `GET /api/v1/products` **satu kali** (bukan per-varian, hemat rate limit 3 req/detik AIVerse Hub) lalu update harga modal SEMUA varian yang terhubung sekaligus, tampilkan margin terbaru tiap varian, dan kasih ⚠️ kalau stok di AIVerse Hub tersisa ≤5 (biar bisa top up saldo di sana sebelum buyer gagal beli) atau kalau service-nya ternyata sudah dihapus dari AIVerse Hub.
+   Once linked, the bot immediately shows a **cost vs sale price comparison** (the margin), with a clear ⚠️ warning if the current sale price is equal to or below the AIVerse Hub cost (so you cannot sell at a loss unknowingly). On the same screen there are quick markup buttons **+10% / +20% / +30% / +50%** (computed from the cost) to set the sale price right away, or **✏️ Custom Price** to type your own.
+2. **🗑️ Unlink** — release a variant from the Supplier API; it goes back to local stock as usual.
+3. **🧾 Order History** — our store's order history on the AIVerse Hub side (order ID, product, quantity, amount, status, time), with ‹ Previous / Next › navigation.
+4. **📊 Statistics** — a summary of deposits and sales (today / 7 days / 30 days / 1 year / all time) plus the best-selling products on the AIVerse Hub side.
+5. **🔍 Check Order ID (API)** — type one AIVerse Hub Order ID (not the bot's local Order ID) and the bot returns that order's details (service, quantity, amount, status, delivered products) straight from `GET /api/v1/order/{id}`. Useful when a buyer reports a supplier code not working, without opening the AIVerse Hub dashboard.
+6. **🔄 Refresh Cost & Stock** — appears once at least one variant is linked. Calls `GET /api/v1/products` **once** (not per variant, saving AIVerse Hub's 3 req/second rate limit), updates the cost of ALL linked variants at once, shows each variant's latest margin, and warns ⚠️ when AIVerse Hub stock is down to ≤5 (so you can top up there before a buyer fails to purchase) or when a service has been removed from AIVerse Hub.
 
-Tombol **🗑️ Putus** sekarang minta konfirmasi dulu ("✅ Ya, Putuskan" / "❌ Batal") sebelum benar-benar memutuskan link — sama seperti pola konfirmasi di 🗑️ Hapus Produk, supaya tidak kepencet tidak sengaja.
+The **🗑️ Unlink** button asks for confirmation first ("✅ Yes, Unlink" / "❌ Cancel") before actually breaking the link — the same confirmation pattern as 🗑️ Delete Product, so it cannot be pressed by accident.
 
-Halaman utama menu ini juga menampilkan status koneksi (🟢 terhubung + saldo toko di AIVerse Hub, atau 🔴 kalau gagal cek koneksi) dan daftar semua varian yang sedang terhubung **beserta margin masing-masing** (modal, harga jual, untung/rugi per pcs) — dihitung dari harga modal yang di-snapshot saat link pertama kali dibuat, dan bisa disegarkan kapan saja lewat 🔄 Refresh Modal & Stok di atas.
+This menu's main page also shows the connection status (🟢 connected plus the store's balance at AIVerse Hub, or 🔴 if the connection check fails) and a list of every currently linked variant **with its margin** (cost, sale price, profit/loss per pcs) — calculated from the cost snapshotted when the link was first made, and refreshable at any time via 🔄 Refresh Cost & Stock above.
 
-**Catatan harga jual:** harga dasar (tier ke-1) ke buyer diset manual lewat 💲 Set Harga Produk (menu admin utama) atau tombol markup cepat saat link, dan TIDAK PERNAH otomatis berubah untuk varian yang **bukan** terhubung Supplier API. Untuk varian yang **terhubung** Supplier API dan tier harganya dihitung dari markup% (📊 Atur Markup 3-Tier), harga jual justru SENGAJA ikut naik/turun otomatis tiap auto-sync supaya selalu sesuai modal terbaru — kecuali kamu kunci lewat 🔒 Kunci Harga Manual. Detail lengkapnya di bagian [🎁 Tier Diskon Grosir & Markup Otomatis](#-tier-diskon-grosir--markup-otomatis) di bawah.
+**A note on sale prices:** the base price (tier 1) shown to buyers is set manually via 💲 Set Product Price (the main admin menu) or the quick markup buttons at link time, and NEVER changes automatically for variants that are **not** linked to the Supplier API. For variants that **are** linked and whose price tiers are computed from a markup% (📊 Set 3-Tier Markup), the sale price is DELIBERATELY allowed to rise and fall automatically on every auto-sync so it always matches the latest cost — unless you lock it via 🔒 Lock Manual Price. Full details in [🎁 Bulk Discount Tiers & Automatic Markup](#-bulk-discount-tiers--automatic-markup) below.
 
-## 🎁 Tier Diskon Grosir & Markup Otomatis
+## 🎁 Bulk Discount Tiers & Automatic Markup
 
-Tiap varian punya harga bertingkat berdasarkan jumlah beli: **1-49 pcs / 50-499 pcs / 500+ pcs**, masing-masing bisa beda harga (diskon grosir). Ada 2 cara mengisinya, plus 1 pengaman khusus varian Supplier API:
+Every variant has tiered pricing based on quantity: **1-49 pcs / 50-499 pcs / 500+ pcs**, each able to have a different price (a bulk discount). There are 2 ways to set them, plus one safeguard specific to Supplier API variants:
 
-**1. 🎁 Set Tier Diskon Grosir** — `/admin` → pilih produk/varian → ketik 3 harga jual USD langsung dipisah koma, contoh `0.65,0.69,0.65` (artinya 1-49 pcs = $0.65, 50-499 pcs = $0.69, 500+ pcs = $0.65). Cocok untuk semua jenis varian, termasuk yang tidak terhubung Supplier API.
+**1. 🎁 Set Bulk Discount Tiers** — `/admin` → pick a product/variant → type 3 USD sale prices separated by commas, for example `0.65,0.69,0.65` (meaning 1-49 pcs = $0.65, 50-499 pcs = $0.69, 500+ pcs = $0.65). Suitable for every kind of variant, including those not linked to the Supplier API.
 
-**2. 📊 Atur Markup 3-Tier** — khusus varian yang terhubung Supplier API. Ketik 3 angka **persen markup** dipisah koma, contoh `10,7,5` (artinya tier 1-49 = modal+10%, 50-499 = modal+7%, 500+ = modal+5%). Harga langsung dihitung dari modal Supplier SAAT INI, dan markup-nya tersimpan permanen untuk dipakai ulang tiap auto-sync berikutnya — jadi harga jual otomatis ikut naik/turun mengikuti modal live Supplier, tidak perlu diketik ulang manual tiap kali modal berubah.
+**2. 📊 Set 3-Tier Markup** — specific to variants linked to the Supplier API. Type 3 **markup percentages** separated by commas, for example `10,7,5` (meaning tier 1-49 = cost+10%, 50-499 = cost+7%, 500+ = cost+5%). The price is computed from the CURRENT supplier cost straight away, and the markup is stored permanently to be reused on every subsequent auto-sync — so the sale price follows the supplier's live cost up and down automatically, with no need to retype it whenever the cost changes.
 
-**⚠️ Interaksi dengan auto-sync Supplier API:** kalau kamu isi harga lewat cara 1 (🎁 Set Tier Diskon Grosir) untuk varian yang terhubung Supplier API, harga itu akan **TERTIMPA lagi** begitu auto-sync berikutnya jalan (tiap `SUPPLIER_SYNC_INTERVAL_MINUTES` menit, atau saat klik "🔄 Refresh Modal & Stok" manual) — karena sync selalu menghitung ulang tier dari markup% (default `DEFAULT_SUPPLIER_TIER_MARKUP` di `config.js`, kecuali sudah pernah diisi lewat cara 2 di atas). Ini **disengaja**, bukan bug — tujuannya supaya harga jual varian Supplier API selalu ikut modal terbaru dan tidak basi/rugi kalau modal naik.
+**⚠️ Interaction with the Supplier API auto-sync:** if you set a price via method 1 (🎁 Set Bulk Discount Tiers) on a variant linked to the Supplier API, that price will be **OVERWRITTEN** as soon as the next auto-sync runs (every `SUPPLIER_SYNC_INTERVAL_MINUTES` minutes, or when you click "🔄 Refresh Cost & Stock" manually) — because a sync always recomputes the tiers from a markup% (the `DEFAULT_SUPPLIER_TIER_MARKUP` default in `config.js`, unless one has already been set via method 2 above). This is **deliberate**, not a bug — the aim is that Supplier API variant prices always track the latest cost and never go stale or start losing money when the cost rises.
 
-Kalau kamu memang ingin harga tier tertentu **tidak** ikut auto-sync (misalnya harga promo jangka pendek), tekan tombol **🔒 Kunci Harga Manual** di layar "🎁 Set Tier Diskon Grosir" setelah set harganya. Selama dikunci:
-- Tier harga (1-49/50-499/500+) dijamin **tidak** dihitung ulang oleh auto-sync maupun refresh manual.
-- Modal (`supplierCost`) dan **stok** varian tetap disinkron seperti biasa — cuma tier harga jual yang di-skip.
-- Kalau modal Supplier melonjak/anjlok ≥20% dibanding sync sebelumnya, admin tetap dapat notifikasi (supaya bisa cek margin manual), tapi teksnya menegaskan harga jual TIDAK ikut berubah karena dikunci.
-- Tekan tombol yang sama (sekarang **🔓 Buka Kunci Harga Manual**) kapan saja untuk kembali ke mode ikut-markup otomatis.
+If you genuinely want particular tier prices **not** to follow auto-sync (a short-term promotional price, say), press the **🔒 Lock Manual Price** button on the "🎁 Set Bulk Discount Tiers" screen after setting the price. While it is locked:
+- The price tiers (1-49/50-499/500+) are guaranteed **not** to be recomputed by auto-sync or a manual refresh.
+- The cost (`supplierCost`) and **stock** of the variant are still synced as usual — only the sale price tiers are skipped.
+- If the supplier cost swings by ≥20% since the previous sync, the admin is still notified (so the margin can be checked by hand), but the message makes clear that the sale price did NOT change because it is locked.
+- Press the same button (now **🔓 Unlock Manual Price**) at any time to return to automatic markup mode.
 
-Status kunci (🔒/🔓) selalu ditampilkan di layar "🎁 Set Tier Diskon Grosir" dan ditandai `🔒` di laporan hasil sync Supplier API, jadi mudah dicek varian mana saja yang sedang dikunci.
+The lock status (🔒/🔓) is always shown on the "🎁 Set Bulk Discount Tiers" screen and marked with `🔒` in the Supplier API sync report, so it is easy to see which variants are locked.
 
-## 🔌 Canboso API (supplier kedua)
+## 🔌 Canboso API (the second supplier)
 
-Supplier KEDUA yang terpisah dari Supplier API (AIVerse Hub) di atas — pola kerjanya sama (link varian lokal ke produk remote, auto-order + auto-forward ke buyer, saldo buyer baru dipotong setelah order API sukses), tapi menghubungkan ke [Canboso](https://canboso.com) (`CANBOSO_API_KEY` & `CANBOSO_BASE_URL` di `.env`). Dokumentasi resmi Canboso: https://canboso.com/api/swagger.
+A SECOND supplier, separate from the Supplier API (AIVerse Hub) above — it works the same way (link a local variant to a remote product, auto-order and auto-forward to the buyer, with the buyer's balance debited only after the API order succeeds), but connects to [Canboso](https://canboso.com) (`CANBOSO_API_KEY` and `CANBOSO_BASE_URL` in `.env`). Canboso's official documentation: https://canboso.com/api/swagger.
 
-Canboso cuma expose 2 endpoint publik (`GET /api/v2/telegram-buyer/products` dan `POST /api/v2/telegram-buyer/purchase`), jadi menu **🔌 Canboso API** di `/admin` lebih ringkas dari Supplier API — tidak ada Riwayat Order/Statistik/Cek Order ID API. Auto-sync modal & stok sekarang **ada** (lihat `CANBOSO_SYNC_INTERVAL_SECONDS` di bawah), plus tombol **🔄 Refresh Harga & Stok** untuk trigger manual kapan saja.
+Canboso exposes only 2 public endpoints (`GET /api/v2/telegram-buyer/products` and `POST /api/v2/telegram-buyer/purchase`), so the **🔌 Canboso API** menu in `/admin` is more compact than the Supplier API one — there is no Order History, Statistics, or API Check Order ID. Auto-sync of cost and stock **does** exist (see `CANBOSO_SYNC_INTERVAL_SECONDS` below), plus a **🔄 Refresh Price & Stock** button to trigger one manually at any time.
 
-**Auto-sync modal & stok** — mirip `SUPPLIER_SYNC_INTERVAL_MINUTES` di Supplier API (AIVerse Hub), tapi satuannya **detik** lewat `CANBOSO_SYNC_INTERVAL_SECONDS` di `.env` (default `60` = tiap 1 menit). Ini murni buat menyegarkan angka yang admin lihat di panel — buyer sendiri SUDAH selalu dapat cek stok live tiap kali buka halaman produk (di-cache 20 detik, lihat `supplierCanboso.js`), jadi tidak wajib diset rapat-rapat. Isi `0` untuk matikan (kembali ke refresh manual saja). Nilai 1-9 detik otomatis dinaikkan ke minimum 10 detik supaya tidak memicu rate limit 429 di Canboso. Kalau ada link yang rusak atau field stok yang gagal terbaca, semua admin dapat notifikasi otomatis (dengan cooldown, tidak spam tiap sync).
+**Auto-sync of cost and stock** — similar to `SUPPLIER_SYNC_INTERVAL_MINUTES` in the Supplier API (AIVerse Hub), but measured in **seconds** via `CANBOSO_SYNC_INTERVAL_SECONDS` in `.env` (default `60`, i.e. every minute). This exists purely to keep the numbers the admin sees in the panel fresh — buyers ALREADY get a live stock check every time they open a product page (cached for 20 seconds, see `supplierCanboso.js`), so it does not have to be set tight. Set `0` to disable it (manual refresh only). Values of 1-9 seconds are raised automatically to a minimum of 10 seconds so Canboso's 429 rate limit is not triggered. If a link breaks or a stock field cannot be read, every admin is notified automatically (with a cooldown, so it does not spam on every sync).
 
-**🔔 Notifikasi Live Stock ke SEMUA user** — sama seperti di Supplier API (AIVerse Hub) di atas: begitu auto-sync ini mendeteksi TOTAL stok 1+ varian berubah, bot broadcast "STOK DIPERBARUI!" + tombol Buy Now ke semua user. ⚠️ Karena `CANBOSO_SYNC_INTERVAL_SECONDS` defaultnya cuma 60 detik (jauh lebih rapat dari Supplier API yang defaultnya 10 MENIT), fitur ini berpotensi jauh lebih sering ngirim notifikasi kalau stok Canboso-nya sering naik-turun — pertimbangkan naikkan intervalnya di `.env` kalau notifikasinya kerasa terlalu sering.
+**🔔 Live Stock Notifications to ALL users** — as in the Supplier API (AIVerse Hub) above: as soon as this auto-sync detects that the TOTAL stock of one or more variants has changed, the bot broadcasts "STOCK UPDATED!" plus a Buy Now button to all users. ⚠️ Because `CANBOSO_SYNC_INTERVAL_SECONDS` defaults to just 60 seconds (far tighter than the Supplier API's 10-MINUTE default), this can send notifications far more often if Canboso stock moves frequently — consider raising the interval in `.env` if it feels too frequent.
 
-**Setup lewat `/admin` → 🔌 Canboso API:**
-1. **➕ Hubungkan Produk** — pilih produk lokal → pilih varian → pilih produk dari daftar Canboso (diambil live lewat API). Sama seperti Supplier API, langsung ada perbandingan modal vs harga jual + tombol markup cepat **+10% / +20% / +30% / +50%** atau **✏️ Harga Custom**.
-2. **💲 Harga** — atur ulang harga jual kapan saja tanpa perlu putus-hubung ulang.
-3. **🗑️ Putus** (dengan konfirmasi) — lepaskan varian dari Canboso, balik pakai stok lokal.
-4. **🔄 Refresh Harga & Stok** — ambil ulang daftar produk Canboso dan update modal + stok semua varian yang terhubung sekaligus (harga jual TIDAK ikut berubah otomatis — beda dari Supplier API, di sini kamu yang atur ulang manual kalau modal berubah signifikan).
+**Setup via `/admin` → 🔌 Canboso API:**
+1. **➕ Link a Product** — pick a local product → pick a variant → pick a product from the Canboso list (fetched live via the API). As with the Supplier API, you immediately get a cost vs sale price comparison plus quick markup buttons **+10% / +20% / +30% / +50%** or **✏️ Custom Price**.
+2. **💲 Price** — reset the sale price at any time without unlinking and relinking.
+3. **🗑️ Unlink** (with confirmation) — release the variant from Canboso, back to local stock.
+4. **🔄 Refresh Price & Stock** — re-fetch the Canboso product list and update the cost and stock of every linked variant at once (the sale price does NOT change automatically — unlike the Supplier API, here you reset it yourself if the cost moves significantly).
 
-**Penting soal wallet:** saldo yang dipakai untuk `POST /purchase` adalah **saldo wallet akun Canboso ini** (bukan saldo Wallet buyer di bot) — wajib di-top-up dulu langsung dari sisi Canboso sebelum fitur ini dipakai, persis seperti saldo toko di AIVerse Hub.
+**Important note on the wallet:** the balance used for `POST /purchase` is **this Canboso account's wallet balance** (not a buyer's Wallet balance in the bot) — it must be topped up directly on the Canboso side before this feature can be used, exactly like the store balance at AIVerse Hub.
 
-**Catatan auth API:** API key Canboso dikirim lewat 2 header sekaligus (`Authorization: Bearer <key>` dan `X-API-Key: <key>`) di `supplierCanboso.js` supaya tetap jalan apapun konvensi yang dipakai — kalau ternyata Canboso butuh skema lain, cukup sesuaikan di 1 tempat itu.
+**A note on API auth:** the Canboso API key is sent via 2 headers at once (`Authorization: Bearer <key>` and `X-API-Key: <key>`) in `supplierCanboso.js` so it works whatever convention is used — if Canboso turns out to need a different scheme, adjust it in that one place.
 
-## Produk default
+## 🎁 Buy Gift / 💌 Confess Gift (GramJS userbot)
 
-Bot sudah terisi 3 kategori contoh (bisa diedit lewat `/addproduct`, `/addvariant`, atau langsung edit `data/db.json`):
+Sending a Telegram Star Gift to any user — including someone who has never pressed `/start` on this bot — is only possible from a real user account over MTProto, not through the Bot API. So this feature uses a separate GramJS **userbot**:
 
-- ✨ Gemini Premium — 18 Bulan
-- 🎬 Netflix Premium — 1 Bulan (Sharing/Private)
-- 🎵 Spotify Premium — 1 Bulan
+1. Get `USERBOT_API_ID` and `USERBOT_API_HASH` from [my.telegram.org](https://my.telegram.org) → API Development Tools.
+2. Run `node userbot-login.js` **once** and follow the prompts (phone number, OTP, 2FA password). It prints a session string — put it in `.env` as `USERBOT_SESSION`.
+3. ⚠️ Use a **separate Telegram account** for this, not your main personal one: automated activity can attract Telegram rate limits or flags, and the session string is as sensitive as the account password itself.
 
-## Catatan
+Buyers then get **🎁 Buy Gift** (sent on behalf of the store account, no message) and **💌 Confess Gift** (gift plus an anonymous message, with the sender's identity hidden). The gift sale price is the Stars cost × `STARS_TO_USD_RATE` plus `GIFT_MARKUP_PCT`, both overridable live from `/admin` → 🎁 Gift (Userbot) → 💲 Set Gift Pricing without a restart. If a send fails for any reason, the buyer's balance is refunded automatically and every admin is notified.
 
-- Semua data (saldo, produk, order, deposit/topup) tersimpan di `data/db.json`. Backup file ini secara berkala.
-- Bot pakai `polling`, jadi cukup jalankan `npm start` di server/VPS yang nyala terus (atau pakai PM2 agar auto-restart).
-- Kalau bot di-restart saat ada topup yang masih pending (belum dibayar), bot otomatis melanjutkan pemantauan status QRIS/USDT-nya begitu nyala lagi — tidak hilang begitu saja.
+## Default products
+
+`data/db.json` ships **empty** (`"products": []`) so you start from a clean store. Add your own products via `/admin` → ➕ Add Product, or edit `data/db.json` directly.
+
+## Notes
+
+- All data (balances, products, orders, deposits/topups) is stored in `data/db.json`. Back this file up regularly — see [💾 Auto Backup](#-auto-backup).
+- The bot uses `polling`, so it is enough to run `npm start` on a server/VPS that stays on (or use PM2 for auto-restart).
+- If the bot is restarted while a topup is still pending (unpaid), it automatically resumes monitoring that QRIS/USDT/TON/Binance payment once it comes back up — nothing is lost.
+- Errors are forwarded to every admin over Telegram (rate-limited to once per 10 minutes per error type), so problems do not sit unnoticed in the server log.

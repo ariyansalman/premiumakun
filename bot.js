@@ -7,7 +7,7 @@ const {
   GIFT_MARKUP_PCT, STARS_TO_USD_RATE
 } = require('./config');
 const { iconFor, EMOJI_IDS } = require('./emoji-id-menu-inline');
-const { EMOJI_ID_TEKS_BACKUP } = require('./emoji-id-teks');
+const { EMOJI_ID_TEXT_BACKUP } = require('./emoji-id-text');
 const db = require('./db');
 const payment = require('./payment');
 const supplier = require('./supplier');
@@ -256,20 +256,20 @@ async function startQrisTopup(chatId, amountUsd) {
     orderId: deposit.id,
     amount: usd(amountUsd, chatId),
     total: rupiah(order.finalAmount),
-    // Per-line emoji come from teksEmoji() so the custom emoji an admin sets in
+    // Per-line emoji come from textEmoji() so the custom emoji an admin sets in
     // "🎨 Manage Emoji ID" -> "QRIS Invoice (Topup)" take effect.
-    title_icon: teksEmoji('qris_title', '🪙'),
-    rocket_icon: teksEmoji('qris_rocket', '🚀'),
-    orderid_icon: teksEmoji('qris_orderid', '🧾'),
-    saldo_icon: teksEmoji('qris_balance', '💵'),
-    total_icon: teksEmoji('qris_total', '💰'),
-    expire_icon: teksEmoji('qris_expire', '⏳'),
-    carabayar_icon: teksEmoji('qris_how_to_pay', '📲'),
-    step1_icon: teksEmoji('qris_step1', '1️⃣'),
-    step2_icon: teksEmoji('qris_step2', '2️⃣'),
-    step3_icon: teksEmoji('qris_step3', '3️⃣'),
-    auto_icon: teksEmoji('qris_auto', '⚡'),
-    tip_icon: teksEmoji('qris_tip', '💡')
+    title_icon: textEmoji('qris_title', '🪙'),
+    rocket_icon: textEmoji('qris_rocket', '🚀'),
+    orderid_icon: textEmoji('qris_orderid', '🧾'),
+    saldo_icon: textEmoji('qris_balance', '💵'),
+    total_icon: textEmoji('qris_total', '💰'),
+    expire_icon: textEmoji('qris_expire', '⏳'),
+    carabayar_icon: textEmoji('qris_how_to_pay', '📲'),
+    step1_icon: textEmoji('qris_step1', '1️⃣'),
+    step2_icon: textEmoji('qris_step2', '2️⃣'),
+    step3_icon: textEmoji('qris_step3', '3️⃣'),
+    auto_icon: textEmoji('qris_auto', '⚡'),
+    tip_icon: textEmoji('qris_tip', '💡')
   });
 
   const replyMarkup = qrisCancelKeyboard(chatId, deposit.id);
@@ -387,13 +387,13 @@ async function startUsdtTopup(chatId, usdAmount) {
     orderId: deposit.id,
     uniqueAmount,
     address: payment.USDT_BEP20_ADDRESS,
-    // Per-line emoji come from teksEmoji() so the custom emoji an admin sets in
+    // Per-line emoji come from textEmoji() so the custom emoji an admin sets in
     // "🎨 Manage Emoji ID" -> "USDT Deposit (BEP20)" take effect.
-    title_icon: teksEmoji('usdt_title', '🪙'),
-    min_icon: teksEmoji('usdt_min', '🈷️'),
-    max_icon: teksEmoji('usdt_max', '🈷️'),
-    address_icon: teksEmoji('usdt_address_label', '🔺'),
-    auto_icon: teksEmoji('usdt_auto', '✅')
+    title_icon: textEmoji('usdt_title', '🪙'),
+    min_icon: textEmoji('usdt_min', '🈷️'),
+    max_icon: textEmoji('usdt_max', '🈷️'),
+    address_icon: textEmoji('usdt_address_label', '🔺'),
+    auto_icon: textEmoji('usdt_auto', '✅')
   });
 
   const replyMarkup = {
@@ -506,13 +506,13 @@ async function startTonTopup(chatId, usdAmount) {
     orderId: deposit.id,
     uniqueAmount,
     address: payment.TON_ADDRESS,
-    // Per-line emoji come from teksEmoji() so the custom emoji an admin sets in
+    // Per-line emoji come from textEmoji() so the custom emoji an admin sets in
     // "🎨 Manage Emoji ID" -> "TON Deposit" take effect.
-    title_icon: teksEmoji('ton_title', '💎'),
-    min_icon: teksEmoji('ton_min', '🈷️'),
-    max_icon: teksEmoji('ton_max', '🈷️'),
-    address_icon: teksEmoji('ton_address_label', '🔺'),
-    auto_icon: teksEmoji('ton_auto', '✅')
+    title_icon: textEmoji('ton_title', '💎'),
+    min_icon: textEmoji('ton_min', '🈷️'),
+    max_icon: textEmoji('ton_max', '🈷️'),
+    address_icon: textEmoji('ton_address_label', '🔺'),
+    auto_icon: textEmoji('ton_auto', '✅')
   });
 
   const replyMarkup = {
@@ -613,11 +613,11 @@ async function startBinanceTopup(chatId, usdAmount) {
     orderId: deposit.id,
     uniqueAmount,
     payId: BINANCE_PAY_ID,
-    title_icon: teksEmoji('binance_title', '🟡'),
-    min_icon: teksEmoji('binance_min', '🈷️'),
-    max_icon: teksEmoji('binance_max', '🈷️'),
-    payid_icon: teksEmoji('binance_payid_label', '🔺'),
-    auto_icon: teksEmoji('binance_auto', '✅')
+    title_icon: textEmoji('binance_title', '🟡'),
+    min_icon: textEmoji('binance_min', '🈷️'),
+    max_icon: textEmoji('binance_max', '🈷️'),
+    payid_icon: textEmoji('binance_payid_label', '🔺'),
+    auto_icon: textEmoji('binance_auto', '✅')
   });
 
   const replyMarkup = {
@@ -750,7 +750,7 @@ function resumePendingDeposits() {
 // There are 2 sources of premium custom emoji, with different mechanisms:
 //
 // 1) boltEmojiMenu() / boltEmojiText() -> a single ID hardcoded by hand in
-//    emoji-id-teks.js, used for the bot's built-in "⚡" bullet: {e} in
+//    emoji-id-text.js, used for the bot's built-in "⚡" bullet: {e} in
 //    descriptions/how-to-use, and in menu/notification text (welcome, order
 //    success, and so on).
 // 2) embedOwnerCustomEmoji() -> needs NO manual ID at all. When the OWNER (who
@@ -770,7 +770,11 @@ function resumePendingDeposits() {
 // mechanism (1) or (2) above. When the ID is empty or the owner is not Premium,
 // it falls back to plain unicode automatically, with no error from Telegram.
 // ID priority: (1) the "automatic capture" result from admin "🎨 Manage Emoji ID"
-// (persisted in data/db.json), then (2) the static ID in emoji-id-teks.js.
+// (persisted in data/db.json), then (2) the static ID in emoji-id-text.js.
+// NOTE: the "teks:" key prefix below is a legacy namespace already persisted in
+// existing data/db.json files ("teks" is Indonesian for "text"). It is kept
+// verbatim on purpose - renaming it would orphan every emoji ID an existing
+// store has already saved.
 const boltEmojiMenu = () => {
   const id = db.getEmojiId('teks:menu_notif') || BOLT_EMOJI_ID_MENU;
   return id ? `<tg-emoji emoji-id="${id}">⚡</tg-emoji>` : '⚡';
@@ -784,25 +788,25 @@ const boltEmojiText = () => {
 // text (not just the "⚡" placeholder), where each key has its own slot under
 // admin "🎨 Manage Emoji ID" -> "✍️ Emoji in Message Text". ID priority:
 // (1) the "automatic capture" result in data/db.json, then (2) the static
-// EMOJI_ID_TEKS_BACKUP fallback in emoji-id-teks.js. When both are empty it falls
+// EMOJI_ID_TEXT_BACKUP fallback in emoji-id-text.js. When both are empty it falls
 // back to the plain unicode emoji (the second parameter), with NO ERROR.
-function teksEmoji(key, fallback) {
-  const id = db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEKS_BACKUP[key];
+function textEmoji(key, fallback) {
+  const id = db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEXT_BACKUP[key];
   return id ? `<tg-emoji emoji-id="${id}">${fallback}</tg-emoji>` : fallback;
 }
 
 // The welcome text (/start) - used in several places, so it lives in one helper
 // and only needs editing here. Each feature line has its own icon slot
-// (teksEmoji) so it can be customised via admin "🎨 Manage Emoji ID" ->
+// (textEmoji) so it can be customised via admin "🎨 Manage Emoji ID" ->
 // "✍️ Emoji in Message Text" -> "👋 Welcome Message (/start)".
 function buildWelcomeText(chatId) {
-  return `${teksEmoji('welcome_wave', '👋')} ${lang.t(chatId, 'welcome', {
+  return `${textEmoji('welcome_wave', '👋')} ${lang.t(chatId, 'welcome', {
     store: escapeHtml(STORE_NAME),
-    cart_icon: teksEmoji('welcome_cart', '🛒'),
-    wallet_icon: teksEmoji('welcome_wallet', '💳'),
-    bolt_icon: teksEmoji('welcome_bolt', '⚡'),
-    gift_icon: teksEmoji('welcome_gift', '🎁'),
-    arrow_icon: teksEmoji('welcome_arrow', '👉')
+    cart_icon: textEmoji('welcome_cart', '🛒'),
+    wallet_icon: textEmoji('welcome_wallet', '💳'),
+    bolt_icon: textEmoji('welcome_bolt', '⚡'),
+    gift_icon: textEmoji('welcome_gift', '🎁'),
+    arrow_icon: textEmoji('welcome_arrow', '👉')
   })}`;
 }
 
@@ -811,22 +815,22 @@ function buildWelcomeText(chatId) {
 // including any <tg-emoji> tags from embedOwnerCustomEmoji() if the admin picked
 // a premium emoji while typing - the same mechanism as Broadcast). When it is
 // unset (null/empty), it falls back to the default "nice" text, whose icons all
-// go through teksEmoji() -> automatically using the Premium emoji ALREADY in the
-// file (borrowed from other slots, see the comments in emoji-id-teks.js), and
+// go through textEmoji() -> automatically using the Premium emoji ALREADY in the
+// file (borrowed from other slots, see the comments in emoji-id-text.js), and
 // still customisable via admin "🎨 Manage Emoji ID" -> "✍️ Emoji in Message
 // Text" -> "🛠️ Maintenance Mode" WITHOUT touching any code.
 function buildMaintenanceText(chatId) {
   const { message } = db.getMaintenanceSettings();
   if (message) return message;
   const title = lang.t(chatId, 'maintenance_title', {
-    wrench_icon: teksEmoji('maintenance_wrench', '🛠️')
+    wrench_icon: textEmoji('maintenance_wrench', '🛠️')
   });
   const desc = lang.t(chatId, 'maintenance_desc', {
     store: escapeHtml(STORE_NAME),
-    sparkle_icon: teksEmoji('maintenance_sparkle', '✨'),
-    bolt_icon: teksEmoji('maintenance_bolt', '⚡'),
-    clock_icon: teksEmoji('maintenance_clock', '⏳'),
-    heart_icon: teksEmoji('maintenance_heart', '🙏')
+    sparkle_icon: textEmoji('maintenance_sparkle', '✨'),
+    bolt_icon: textEmoji('maintenance_bolt', '⚡'),
+    clock_icon: textEmoji('maintenance_clock', '⏳'),
+    heart_icon: textEmoji('maintenance_heart', '🙏')
   });
   return `${title}\n\n${desc}`;
 }
@@ -834,24 +838,24 @@ function buildMaintenanceText(chatId) {
 // The "Maintenance FINISHED" broadcast text - sent automatically to ALL users as
 // soon as an admin turns Maintenance Mode off via "🔴 Disable" (see the
 // 'maintenance_toggle' handler below). The same pattern as buildMaintenanceText()
-// above: every icon goes through teksEmoji() so it automatically uses the Premium
+// above: every icon goes through textEmoji() so it automatically uses the Premium
 // emoji ALREADY in the file (borrowed from other slots, see the notes in
-// emoji-id-teks.js), and stays customisable via admin "🎨 Manage Emoji ID" ->
+// emoji-id-text.js), and stays customisable via admin "🎨 Manage Emoji ID" ->
 // "✍️ Emoji in Message Text" -> "🛠️ Maintenance Mode" WITHOUT touching any
 // code. Unlike buildMaintenanceText(), this text ALWAYS uses the default
 // template (never the admin's custom message), because it is a one-off send when
 // maintenance has just finished, not a status shown repeatedly.
 function buildMaintenanceFinishedText(chatId) {
   const title = lang.t(chatId, 'maintenance_finished_title', {
-    rocket_icon: teksEmoji('maintenance_finished_rocket', '🚀')
+    rocket_icon: textEmoji('maintenance_finished_rocket', '🚀')
   });
   const desc = lang.t(chatId, 'maintenance_finished_desc', {
     store: escapeHtml(STORE_NAME),
-    sparkle_icon: teksEmoji('maintenance_finished_sparkle', '✨'),
-    check_icon: teksEmoji('maintenance_finished_check', '✅'),
-    bolt_icon: teksEmoji('maintenance_finished_bolt', '⚡'),
-    gift_icon: teksEmoji('maintenance_finished_gift', '🎁'),
-    heart_icon: teksEmoji('maintenance_finished_heart', '🙏')
+    sparkle_icon: textEmoji('maintenance_finished_sparkle', '✨'),
+    check_icon: textEmoji('maintenance_finished_check', '✅'),
+    bolt_icon: textEmoji('maintenance_finished_bolt', '⚡'),
+    gift_icon: textEmoji('maintenance_finished_gift', '🎁'),
+    heart_icon: textEmoji('maintenance_finished_heart', '🙏')
   });
   return `${title}\n\n${desc}`;
 }
@@ -895,20 +899,20 @@ function forceJoinKeyboard(chatId, channels) {
 
 function forceJoinText(chatId, unjoinedChannels, allChannels) {
   const unjoinedIds = new Set(unjoinedChannels.map(c => c.id));
-  const joinedIcon = teksEmoji('forcejoin_status_joined', '✅');
-  const pendingIcon = teksEmoji('forcejoin_status_pending', '🔸');
+  const joinedIcon = textEmoji('forcejoin_status_joined', '✅');
+  const pendingIcon = textEmoji('forcejoin_status_pending', '🔸');
   const lines = allChannels.map(ch => lang.t(chatId, 'forcejoin_channel_line', {
     status: unjoinedIds.has(ch.id) ? pendingIcon : joinedIcon,
     title: escapeHtml(ch.title)
   }));
-  const title = lang.t(chatId, 'forcejoin_title', { lock_icon: teksEmoji('forcejoin_lock', '🔐') });
+  const title = lang.t(chatId, 'forcejoin_title', { lock_icon: textEmoji('forcejoin_lock', '🔐') });
   const desc = lang.t(chatId, 'forcejoin_desc', {
     store: escapeHtml(STORE_NAME),
-    lock_icon: teksEmoji('forcejoin_lock', '🔐'),
-    sparkle_icon: teksEmoji('forcejoin_sparkle', '✨'),
-    bolt_icon: teksEmoji('forcejoin_bolt', '⚡'),
-    arrow_icon: teksEmoji('forcejoin_arrow', '👇'),
-    check_icon: teksEmoji('forcejoin_check', '✅')
+    lock_icon: textEmoji('forcejoin_lock', '🔐'),
+    sparkle_icon: textEmoji('forcejoin_sparkle', '✨'),
+    bolt_icon: textEmoji('forcejoin_bolt', '⚡'),
+    arrow_icon: textEmoji('forcejoin_arrow', '👇'),
+    check_icon: textEmoji('forcejoin_check', '✅')
   });
   return `${title}\n\n${desc}\n\n${lines.join('\n')}`;
 }
@@ -1025,7 +1029,7 @@ function withStyle(button, style) {
 }
 
 // ===== PER-PRODUCT premium emoji (different again from the 2 mechanisms above) =====
-// The source is NOT emoji-id-teks.js / emoji-id-menu-inline.js (which hold manual,
+// The source is NOT emoji-id-text.js / emoji-id-menu-inline.js (which hold manual,
 // global values per key), but the premium emoji the owner picks THEMSELVES
 // straight from their Telegram Premium panel while typing the product name in the
 // "➕ Add Product" flow (see the 'addproduct_name' handler). As soon as it is
@@ -1204,9 +1208,9 @@ function describeRawFields(raw, maxLen = 600) {
 // sends one text message plus an inline menu to the destination channel/group the
 // admin configured (data/db.json -> settings.channelNotif). Every icon in this
 // message MUST use a premium custom emoji that already exists (via
-// teksEmoji()/withButtonIcon() - ID priority from admin "🎨 Manage Emoji ID",
+// textEmoji()/withButtonIcon() - ID priority from admin "🎨 Manage Emoji ID",
 // falling back to an ID already used on another page - see the "channelnotif_*"
-// group comments in emoji-id-teks.js), not a new ID that may never have been
+// group comments in emoji-id-text.js), not a new ID that may never have been
 // captured. Admins can still change any emoji here at any time via "🎨 Manage
 // Emoji ID" -> "✍️ Emoji in Message Text" -> "📢 Channel Notifications".
 
@@ -1256,20 +1260,20 @@ function channelNotifKeyboard(product) {
 // The "🎉 New Purchase!" text - sent after a successful order (auto-delivery OR
 // manual, it makes no difference - the channel only shows a transaction summary).
 function buildChannelPurchaseText(chatId, product, variant, qty, total) {
-  const border = teksEmoji('channelnotif_border', '✨');
+  const border = textEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
-  const title = teksEmoji('channelnotif_purchase_title', '🎉');
-  const footer = teksEmoji('channelnotif_footer', '🔥');
+  const title = textEmoji('channelnotif_purchase_title', '🎉');
+  const footer = textEmoji('channelnotif_footer', '🔥');
   return (
     `${line}\n` +
     `${title} <b>NEW PURCHASE!</b> ${title}\n` +
     `${line}\n\n` +
     `<blockquote>` +
-    `${teksEmoji('channelnotif_id', '📌')} <b>ID:</b> <code>${maskChannelId(chatId)}</code>\n` +
-    `${teksEmoji('channelnotif_product', '🛒')} <b>Product:</b> ${productEmojiHtml(product)} ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
-    `${teksEmoji('channelnotif_qty', '⭐️')} <b>Quantity:</b> ${qty}\n` +
-    `${teksEmoji('channelnotif_total', '💰')} <b>Total:</b> ${usd(total)}\n` +
-    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `${textEmoji('channelnotif_id', '📌')} <b>ID:</b> <code>${maskChannelId(chatId)}</code>\n` +
+    `${textEmoji('channelnotif_product', '🛒')} <b>Product:</b> ${productEmojiHtml(product)} ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
+    `${textEmoji('channelnotif_qty', '⭐️')} <b>Quantity:</b> ${qty}\n` +
+    `${textEmoji('channelnotif_total', '💰')} <b>Total:</b> ${usd(total)}\n` +
+    `${textEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
     `</blockquote>\n\n` +
     `${footer} <i>${escapeHtml(STORE_NAME)} — Fast &amp; Trusted!</i>`
   );
@@ -1278,10 +1282,10 @@ function buildChannelPurchaseText(chatId, product, variant, qty, total) {
 // The "💳 New Wallet Top-Up!" text - sent after a successful Wallet deposit
 // (QRIS / USDT BEP20 / TON), with the network label derived from the method.
 function buildChannelTopupText(chatId, method, amount) {
-  const border = teksEmoji('channelnotif_border', '✨');
+  const border = textEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
-  const title = teksEmoji('channelnotif_topup_title', '💳');
-  const footer = teksEmoji('channelnotif_footer', '🔥');
+  const title = textEmoji('channelnotif_topup_title', '💳');
+  const footer = textEmoji('channelnotif_footer', '🔥');
   const networkLabel = method === 'usdt_bep20' ? 'BSC (USDT BEP20)'
     : method === 'ton' ? 'TON'
     : method === 'binance' ? 'Binance Pay'
@@ -1291,10 +1295,10 @@ function buildChannelTopupText(chatId, method, amount) {
     `${title} <b>NEW WALLET TOP-UP!</b> ${title}\n` +
     `${line}\n\n` +
     `<blockquote>` +
-    `${teksEmoji('channelnotif_id', '📌')} <b>ID:</b> <code>${maskChannelId(chatId)}</code>\n` +
-    `${teksEmoji('channelnotif_network', '✅')} <b>Network:</b> ${networkLabel}\n` +
-    `${teksEmoji('channelnotif_amount', '💵')} <b>Amount:</b> ${usd(amount)}\n` +
-    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `${textEmoji('channelnotif_id', '📌')} <b>ID:</b> <code>${maskChannelId(chatId)}</code>\n` +
+    `${textEmoji('channelnotif_network', '✅')} <b>Network:</b> ${networkLabel}\n` +
+    `${textEmoji('channelnotif_amount', '💵')} <b>Amount:</b> ${usd(amount)}\n` +
+    `${textEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
     `</blockquote>\n\n` +
     `${footer} <i>${escapeHtml(STORE_NAME)} — Instant &amp; Automatic!</i>`
   );
@@ -1340,19 +1344,19 @@ function triggerReferralRewardIfEligible(newUserChatId) {
 // there is still a verification trace without leaking full IDs publicly. The
 // reward shown is REFERRAL_REWARD from .env.
 function buildChannelReferralText(newUserChatId, referrerChatId, reward) {
-  const border = teksEmoji('channelnotif_border', '✨');
+  const border = textEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
-  const title = teksEmoji('channelnotif_referral_title', '🎉');
-  const footer = teksEmoji('channelnotif_footer', '🔥');
+  const title = textEmoji('channelnotif_referral_title', '🎉');
+  const footer = textEmoji('channelnotif_footer', '🔥');
   return (
     `${line}\n` +
     `${title} <b>NEW REFERRAL SUCCESS!</b> ${title}\n` +
     `${line}\n\n` +
     `<blockquote>` +
-    `${teksEmoji('channelnotif_referral_user', '👤')} <b>User:</b> <code>${maskChannelId(newUserChatId)}</code>\n` +
-    `${teksEmoji('channelnotif_referral_referredby', '🎁')} <b>Referred by:</b> <code>${maskChannelId(referrerChatId)}</code>\n` +
-    `${teksEmoji('channelnotif_referral_reward', '💵')} <b>Reward:</b> ${formatReferralReward(reward)}\n` +
-    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `${textEmoji('channelnotif_referral_user', '👤')} <b>User:</b> <code>${maskChannelId(newUserChatId)}</code>\n` +
+    `${textEmoji('channelnotif_referral_referredby', '🎁')} <b>Referred by:</b> <code>${maskChannelId(referrerChatId)}</code>\n` +
+    `${textEmoji('channelnotif_referral_reward', '💵')} <b>Reward:</b> ${formatReferralReward(reward)}\n` +
+    `${textEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
     `</blockquote>\n\n` +
     `${footer} <i>${escapeHtml(STORE_NAME)} — Refer &amp; Earn!</i>`
   );
@@ -1364,17 +1368,17 @@ function buildChannelReferralText(newUserChatId, referrerChatId, reward) {
 // 'maintenance_toggle' handler below), so channel members know without opening the
 // bot. status: 'start' | 'finish'.
 function buildChannelMaintenanceText(status) {
-  const border = teksEmoji('channelnotif_border', '✨');
+  const border = textEmoji('channelnotif_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
-  const footer = teksEmoji('channelnotif_footer', '🔥');
+  const footer = textEmoji('channelnotif_footer', '🔥');
   const isStart = status === 'start';
   const title = isStart
-    ? teksEmoji('channelnotif_maintenance_start_title', '🛠️')
-    : teksEmoji('channelnotif_maintenance_finish_title', '🚀');
+    ? textEmoji('channelnotif_maintenance_start_title', '🛠️')
+    : textEmoji('channelnotif_maintenance_finish_title', '🚀');
   const titleText = isStart ? 'MAINTENANCE STARTED!' : 'MAINTENANCE FINISHED!';
   const statusIcon = isStart
-    ? teksEmoji('channelnotif_maintenance_start_status', '⏳')
-    : teksEmoji('channelnotif_maintenance_finish_status', '✅');
+    ? textEmoji('channelnotif_maintenance_start_status', '⏳')
+    : textEmoji('channelnotif_maintenance_finish_status', '✅');
   const statusLabel = isStart
     ? 'The bot is temporarily unavailable to users while it is being upgraded'
     : 'The bot is back to normal, every feature is usable again';
@@ -1384,7 +1388,7 @@ function buildChannelMaintenanceText(status) {
     `${line}\n\n` +
     `<blockquote>` +
     `${statusIcon} <b>Status:</b> ${statusLabel}\n` +
-    `${teksEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
+    `${textEmoji('channelnotif_time', '🕒')} <b>Time:</b> ${formatChannelTime()}` +
     `</blockquote>\n\n` +
     `${footer} <i>${escapeHtml(STORE_NAME)}</i>`
   );
@@ -1489,11 +1493,11 @@ function hasLiveTotpSecret(deliveredItems) {
 // links and so on) when it is available from auto-delivery stock.
 function buildSuccessText(product, variant, qty, total, orderId, deliveredItems, chatId) {
   const bolt = boltEmojiMenu();
-  const border = teksEmoji('success_border', '✨');
+  const border = textEmoji('success_border', '✨');
   const line = `${border}━━━━━━━━━━${border}`;
   let text =
     `${line}\n` +
-    `${teksEmoji('success_title', '🎉')} ${lang.t(chatId, 'success_title')} ${teksEmoji('success_title', '🎉')}\n` +
+    `${textEmoji('success_title', '🎉')} ${lang.t(chatId, 'success_title')} ${textEmoji('success_title', '🎉')}\n` +
     `${line}\n\n` +
     `${bolt} ${lang.t(chatId, 'success_product_label')} ${productEmojiHtml(product)} ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}\n` +
     `${bolt} ${lang.t(chatId, 'success_qty_label')} ${lang.t(chatId, 'success_qty_unit', { qty })}\n` +
@@ -1502,15 +1506,15 @@ function buildSuccessText(product, variant, qty, total, orderId, deliveredItems,
 
   if (deliveredItems && deliveredItems.length) {
     text +=
-      `${teksEmoji('success_delivered', '🚀')} ${lang.t(chatId, 'success_delivered_title')}\n\n` +
-      `${teksEmoji('success_link', '🔗')} ${lang.t(chatId, 'success_delivered_detail')}\n` +
+      `${textEmoji('success_delivered', '🚀')} ${lang.t(chatId, 'success_delivered_title')}\n\n` +
+      `${textEmoji('success_link', '🔗')} ${lang.t(chatId, 'success_delivered_detail')}\n` +
       deliveredItems.map((item, i) => formatStockItem(item, i, chatId)).join('\n\n') +
       `\n\n`;
   } else {
-    text += `${teksEmoji('success_manual', '📦')} ${lang.t(chatId, 'success_manual')}\n\n`;
+    text += `${textEmoji('success_manual', '📦')} ${lang.t(chatId, 'success_manual')}\n\n`;
   }
 
-  text += `${teksEmoji('success_thanks', '🙏')} ${lang.t(chatId, 'success_thanks', { store: escapeHtml(STORE_NAME) })} ${bolt}`;
+  text += `${textEmoji('success_thanks', '🙏')} ${lang.t(chatId, 'success_thanks', { store: escapeHtml(STORE_NAME) })} ${bolt}`;
   return text;
 }
 
@@ -1580,8 +1584,8 @@ function giftPriceUsd(stars) {
   const pricing = db.getGiftPricingSettings();
   const rate = pricing.starsToUsdRate != null ? pricing.starsToUsdRate : STARS_TO_USD_RATE;
   const markupPct = pricing.markupPct != null ? pricing.markupPct : GIFT_MARKUP_PCT;
-  const modal = stars * rate;
-  return modal * (1 + markupPct / 100);
+  const cost = stars * rate;
+  return cost * (1 + markupPct / 100);
 }
 
 // A grid of 3 columns per row (rather than a single column as before) - tidier
@@ -1815,13 +1819,13 @@ function profileText(chatId, from) {
   const usernameLine = user.username ? `@${escapeHtml(user.username)}` : lang.t(chatId, 'profile_username_empty');
 
   return (
-    `${teksEmoji('profile_title', '👤')} <b>${lang.t(chatId, 'profile_title').replace(/^👤\s*/, '')}</b>\n\n` +
-    `${teksEmoji('profile_name', '🙍')} <b>${lang.t(chatId, 'profile_name')}:</b> ${escapeHtml(displayName)}\n` +
-    `${teksEmoji('profile_username', '🔖')} <b>${lang.t(chatId, 'profile_username')}:</b> ${usernameLine}\n` +
-    `${teksEmoji('profile_chatid', '🆔')} <b>${lang.t(chatId, 'profile_chatid')}:</b> <code>${chatId}</code>\n\n` +
-    `${teksEmoji('profile_balance', '💰')} <b>${lang.t(chatId, 'profile_balance')}:</b> ${usd(user.balance, chatId)}\n` +
-    `${teksEmoji('profile_order', '🧾')} <b>${lang.t(chatId, 'profile_orders')}:</b> ${orders.length}\n` +
-    `${teksEmoji('profile_referral', '🎁')} <b>${lang.t(chatId, 'profile_referral')}:</b> ${stats.referralCount} (${usd(stats.referralEarnings, chatId)})`
+    `${textEmoji('profile_title', '👤')} <b>${lang.t(chatId, 'profile_title').replace(/^👤\s*/, '')}</b>\n\n` +
+    `${textEmoji('profile_name', '🙍')} <b>${lang.t(chatId, 'profile_name')}:</b> ${escapeHtml(displayName)}\n` +
+    `${textEmoji('profile_username', '🔖')} <b>${lang.t(chatId, 'profile_username')}:</b> ${usernameLine}\n` +
+    `${textEmoji('profile_chatid', '🆔')} <b>${lang.t(chatId, 'profile_chatid')}:</b> <code>${chatId}</code>\n\n` +
+    `${textEmoji('profile_balance', '💰')} <b>${lang.t(chatId, 'profile_balance')}:</b> ${usd(user.balance, chatId)}\n` +
+    `${textEmoji('profile_order', '🧾')} <b>${lang.t(chatId, 'profile_orders')}:</b> ${orders.length}\n` +
+    `${textEmoji('profile_referral', '🎁')} <b>${lang.t(chatId, 'profile_referral')}:</b> ${stats.referralCount} (${usd(stats.referralEarnings, chatId)})`
   );
 }
 
@@ -1849,7 +1853,7 @@ function supportKeyboard(chatId) {
 
 function referralKeyboard(chatId) {
   const rows = [
-    [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_share_referral'), url: `https://t.me/share/url?url=${encodeURIComponent(referralLink(chatId))}&text=${encodeURIComponent(`Yuk belanja akun premium murah di ${STORE_NAME}!`)}` }, 'share_referral'), 'primary')]
+    [withStyle(withButtonIcon({ text: lang.t(chatId, 'btn_share_referral'), url: `https://t.me/share/url?url=${encodeURIComponent(referralLink(chatId))}&text=${encodeURIComponent(`Come shop for cheap premium accounts at ${STORE_NAME}!`)}` }, 'share_referral'), 'primary')]
   ];
   if (BOT_USERNAME) {
     // Telegram's built-in copy_text button (Bot API 7.x+) - one press copies the
@@ -1867,10 +1871,10 @@ function referralKeyboard(chatId) {
 
 function referralText(chatId) {
   const stats = db.getReferralStats(chatId);
-  // Page title: its emoji comes from teksEmoji() so a custom emoji set by the admin
+  // Page title: its emoji comes from textEmoji() so a custom emoji set by the admin
   // under "🎨 Manage Emoji ID" -> "Refer & Earn Page" applies. When unset it falls
   // back to the plain unicode emoji automatically.
-  const title = `${teksEmoji('referral_title', '🎁')} ${lang.t(chatId, 'referral_title')}`;
+  const title = `${textEmoji('referral_title', '🎁')} ${lang.t(chatId, 'referral_title')}`;
   if (!BOT_USERNAME) {
     return `${title}\n\n${lang.t(chatId, 'referral_disabled')}`;
   }
@@ -1883,11 +1887,11 @@ function referralText(chatId) {
     // Same as the title: each line uses its own emoji key (matching the keys in the
     // admin menu: referral_reward, referral_link, referral_howitworks,
     // referral_total, referral_earnings).
-    reward_emoji: teksEmoji('referral_reward', '💎'),
-    link_emoji: teksEmoji('referral_link', '🔗'),
-    how_emoji: teksEmoji('referral_howitworks', '💳'),
-    total_emoji: teksEmoji('referral_total', '👥'),
-    earnings_emoji: teksEmoji('referral_earnings', '💰')
+    reward_emoji: textEmoji('referral_reward', '💎'),
+    link_emoji: textEmoji('referral_link', '🔗'),
+    how_emoji: textEmoji('referral_howitworks', '💳'),
+    total_emoji: textEmoji('referral_total', '👥'),
+    earnings_emoji: textEmoji('referral_earnings', '💰')
   });
 }
 
@@ -2042,20 +2046,20 @@ function descKeyboard(productId, variantId, chatId, product, variant) {
 // Triggered AUTOMATICALLY whenever an admin successfully adds stock to a variant,
 // by any route (📋 pasting links/codes -> addstock_items, OR 🔢 a manual number
 // -> addstock_manual_qty - see both handlers in the TEXT MESSAGES section).
-// Every icon in this text has its own slot via teksEmoji() (the "stockalert"
-// group in TEKS_GROUPS) - so it ALWAYS uses a Premium custom emoji once the admin
+// Every icon in this text has its own slot via textEmoji() (the "stockalert"
+// group in TEXT_GROUPS) - so it ALWAYS uses a Premium custom emoji once the admin
 // fills in the ID via "🎨 Manage Emoji ID" (falling back to plain unicode when
 // unset or the owner is not Premium, the same as every other mechanism in this
 // bot - it never errors).
 function buildStockAlertText(product, variant, qtyAdded, chatId) {
   const title = product.variants.length > 1 ? `${product.name} - ${variant.label}` : product.name;
   return (
-    `${teksEmoji('stockalert_bell', '🔔')} <b>NEW STOCK AVAILABLE!</b>\n\n` +
-    `${teksEmoji('stockalert_product', '📦')} <b>Product:</b> ${productEmojiHtml(product)} ${escapeHtml(title)}\n` +
-    `${teksEmoji('stockalert_added', '➕')} <b>Added:</b> ${qtyAdded} pcs\n` +
-    `${teksEmoji('stockalert_total', '📊')} <b>Total Stock Now:</b> ${db.getTotalStock(variant)} pcs\n` +
-    `${teksEmoji('stockalert_price', '💲')} <b>Price:</b> ${usd(db.getBasePrice(variant), chatId)}\n\n` +
-    `${teksEmoji('stockalert_footer', '⚡')} Check out now before it sells out again!`
+    `${textEmoji('stockalert_bell', '🔔')} <b>NEW STOCK AVAILABLE!</b>\n\n` +
+    `${textEmoji('stockalert_product', '📦')} <b>Product:</b> ${productEmojiHtml(product)} ${escapeHtml(title)}\n` +
+    `${textEmoji('stockalert_added', '➕')} <b>Added:</b> ${qtyAdded} pcs\n` +
+    `${textEmoji('stockalert_total', '📊')} <b>Total Stock Now:</b> ${db.getTotalStock(variant)} pcs\n` +
+    `${textEmoji('stockalert_price', '💲')} <b>Price:</b> ${usd(db.getBasePrice(variant), chatId)}\n\n` +
+    `${textEmoji('stockalert_footer', '⚡')} Check out now before it sells out again!`
   );
 }
 
@@ -2127,15 +2131,15 @@ async function broadcastStockAlert(product, variant, qtyAdded, adminChatId) {
 // message per variant) so users are not flooded when many variants change at
 // once.
 function buildStockSyncBroadcastText(changes, chatId) {
-  const bell = teksEmoji('stockalert_bell', '🔔');
-  const footer = teksEmoji('stockalert_footer', '⚡');
+  const bell = textEmoji('stockalert_bell', '🔔');
+  const footer = textEmoji('stockalert_footer', '⚡');
   const blocks = changes.map(c => {
     const title = c.product.variants.length > 1 ? `${c.product.name} - ${c.variant.label}` : c.product.name;
     const arrow = c.newTotal > c.oldTotal ? '📈' : '📉';
     return (
       `${productEmojiHtml(c.product)} <b>${escapeHtml(title)}</b>\n` +
-      `${teksEmoji('stockalert_total', '📊')} Stock: ${c.oldTotal} → <b>${c.newTotal}</b> pcs ${arrow}\n` +
-      `${teksEmoji('stockalert_price', '💲')} ${usd(db.getBasePrice(c.variant), chatId)}`
+      `${textEmoji('stockalert_total', '📊')} Stock: ${c.oldTotal} → <b>${c.newTotal}</b> pcs ${arrow}\n` +
+      `${textEmoji('stockalert_price', '💲')} ${usd(db.getBasePrice(c.variant), chatId)}`
     );
   });
   return `${bell} <b>STOCK UPDATED (Live Supplier)!</b>\n\n${blocks.join('\n\n')}\n\n${footer} Take a look and check out now!`;
@@ -2220,7 +2224,7 @@ function howToKeyboard(productId, variantId, context, chatId) {
 // The 🎉/✅ icons in the "Bulk Discount" block below USED TO be plain unicode
 // hardcoded straight into lang.js (bulk_discount_title/bulk_discount_line) - so
 // they could NEVER render as premium even though other icons on the same page
-// (⚠️/📦 in enter_qty_title) already did. Both now go through teksEmoji() as
+// (⚠️/📦 in enter_qty_title) already did. Both now go through textEmoji() as
 // well, BORROWING IDs that already exist and are already used elsewhere (not new
 // ones) so the style stays consistent: 🎉 borrows from 'success_title' (the
 // "ORDER SUCCESSFUL" heading), ✅ borrows from 'forcejoin_check' (the force-join
@@ -2232,9 +2236,9 @@ function tiersText(variant, chatId) {
   }
   const lines = variant.tiers.map(t => {
     const range = t.max === null ? `${t.min}+` : `${t.min} - ${t.max}`;
-    return lang.t(chatId, 'bulk_discount_line', { range, price: usd(t.price, chatId), emoji_check: teksEmoji('bulk_check', '✅') });
+    return lang.t(chatId, 'bulk_discount_line', { range, price: usd(t.price, chatId), emoji_check: textEmoji('bulk_check', '✅') });
   });
-  return `${lang.t(chatId, 'bulk_discount_title', { emoji_title: teksEmoji('bulk_title', '🎉') })}\n${lines.join('\n')}`;
+  return `${lang.t(chatId, 'bulk_discount_title', { emoji_title: textEmoji('bulk_title', '🎉') })}\n${lines.join('\n')}`;
 }
 
 function quantityKeyboard(productId, variantId, chatId) {
@@ -2290,7 +2294,6 @@ function confirmKeyboard(productId, variantId, qty, chatId, shortfall) {
   // row (QRIS/USDT/TON/Binance) right here - the user just presses one without
   // leaving for the Wallet menu, and the amount is automatically the SHORTFALL
   // (not the order total), so once they have paid the balance is exactly enough.
-  // pas cukup.
   if (shortfall > 0) {
     rows.push(...quickTopupButtonsRow(shortfall));
   }
@@ -2309,15 +2312,15 @@ async function showOrderConfirmation(chatId, messageId, productId, variantId, qt
   const shortfall = Math.max(0, total - user.balance);
 
   const text =
-    `${lang.t(chatId, 'order_confirm_title', { title_icon: teksEmoji('order_confirm_title', '✅') })}\n\n` +
+    `${lang.t(chatId, 'order_confirm_title', { title_icon: textEmoji('order_confirm_title', '✅') })}\n\n` +
     lang.t(chatId, 'order_confirm_body', {
       product: `${productEmojiHtml(product)} ${escapeHtml(product.name)} - ${escapeHtml(variant.label)}`,
       qty,
       total: usd(total, chatId),
       balance: usd(user.balance, chatId),
       stock: stockLabel(variant),
-      balance_icon: teksEmoji('order_confirm_balance', '💰'),
-      stock_icon: teksEmoji('order_confirm_stock', '⭐')
+      balance_icon: textEmoji('order_confirm_balance', '💰'),
+      stock_icon: textEmoji('order_confirm_stock', '⭐')
     });
 
   const opts = { parse_mode: 'HTML', reply_markup: confirmKeyboard(productId, variantId, qty, chatId, shortfall) };
@@ -2477,14 +2480,13 @@ bot.on('callback_query', async (query) => {
       // Register this message so scheduleProductListRepaint() can refresh its
       // button colours later if stock changes WHILE the buyer still has this menu
       // on screen (see the openProductListMsg definition above).
-      // openProductListMsg di atas).
       openProductListMsg.set(chatId, messageId);
     }
 
     else if (data === 'menu:balance') {
       db.clearPendingAction(chatId);
       const user = db.getUser(chatId, query.from.username);
-      await bot.editMessageText(lang.t(chatId, 'balance_line', { balance: usd(user.balance, chatId), icon: teksEmoji('balance_line', '💰') }), {
+      await bot.editMessageText(lang.t(chatId, 'balance_line', { balance: usd(user.balance, chatId), icon: textEmoji('balance_line', '💰') }), {
         chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back')]] }
       });
@@ -2579,7 +2581,7 @@ bot.on('callback_query', async (query) => {
         const shortfall = priceUsd - user.balance;
         await bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'insufficient_balance'), show_alert: true }).catch(() => {});
         await bot.sendMessage(chatId,
-          `${teksEmoji('insufficient_balance_warn', '⚠️')} ${lang.t(chatId, 'insufficient_balance')}\n\n${teksEmoji('insufficient_balance_shortfall', '💰')} ${lang.t(chatId, 'insufficient_balance_shortfall_label')}: <b>${usd(shortfall, chatId)}</b>\n\n${lang.t(chatId, 'insufficient_balance_cta')}`,
+          `${textEmoji('insufficient_balance_warn', '⚠️')} ${lang.t(chatId, 'insufficient_balance')}\n\n${textEmoji('insufficient_balance_shortfall', '💰')} ${lang.t(chatId, 'insufficient_balance_shortfall_label')}: <b>${usd(shortfall, chatId)}</b>\n\n${lang.t(chatId, 'insufficient_balance_cta')}`,
           { parse_mode: 'HTML', reply_markup: { inline_keyboard: quickTopupButtonsRow(shortfall) } }
         );
         return;
@@ -2632,7 +2634,7 @@ bot.on('callback_query', async (query) => {
     else if (data === 'menu:topup') {
       db.clearPendingAction(chatId);
       await bot.editMessageText(
-        lang.t(chatId, 'topup_title', { emoji_wallet: teksEmoji('wallet_title', '💳') }),
+        lang.t(chatId, 'topup_title', { emoji_wallet: textEmoji('wallet_title', '💳') }),
         { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: topupMethodKeyboard(chatId) }
       );
     }
@@ -2645,7 +2647,7 @@ bot.on('callback_query', async (query) => {
       } else {
         db.clearPendingAction(chatId);
         await bot.editMessageText(
-          lang.t(chatId, 'qris_choose_amount_title', { emoji_qris_amount: teksEmoji('qris_choose_amount_title', '💰') }),
+          lang.t(chatId, 'qris_choose_amount_title', { emoji_qris_amount: textEmoji('qris_choose_amount_title', '💰') }),
           { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: qrisAmountKeyboard(chatId) }
         );
       }
@@ -2656,7 +2658,7 @@ bot.on('callback_query', async (query) => {
       if (!amount || amount < MIN_TOPUP_AMOUNT || amount > MAX_TOPUP_AMOUNT) {
         return bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'qris_invalid_amount') });
       }
-      await bot.editMessageText(lang.t(chatId, 'qris_creating', { amount: usd(amount, chatId), emoji_hourglass: teksEmoji('qris_creating', '⏳') }), {
+      await bot.editMessageText(lang.t(chatId, 'qris_creating', { amount: usd(amount, chatId), emoji_hourglass: textEmoji('qris_creating', '⏳') }), {
         chat_id: chatId, message_id: messageId, parse_mode: 'HTML'
       }).catch(() => {});
       await startQrisTopup(chatId, amount);
@@ -2721,7 +2723,7 @@ bot.on('callback_query', async (query) => {
       } else {
         db.setPendingAction(chatId, { type: 'topup_usdt_amount' });
         await bot.editMessageText(
-          lang.t(chatId, 'usdt_topup_prompt', { min: usd(MIN_TOPUP_USDT_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_usdt: teksEmoji('usdt_prompt', '💵') }),
+          lang.t(chatId, 'usdt_topup_prompt', { min: usd(MIN_TOPUP_USDT_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_usdt: textEmoji('usdt_prompt', '💵') }),
           { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: cancelToTopupKeyboard(chatId) }
         );
       }
@@ -2755,7 +2757,7 @@ bot.on('callback_query', async (query) => {
       } else {
         db.setPendingAction(chatId, { type: 'topup_ton_amount' });
         await bot.editMessageText(
-          lang.t(chatId, 'ton_topup_prompt', { min: usd(MIN_TOPUP_TON_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_ton: teksEmoji('ton_prompt', '💎') }),
+          lang.t(chatId, 'ton_topup_prompt', { min: usd(MIN_TOPUP_TON_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_ton: textEmoji('ton_prompt', '💎') }),
           { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: cancelToTopupKeyboard(chatId) }
         );
       }
@@ -2789,7 +2791,7 @@ bot.on('callback_query', async (query) => {
       } else {
         db.setPendingAction(chatId, { type: 'topup_binance_amount' });
         await bot.editMessageText(
-          lang.t(chatId, 'binance_topup_prompt', { min: usd(MIN_TOPUP_BINANCE_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_binance: teksEmoji('binance_prompt', '🟡') }),
+          lang.t(chatId, 'binance_topup_prompt', { min: usd(MIN_TOPUP_BINANCE_AMOUNT, chatId), max: usd(MAX_TOPUP_AMOUNT, chatId), emoji_binance: textEmoji('binance_prompt', '🟡') }),
           { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: cancelToTopupKeyboard(chatId) }
         );
       }
@@ -2846,7 +2848,7 @@ bot.on('callback_query', async (query) => {
       db.clearPendingAction(chatId);
       const orders = db.getOrdersByUser(chatId);
       if (orders.length === 0) {
-        await bot.editMessageText(lang.t(chatId, 'orders_empty', { emoji_orders: teksEmoji('orders_empty', '🧾') }), {
+        await bot.editMessageText(lang.t(chatId, 'orders_empty', { emoji_orders: textEmoji('orders_empty', '🧾') }), {
           chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [[withButtonIcon({ text: lang.t(chatId, 'btn_back'), callback_data: 'menu:main' }, 'back')]] }
         });
@@ -2895,7 +2897,7 @@ bot.on('callback_query', async (query) => {
     else if (data === 'menu:howtouse') {
       db.clearPendingAction(chatId);
       await bot.editMessageText(
-        lang.t(chatId, 'howto_title', { emoji_howto: teksEmoji('howto_title', '❗️') }),
+        lang.t(chatId, 'howto_title', { emoji_howto: textEmoji('howto_title', '❗️') }),
         { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: howToListKeyboard(chatId) }
       );
     }
@@ -2912,7 +2914,7 @@ bot.on('callback_query', async (query) => {
     else if (data === 'menu:support') {
       db.clearPendingAction(chatId);
       const ownerId = ADMIN_IDS && ADMIN_IDS[0];
-      const supportVars = { emoji_support: teksEmoji('support_title', '📞') };
+      const supportVars = { emoji_support: textEmoji('support_title', '📞') };
       const text = ownerId ? lang.t(chatId, 'support_title', supportVars) : lang.t(chatId, 'support_title_noadmin', supportVars);
       await bot.editMessageText(text, {
         chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: supportKeyboard(chatId)
@@ -3155,8 +3157,8 @@ bot.on('callback_query', async (query) => {
           product: `${productEmojiHtml(product)} <b>${escapeHtml(product.name)} - ${escapeHtml(variant.label)}</b>`,
           tiers: tiersText(variant, chatId),
           stock: stockLabel(variant),
-          emoji_warning: teksEmoji('qty_warning', '⚠️'),
-          emoji_stock: teksEmoji('qty_stock', '📦')
+          emoji_warning: textEmoji('qty_warning', '⚠️'),
+          emoji_stock: textEmoji('qty_stock', '📦')
         }),
         { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: quantityKeyboard(productId, variantId, chatId) }
       );
@@ -3275,7 +3277,7 @@ bot.on('callback_query', async (query) => {
         const shortfall = total - user.balance;
         bot.answerCallbackQuery(query.id, { text: lang.t(chatId, 'insufficient_balance'), show_alert: true }).catch(() => {});
         return bot.sendMessage(chatId,
-          `${teksEmoji('insufficient_balance_warn', '⚠️')} ${lang.t(chatId, 'insufficient_balance')}\n\n${teksEmoji('insufficient_balance_shortfall', '💰')} ${lang.t(chatId, 'insufficient_balance_shortfall_label')}: <b>${usd(shortfall, chatId)}</b>\n\n${lang.t(chatId, 'insufficient_balance_cta')}`,
+          `${textEmoji('insufficient_balance_warn', '⚠️')} ${lang.t(chatId, 'insufficient_balance')}\n\n${textEmoji('insufficient_balance_shortfall', '💰')} ${lang.t(chatId, 'insufficient_balance_shortfall_label')}: <b>${usd(shortfall, chatId)}</b>\n\n${lang.t(chatId, 'insufficient_balance_cta')}`,
           { parse_mode: 'HTML', reply_markup: { inline_keyboard: quickTopupButtonsRow(shortfall) } }
         );
       }
@@ -3620,7 +3622,6 @@ bot.on('message', async (msg) => {
   // An extra layer of defence (see the ADMIN_ONLY_PENDING_TYPES comment above):
   // when the pending action is an admin-only type BUT this chatId is not an admin,
   // clear it quietly and stop here - do NOT continue to any step below.
-  // ke step manapun di bawah.
   if (ADMIN_ONLY_PENDING_TYPES.has(pending.type) && !isAdmin(chatId)) {
     db.clearPendingAction(chatId);
     return;
@@ -4440,7 +4441,7 @@ function backupMenuKeyboard(settings) {
 // shown a single maintenance message - admins always keep normal access. The
 // default message already looks good and is full of Premium emoji (borrowed from
 // emoji that ALREADY EXIST in other files, see buildMaintenanceText() and
-// emoji-id-teks.js), or the admin can write their own via "✏️ Set Custom
+// emoji-id-text.js), or the admin can write their own via "✏️ Set Custom
 // Message".
 function maintenanceMenuText(settings) {
   const statusText = settings.enabled ? '🟢 Active (non-admin users blocked)' : '🔴 Inactive';
@@ -4835,7 +4836,7 @@ const EMOJI_KEY_LABELS = {
   cancel_recover: 'Cancel (My Orders)', refresh_2fa: 'Refresh 2FA Code (Order Details)',
   gift: 'Fallback Icon for Gift Selection Buttons (used when a gift has no custom sticker from Telegram itself)'
 };
-const EMOJI_TEKS_SLOTS = [
+const EMOJI_TEXT_SLOTS = [
   { key: 'product_desc', label: 'The "{e}" Bullet in Product Descriptions & How-to-Use' },
   { key: 'menu_notif', label: 'Menu / Notification Text (welcome, order success, etc.)' }
 ];
@@ -4843,9 +4844,9 @@ const EMOJI_TEKS_SLOTS = [
 // Emoji in other message text (NOT the "⚡" bolt placeholder above), grouped by
 // page so admins can find them easily. Each item = one specific line/icon on one
 // page, each with its own ID slot (the key is passed as the 1st argument to
-// teksEmoji() in the code).
-const TEKS_GROUPS = [
-  { id: 'bolt', label: '⚡ General Bolt (used in many messages)', items: EMOJI_TEKS_SLOTS },
+// textEmoji() in the code).
+const TEXT_GROUPS = [
+  { id: 'bolt', label: '⚡ General Bolt (used in many messages)', items: EMOJI_TEXT_SLOTS },
   { id: 'welcome', label: '👋 Welcome Message (/start)', items: [
     { key: 'welcome_wave', label: 'Greeting Icon' },
     { key: 'welcome_cart', label: '"Buy Premium Accounts" Line Icon' },
@@ -4991,8 +4992,8 @@ const TEKS_GROUPS = [
     { key: 'maintenance_finished_heart', label: '🚀 [Finished Broadcast] Heart Icon (Thank You Line)' }
   ] }
 ];
-function findTeksItemLabel(key) {
-  for (const g of TEKS_GROUPS) {
+function findTextItemLabel(key) {
+  for (const g of TEXT_GROUPS) {
     const item = g.items.find(i => i.key === key);
     if (item) return item.label;
   }
@@ -5007,30 +5008,30 @@ function adminEmojiCategoryKeyboard() {
   return { inline_keyboard: rows };
 }
 
-function adminEmojiTeksGroupKeyboard() {
-  const rows = TEKS_GROUPS.map(g => ([{ text: g.label, callback_data: `admin:emojiteksgroup:${g.id}` }]));
+function adminEmojiTextGroupKeyboard() {
+  const rows = TEXT_GROUPS.map(g => ([{ text: g.label, callback_data: `admin:emojiteksgroup:${g.id}` }]));
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiids' }, 'back')]);
   rows.push([withButtonIcon({ text: '🏠 Main Menu', callback_data: 'admin:menu' }, 'admin_main_menu')]);
   return { inline_keyboard: rows };
 }
 
 // Check whether an emoji key is "filled" - either from an automatic capture in
-// the database (priority 1, see teksEmoji()/iconFor()) OR from a default pasted
-// straight into the code (EMOJI_ID_TEKS_BACKUP / EMOJI_IDS).
+// the database (priority 1, see textEmoji()/iconFor()) OR from a default pasted
+// straight into the code (EMOJI_ID_TEXT_BACKUP / EMOJI_IDS).
 // Without checking the code too, the admin checklist could show ⚪ (not set)
 // while the emoji ALREADY renders as premium in the real message - leaving the
 // admin thinking it was unset when it is in fact active from the code.
-function isTeksEmojiFilled(key) {
-  return !!(db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEKS_BACKUP[key]);
+function isTextEmojiFilled(key) {
+  return !!(db.getEmojiId(`teks:${key}`) || EMOJI_ID_TEXT_BACKUP[key]);
 }
 function isMenuEmojiFilled(key) {
   return !!(db.getEmojiId(`menu:${key}`) || EMOJI_IDS[key]);
 }
 
-function adminEmojiTeksItemKeyboard(groupId) {
-  const group = TEKS_GROUPS.find(g => g.id === groupId);
+function adminEmojiTextItemKeyboard(groupId) {
+  const group = TEXT_GROUPS.find(g => g.id === groupId);
   const rows = (group ? group.items : []).map(item => {
-    const filled = isTeksEmojiFilled(item.key) ? '✅' : '⚪';
+    const filled = isTextEmojiFilled(item.key) ? '✅' : '⚪';
     return [{ text: `${filled} ${item.label}`, callback_data: `admin:emojiset:teks:${item.key}` }];
   });
   rows.push([withButtonIcon({ text: '‹ Back', callback_data: 'admin:emojiteks' }, 'back')]);
@@ -7079,16 +7080,16 @@ bot.on('callback_query', async (query) => {
     else if (action === 'emojiteks') {
       await sendOrEditAdmin(chatId, messageId,
         '✍️ *Emoji in Message Text*\n\nPick the page/message group first:',
-        adminEmojiTeksGroupKeyboard()
+        adminEmojiTextGroupKeyboard()
       );
     }
 
     else if (action === 'emojiteksgroup') {
       const groupId = param;
-      const groupLabel = (TEKS_GROUPS.find(g => g.id === groupId) || {}).label || groupId;
+      const groupLabel = (TEXT_GROUPS.find(g => g.id === groupId) || {}).label || groupId;
       await sendOrEditAdmin(chatId, messageId,
         `🎨 *${groupLabel}*\n\n✅ = a custom ID is set\n⚪ = still default/empty\n\nTap one to set or change its emoji.`,
-        adminEmojiTeksItemKeyboard(groupId)
+        adminEmojiTextItemKeyboard(groupId)
       );
     }
 
@@ -7097,7 +7098,7 @@ bot.on('callback_query', async (query) => {
       const key = parts[3];
       if (!scope || !key) return;
       db.setPendingAction(chatId, { type: 'set_emoji_id', data: { scope, key } });
-      let label = scope === 'teks' ? findTeksItemLabel(key) : (EMOJI_KEY_LABELS[key] || key);
+      let label = scope === 'teks' ? findTextItemLabel(key) : (EMOJI_KEY_LABELS[key] || key);
       // Scope "gift" -> its key is a giftId (not a static label in
       // EMOJI_KEY_LABELS), so look up a more readable label (its star amount) from
       // the live catalogue - see adminGiftEmojiListKeyboard().

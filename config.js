@@ -119,12 +119,12 @@ const DEFAULT_SUPPLIER_TIER_MARKUP = [
 
 // Telegram Premium custom emoji (emoji_id) — NOT set through .env.
 // They are filled in directly in 2 separate files, split by how they are used:
-// - ./emoji-id-teks.js        -> emoji inside text (product descriptions and menus/notifications)
+// - ./emoji-id-text.js        -> emoji inside text (product descriptions and menus/notifications)
 // - ./emoji-id-menu-inline.js -> emoji used as inline menu button icons, per button
 //   (the EMOJI_IDS object plus the iconFor(key) helper - imported directly by
 //   bot.js rather than through this config, because there are now many IDs
 //   keyed per button instead of a single value)
-const { EMOJI_ID_PRODUCT_DESC, EMOJI_ID_MENU_NOTIF } = require('./emoji-id-teks');
+const { EMOJI_ID_PRODUCT_DESC, EMOJI_ID_MENU_NOTIF } = require('./emoji-id-text');
 const BOLT_EMOJI_ID_TEXT = EMOJI_ID_PRODUCT_DESC;
 const BOLT_EMOJI_ID_MENU = EMOJI_ID_MENU_NOTIF;
 

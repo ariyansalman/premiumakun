@@ -1,7 +1,7 @@
 // ============================================================
 // CHECK CUSTOM EMOJI ID VALIDITY (run manually, not part of bot.js)
 // ============================================================
-// Purpose: confirm that the IDs in data/db.json (per product), emoji-id-teks.js,
+// Purpose: confirm that the IDs in data/db.json (per product), emoji-id-text.js,
 // and emoji-id-menu-inline.js REALLY exist / are valid on Telegram - using the
 // official Bot API method "getCustomEmojiStickers". That method does NOT require
 // a Premium account to call, and does NOT care who owns the emoji - it only
@@ -26,7 +26,7 @@ if (!BOT_TOKEN) {
 }
 
 const db = require('./db');
-const { EMOJI_ID_TEKS_BACKUP } = require('./emoji-id-teks');
+const { EMOJI_ID_TEXT_BACKUP } = require('./emoji-id-text');
 const { EMOJI_IDS } = require('./emoji-id-menu-inline');
 
 // Collect ALL ids from the 4 sources, each tagged with where it came from so an
@@ -45,9 +45,9 @@ function collectAllIds() {
     if (id) labeled.push({ id: String(id), label: `db.json emojiIds:${key}` });
   });
 
-  // 3) Static text fallbacks (emoji-id-teks.js)
-  Object.entries(EMOJI_ID_TEKS_BACKUP || {}).forEach(([key, id]) => {
-    if (id) labeled.push({ id: String(id), label: `emoji-id-teks.js:${key}` });
+  // 3) Static text fallbacks (emoji-id-text.js)
+  Object.entries(EMOJI_ID_TEXT_BACKUP || {}).forEach(([key, id]) => {
+    if (id) labeled.push({ id: String(id), label: `emoji-id-text.js:${key}` });
   });
 
   // 4) Inline menu button IDs (emoji-id-menu-inline.js)

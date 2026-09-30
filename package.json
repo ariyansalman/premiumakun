@@ -1,7 +1,7 @@
 {
   "name": "premium-akun-bot",
   "version": "2.0.0",
-  "description": "Bot Telegram jual akun premium (Gemini, Netflix, Spotify, dll) dengan Wallet topup otomatis (QRIS & USDT BEP20)",
+  "description": "Telegram bot for selling premium accounts (Gemini, Netflix, Spotify, etc.) with automatic wallet topup (QRIS, USDT BEP20, TON & Binance Pay)",
   "main": "bot.js",
   "type": "commonjs",
   "scripts": {

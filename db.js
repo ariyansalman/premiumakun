@@ -42,7 +42,7 @@ const DEFAULT_DB = {
     // the maintenance message. Admins (ADMIN_IDS) always keep normal access, so
     // the owner is never locked out of their own bot.
     // message: null -> use the default "nice" text (see buildMaintenanceText() in
-    // bot.js, whose emoji come from teksEmoji() -> customisable via admin
+    // bot.js, whose emoji come from textEmoji() -> customisable via admin
     // "🎨 Manage Emoji ID"). When an admin sets their own custom message via
     // "✏️ Set Custom Message", this field is used as is (including any premium
     // custom emoji the owner picked while typing, see embedOwnerCustomEmoji() in

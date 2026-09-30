@@ -42,13 +42,13 @@ const EMOJI_ID_MENU_NOTIF = '';
 // ============================================================
 // This is a BACKUP COPY of data/db.json.emojiIds (the "teks:xxx" keys), which
 // are captured automatically via admin "🎨 Manage Emoji ID" -> "✍️ Emoji in
-// Message Text". The teksEmoji(key, fallback) function in bot.js CURRENTLY only
+// Message Text". The textEmoji(key, fallback) function in bot.js CURRENTLY only
 // reads from data/db.json directly - the object below is NOT used by the bot
 // automatically, so if db.json is lost or reset, just paste the contents of this
 // object back into data/db.json.emojiIds (with a "teks:" prefix) to restore
 // them, or wire it up as a second fallback in bot.js the same way EMOJI_IDS
 // works in emoji-id-menu-inline.js.
-const EMOJI_ID_TEKS_BACKUP = {
+const EMOJI_ID_TEXT_BACKUP = {
   welcome_wave: "5316544208159390529",
   // The 5 new slots below are DELIBERATELY filled with IDs that ALREADY EXIST
   // and are already used on other pages (not new IDs) - so that as soon as the
@@ -56,7 +56,7 @@ const EMOJI_ID_TEKS_BACKUP = {
   // emoji style/set as the main menu buttons and other pages, WITHOUT the admin
   // having to forward any emoji again via "🎨 Manage Emoji ID". To switch to a
   // different emoji later, the admin panel still works as usual (an override set
-  // there always wins - see the priority order in teksEmoji()).
+  // there always wins - see the priority order in textEmoji()).
   welcome_cart: "5472401690793614752",   // same as the "🛒 Buy Product" menu button (menu:buy_product)
   welcome_wallet: "5267300544094948794", // same as the "💳 Wallet" menu button and the "wallet_title" text
   welcome_bolt: "6267008582294705964",   // same as the "✅ Automatic" icon in usdt_auto/ton_auto
@@ -124,14 +124,14 @@ const EMOJI_ID_TEKS_BACKUP = {
   // Previously the 🎉 and ✅ here were plain unicode HARDCODED straight into
   // lang.js (bulk_discount_title/bulk_discount_line) - so they could NEVER render
   // as premium even though the other icons on the same "Enter Quantity" page
-  // (⚠️/📦) already did. They now go through teksEmoji() as well (see tiersText()
+  // (⚠️/📦) already did. They now go through textEmoji() as well (see tiersText()
   // in bot.js) - deliberately BORROWING IDs that ALREADY EXIST and are already
   // used elsewhere (not new IDs) so that as soon as the owner updates this code
   // they render as premium without forwarding any emoji again: bulk_title borrows
   // from success_title (the 🎉 in the "ORDER SUCCESSFUL" heading), bulk_check
   // borrows from forcejoin_check (the ✅ force-join tick). Either can still be
   // changed separately at any time via admin "🎨 Manage Emoji ID" -> "✍️ Emoji in
-  // Message Text" (an override set there always wins - see teksEmoji()).
+  // Message Text" (an override set there always wins - see textEmoji()).
   bulk_title: "5461151367559141950", // same as success_title (🎉)
   bulk_check: "6267008582294705964", // same as forcejoin_check/welcome_bolt (✅)
 
@@ -174,15 +174,15 @@ const EMOJI_ID_TEKS_BACKUP = {
   // --- Channel notification border & footer (NEW) ---
   // Previously the "✨" characters in the divider lines above/below the heading,
   // and the "🔥" in the "Fast & Trusted!" footer line, were HARDCODED straight
-  // into the text (not via teksEmoji()) - so they could NEVER render as premium
+  // into the text (not via textEmoji()) - so they could NEVER render as premium
   // even though every other ID in these channel notifications already did. Both
-  // now go through teksEmoji() as well (see buildChannelPurchaseText/TopupText/
+  // now go through textEmoji() as well (see buildChannelPurchaseText/TopupText/
   // ReferralText in bot.js), so EVERY icon in a channel notification is premium.
   channelnotif_border: "5422439311196834318", // same as qris_tip/forcejoin_sparkle (a ✨ decorative/opening feel)
   // BUG FIX: previously left empty ("") -> the 🔥 footer ALWAYS rendered as plain
   // unicode even though every other icon in the channel notification was already
-  // premium, because teksEmoji() treats an empty string as "no ID" (see
-  // `id ? ... : fallback` in teksEmoji()). It now borrows the same ID as
+  // premium, because textEmoji() treats an empty string as "no ID" (see
+  // `id ? ... : fallback` in textEmoji()). It now borrows the same ID as
   // welcome_bolt/usdt_auto/ton_auto/forcejoin_bolt (a "fast/automatic" feel -
   // fitting for the "Fast & Trusted!"/"Instant & Automatic!" tagline), following
   // the same ID-borrowing pattern as the other slots in this object. It can still
@@ -212,7 +212,7 @@ const EMOJI_ID_TEKS_BACKUP = {
   // emoji style/set as every other page, WITHOUT the admin having to forward any
   // emoji again. It can still be changed at any time via admin "🎨 Manage Emoji
   // ID" -> "✍️ Emoji in Message Text" -> "🛠️ Maintenance Mode"
-  // (an override there always wins - see the priority order in teksEmoji()).
+  // (an override there always wins - see the priority order in textEmoji()).
   maintenance_wrench: "5285139029333919650",  // same as qty_warning/forcejoin_lock (a "needs attention" feel)
   maintenance_sparkle: "5422439311196834318", // same as qris_tip/forcejoin_sparkle/success_border (a ✨ decorative/opening feel)
   maintenance_bolt: "6267008582294705964",    // same as welcome_bolt/usdt_auto (a "fast/automatic" feel)
@@ -240,5 +240,5 @@ const EMOJI_ID_TEKS_BACKUP = {
 module.exports = {
   EMOJI_ID_PRODUCT_DESC: EMOJI_ID_PRODUCT_DESC || null,
   EMOJI_ID_MENU_NOTIF: EMOJI_ID_MENU_NOTIF || null,
-  EMOJI_ID_TEKS_BACKUP
+  EMOJI_ID_TEXT_BACKUP
 };
