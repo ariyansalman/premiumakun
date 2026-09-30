@@ -6399,8 +6399,8 @@ bot.on('callback_query', async (query) => {
       if (!product || !variant) return bot.answerCallbackQuery(query.id, { text: 'Variant not found.' });
       const newLocked = !variant.priceLocked;
       db.setVariantPriceLock(product.id, variant.id, newLocked);
-      variant.priceLocked = newLocked; // biar askSetTierPrice() di bawah langsung pakai status baru, bukan yang basi di memori
-      bot.answerCallbackQuery(query.id, { text: newLocked ? '🔒 Harga manual dikunci.' : '🔓 Kunci dibuka.' });
+      variant.priceLocked = newLocked; // so askSetTierPrice() below uses the new status, not the stale in-memory one
+      bot.answerCallbackQuery(query.id, { text: newLocked ? '🔒 Manual price locked.' : '🔓 Unlocked.' });
       askSetTierPrice(chatId, messageId, product, variant);
     }
 
@@ -6443,7 +6443,7 @@ bot.on('callback_query', async (query) => {
     }
 
     else if (action === 'setlogo') {
-      await sendOrEditAdmin(chatId, messageId, '🖼️ *Set Logo Produk*\n\nPilih produk yang mau diatur logo aplikasinya:', adminProductPickKeyboard('setlogo_pick'));
+      await sendOrEditAdmin(chatId, messageId, '🖼️ *Set Product Logo*\n\nPick the product whose app logo you want to set:', adminProductPickKeyboard('setlogo_pick'));
     }
     else if (action === 'setlogo_pick') {
       const product = db.findProduct(param);
@@ -6451,32 +6451,32 @@ bot.on('callback_query', async (query) => {
       db.setPendingAction(chatId, { type: 'setlogo_url', data: { productId: param } });
       await sendOrEditAdmin(chatId, messageId,
         `🖼️ *Set Logo - ${product.name}*\n\n` +
-        (product.logoUrl ? `Logo saat ini:\n${product.logoUrl}\n\n` : 'Belum ada logo, masih pakai emoji biasa.\n\n') +
-        'Kirim URL gambar logo aplikasi ini (harus diawali `http://` atau `https://`, contoh: link logo resmi Netflix/Spotify/Gemini yang kamu hosting sendiri). Logo ini dipakai di notifikasi channel (📣 New Purchase) supaya tampil sebagai gambar, bukan cuma emoji.\n\n' +
-        'Ketik `-` untuk menghapus logo (balik pakai emoji biasa), atau /cancel untuk batal.',
+        (product.logoUrl ? `Current logo:\n${product.logoUrl}\n\n` : 'No logo yet, still using the plain emoji.\n\n') +
+        'Send the image URL for this app logo (it must start with `http://` or `https://`, for example a link to the official Netflix/Spotify/Gemini logo you host yourself). This logo is used in channel notifications (📣 New Purchase) so they appear as an image rather than just an emoji.\n\n' +
+        'Type `-` to remove the logo (back to the plain emoji), or /cancel to abort.',
         adminBackKeyboard('admin:cat_products')
       );
     }
 
     else if (action === 'setemoji') {
-      await sendOrEditAdmin(chatId, messageId, '😀 *Ganti Emoji Produk*\n\nPilih produk yang mau diganti ikonnya:', adminProductPickKeyboard('setemoji_pick'));
+      await sendOrEditAdmin(chatId, messageId, '😀 *Change Product Emoji*\n\nPick the product whose icon you want to change:', adminProductPickKeyboard('setemoji_pick'));
     }
     else if (action === 'setemoji_pick') {
       const product = db.findProduct(param);
       if (!product) return bot.answerCallbackQuery(query.id, { text: 'Product not found.' });
       db.setPendingAction(chatId, { type: 'setemoji_capture', data: { productId: param } });
       await sendOrEditAdmin(chatId, messageId,
-        `😀 *Ganti Emoji - ${product.name}*\n\n` +
-        `Ikon saat ini: ${product.emojiId ? `<tg-emoji emoji-id="${product.emojiId}">${product.emoji || '📦'}</tg-emoji>` : (product.emoji || '📦')}\n\n` +
-        'Kirim (boleh forward dari chat lain) 1 pesan yang mengandung 1 *emoji premium* — WAJIB dipilih langsung dari panel emoji Telegram Premium kamu sendiri (bukan cuma ngetik/paste unicode biasa), supaya ID-nya ke-capture asli dan tersimpan sebagai premium.\n\n' +
-        '💡 Tips: buka panel emoji di Telegram, cari kata kunci sesuai produknya (mis. "cart"/"keranjang", "netflix", "music"), lalu pilih salah satu hasilnya sebelum dikirim - jangan asal pilih ikon yang MIRIP tapi ternyata beda gambar.\n\n' +
-        'Atau ketik `-` untuk balik ke emoji unicode biasa (📦, tanpa premium). Ketik /cancel untuk batal.',
+        `😀 *Change Emoji - ${product.name}*\n\n` +
+        `Current icon: ${product.emojiId ? `<tg-emoji emoji-id="${product.emojiId}">${product.emoji || '📦'}</tg-emoji>` : (product.emoji || '📦')}\n\n` +
+        'Send (forwarding from another chat is fine) one message containing one *premium emoji* — it MUST be picked straight from your own Telegram Premium emoji panel (not just typed or pasted as plain unicode), so its real ID is captured and saved as premium.\n\n' +
+        '💡 Tip: open the emoji panel in Telegram, search a keyword matching the product ("cart", "netflix", "music", say), then pick one of the results before sending - do not just grab an icon that LOOKS similar but is a different image.\n\n' +
+        'Or type `-` to go back to a plain unicode emoji (📦, no premium). Type /cancel to abort.',
         adminBackKeyboard('admin:cat_products'), 'HTML'
       );
     }
 
     else if (action === 'sethowto') {
-      await sendOrEditAdmin(chatId, messageId, '✏️ *Set How to Use*\n\nPilih produk yang mau diatur teks "How to Use"-nya:', adminProductPickKeyboard('sethowto_pick'));
+      await sendOrEditAdmin(chatId, messageId, '✏️ *Set How to Use*\n\nPick the product whose "How to Use" text you want to set:', adminProductPickKeyboard('sethowto_pick'));
     }
     else if (action === 'sethowto_pick') {
       const product = db.findProduct(param);
@@ -6491,12 +6491,12 @@ bot.on('callback_query', async (query) => {
         db.setPendingAction(chatId, { type: 'sethowto_text', data: { productId: param, variantId: variant.id } });
         await sendOrEditAdmin(chatId, messageId,
           `✏️ *Set How to Use - ${product.name}*\n\n` +
-          (variant.howToUse ? `Teks saat ini:\n${variant.howToUse}\n\n` : 'Belum ada teks How to Use.\n\n') +
-          'Ketik teks *How to Use* yang baru (bebas banyak baris, boleh tag HTML `<b>...</b>` untuk bold. Kalau kamu pilih emoji premium langsung dari panel Telegram Premium kamu sendiri, emoji itu otomatis kesimpan sebagai premium juga - nggak perlu setting ID manual). Ketik /cancel untuk batal.',
+          (variant.howToUse ? `Current text:\n${variant.howToUse}\n\n` : 'No How to Use text yet.\n\n') +
+          'Type the new *How to Use* text (as many lines as you like; HTML tags such as `<b>...</b>` work for bold. If you pick a premium emoji straight from your own Telegram Premium panel, it is saved as premium automatically - no manual ID setup needed). Type /cancel to abort.',
           adminBackKeyboard('admin:cat_products')
         );
       } else {
-        await sendOrEditAdmin(chatId, messageId, `✏️ Set How to Use untuk *${product.name}*\n\nPilih varian:`, adminVariantPickKeyboard(product, 'sethowto_variant', 'admin:sethowto'));
+        await sendOrEditAdmin(chatId, messageId, `✏️ Set How to Use for *${product.name}*\n\nPick a variant:`, adminVariantPickKeyboard(product, 'sethowto_variant', 'admin:sethowto'));
       }
     }
     else if (action === 'sethowto_variant') {
@@ -6507,8 +6507,8 @@ bot.on('callback_query', async (query) => {
       db.setPendingAction(chatId, { type: 'sethowto_text', data: { productId: param, variantId } });
       await sendOrEditAdmin(chatId, messageId,
         `✏️ *Set How to Use - ${product.name} ${variant.label}*\n\n` +
-        (variant.howToUse ? `Teks saat ini:\n${variant.howToUse}\n\n` : 'Belum ada teks How to Use.\n\n') +
-        'Ketik teks *How to Use* yang baru. Ketik /cancel untuk batal.',
+        (variant.howToUse ? `Current text:\n${variant.howToUse}\n\n` : 'No How to Use text yet.\n\n') +
+        'Type the new *How to Use* text. Type /cancel to abort.',
         adminBackKeyboard('admin:cat_products')
       );
     }
@@ -6516,25 +6516,25 @@ bot.on('callback_query', async (query) => {
     else if (action === 'addstock') {
       const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
       if (!productsWithVariants.length) {
-        await sendOrEditAdmin(chatId, messageId, '📥 *Tambah Stock*\n\nBelum ada produk dengan varian. Tambah varian dulu lewat ➕ Tambah Varian.', adminBackKeyboard('admin:cat_products'));
+        await sendOrEditAdmin(chatId, messageId, '📥 *Add Stock*\n\nThere is no product with variants yet. Add a variant first via ➕ Add Variant.', adminBackKeyboard('admin:cat_products'));
       } else {
-        await sendOrEditAdmin(chatId, messageId, '📥 *Tambah Stock*\n\nPilih produk tujuan:', adminProductPickKeyboard('addstock_pick', productsWithVariants));
+        await sendOrEditAdmin(chatId, messageId, '📥 *Add Stock*\n\nPick the destination product:', adminProductPickKeyboard('addstock_pick', productsWithVariants));
       }
     }
     else if (action === 'addstock_pick') {
       const product = db.findProduct(param);
       if (!product || !product.variants.length) {
-        // Fallback aman: kalau somehow produk tanpa varian masih ke-klik,
-        // jangan cuma toast sekilas - kasih pesan jelas + arahkan langkah berikutnya.
+        // A safe fallback: if a product with no variants somehow gets clicked, do
+        // not just flash a toast - give a clear message and point to the next step.
         return sendOrEditAdmin(chatId, messageId,
-          `⚠️ Produk *${product ? product.name : param}* belum punya varian, jadi belum bisa diisi stok.\n\nTambah variannya dulu lewat menu ➕ Tambah Varian, baru bisa isi stok di sini.`,
+          `⚠️ Product *${product ? product.name : param}* has no variants yet, so stock cannot be added.\n\nAdd a variant first via the ➕ Add Variant menu, then you can add stock here.`,
           adminBackKeyboard('admin:cat_products')
         );
       }
       if (product.variants.length === 1) {
-        // Produk single-varian (hasil "➕ Tambah Produk" biasa) -> langsung
-        // masuk ke layar pilih cara (📋 link/kode vs 🔢 angka manual),
-        // tidak perlu pilih varian lagi.
+        // A single-variant product (from an ordinary "➕ Add Product") -> go
+        // straight to the choose-method screen (📋 link/code vs 🔢 manual number),
+        // with no need to pick a variant.
         const variant = product.variants[0];
         db.clearPendingAction(chatId);
         await sendOrEditAdmin(chatId, messageId,
@@ -6542,7 +6542,7 @@ bot.on('callback_query', async (query) => {
           addStockModeKeyboard(param, variant.id)
         );
       } else {
-        await sendOrEditAdmin(chatId, messageId, `📥 Tambah stok untuk *${product.name}*\n\nPilih varian tujuan:`, adminVariantPickKeyboard(product, 'addstock_variant'));
+        await sendOrEditAdmin(chatId, messageId, `📥 Add stock to *${product.name}*\n\nPick the destination variant:`, adminVariantPickKeyboard(product, 'addstock_variant'));
       }
     }
     else if (action === 'addstock_variant') {
@@ -6574,10 +6574,10 @@ bot.on('callback_query', async (query) => {
       } else if (mode === 'qty') {
         db.setPendingAction(chatId, { type: 'addstock_manual_qty', data: { productId: product.id, variantId: variant.id } });
         await sendOrEditAdmin(chatId, messageId,
-          `🔢 *Tambah Stock Manual - ${product.variants.length > 1 ? `${product.name} - ${variant.label}` : product.name}*\n\n` +
-          `📦 Total stok saat ini: *${db.getTotalStock(variant)}*\n\n` +
-          `Ketik JUMLAH stok yang mau ditambahkan (angka saja, mis. \`10\`). Stok ini TANPA link/kode - buyer yang beli tetap dapat pesan "ORDER BERHASIL!", tapi kamu yang kirim akun/detailnya manual.\n\n` +
-          `Ketik /cancel untuk batal.`,
+          `🔢 *Add Manual Stock - ${product.variants.length > 1 ? `${product.name} - ${variant.label}` : product.name}*\n\n` +
+          `📦 Current total stock: *${db.getTotalStock(variant)}*\n\n` +
+          `Type the QUANTITY of stock to add (numbers only, for example \`10\`). This stock has NO link/code - buyers still get the "ORDER SUCCESSFUL!" message, but you send the account/details manually.\n\n` +
+          `Type /cancel to abort.`,
           adminBackKeyboard('admin:cat_products'),
           'Markdown'
         );
@@ -6585,9 +6585,9 @@ bot.on('callback_query', async (query) => {
     }
 
     // ===== Supplier API =====
-    // Hubungkan 1 varian produk lokal ke 1 service_id di Supplier supaya
-    // pembelian buyer otomatis dipenuhi lewat API mereka. Lihat supplier.js
-    // untuk integrasi API-nya & alur "confirm:" di atas untuk pemakaiannya.
+    // Link one local product variant to one service_id at the supplier so buyer
+    // purchases are fulfilled automatically through their API. See supplier.js for
+    // the API integration and the "confirm:" flow above for how it is used.
     else if (action === 'supplier') {
       db.clearPendingAction(chatId);
       await sendOrEditAdmin(chatId, messageId, await supplierMenuText(), await supplierMenuKeyboard());
@@ -6596,7 +6596,7 @@ bot.on('callback_query', async (query) => {
     else if (action === 'supplierlink') {
       const productsWithVariants = db.getAllProducts().filter(p => p.variants.length > 0);
       if (!productsWithVariants.length) {
-        await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Supplier API*\n\nBelum ada produk dengan varian. Tambah varian dulu lewat ➕ Tambah Varian.', supplierBackKeyboard());
+        await sendOrEditAdmin(chatId, messageId, '*Link a Product to the Supplier API*\n\nThere is no product with variants yet. Add a variant first via ➕ Add Variant.', supplierBackKeyboard());
       } else {
         await sendOrEditAdmin(chatId, messageId, '*Hubungkan Produk ke Supplier API*\n\nPilih produk lokal yang mau dihubungkan:', adminProductPickKeyboard('supplierlink_pick', productsWithVariants));
       }
